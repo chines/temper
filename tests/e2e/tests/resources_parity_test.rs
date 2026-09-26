@@ -14,6 +14,17 @@
 //! hop the deployed relay makes. Response shapes and refusal kinds asserted below are
 //! the incumbent ones, carried from the direct-binding pin (including the named parity
 //! deltas the door itself introduced).
+//!
+//! [The 400-label sweep, 2026-09-26] The six 400 arms (create/list/update/annotate/
+//! update_resource_meta/delete) strip the API Display's `Bad request: ` status label
+//! the relayed body carries (`api_error_cause`, the strip the G3c families
+//! introduced), restoring the direct binding's bare sentence — the direct maps
+//! destructured the variant and rendered bare, so the label was a door-introduced
+//! artifact: this family's latent direct-parity gap, fixed as a **DECLARED PARITY
+//! DELTA**: prose only, kind and gate identical. Witnessed at the delete-act face —
+//! the one 400 face this suite drives through the wire (the tag-comma and
+//! sources-without-content faces refuse client-side and never carried the label);
+//! its exact-equality pin flipped in the same commit.
 
 mod common;
 
@@ -716,9 +727,15 @@ async fn delete_answers_the_ack_and_the_resource_stops_answering(pool: PgPool) {
     .await
     .expect_err("incomplete authorship is a refusal");
     assert_eq!(code_of(&bad_act), -32602);
-    assert!(
-        bad_act.message.contains("confidence"),
-        "the door's own authorship sentence, got: {bad_act}"
+    // The swept 400 face: the server's own sentence BARE — `api_error_cause` stripped
+    // the `Bad request: ` status label the relayed body carried (the 400-label sweep,
+    // declared in this suite's header). The exact-equality pin is the delta's bite
+    // witness: with the strip reverted the label rides back in and this reddens.
+    assert_eq!(
+        bad_act.message,
+        "agent authorship requires a confidence band (tentative|probable|confident) \
+         when any of reasoning/rationale/persona/model is supplied",
+        "the bare authorship sentence, got: {bad_act}"
     );
 }
 

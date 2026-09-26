@@ -32,7 +32,7 @@ use temper_services::services::context_service::resolve_context_ref;
 use temper_workflow::operations::{BodyUpdate, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
-use crate::service::{AcrossAuth, TemperMcpService};
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 /// Schemars `schema_with` for every `open_meta` input field.
 ///
@@ -839,10 +839,15 @@ pub async fn create_resource(
         // resolver's failure with "context not found: ", a prefix the door does not
         // re-apply — the kind (invalid_params) and the gate are identical.
         ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        // The 400 arm speaks the server's own sentence bare: `api_error_cause` strips the
+        // API Display's `Bad request: ` status label the relayed body carries — the strip
+        // the G3c families introduced, adopted here as this family's declared parity delta.
+        // The direct binding destructured the variant and rendered bare; the label was a
+        // door-introduced artifact. Kind (invalid_params) and gate identical.
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(message, None),
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
         other => rmcp::ErrorData::internal_error(
             format!("Failed to create resource: {other}"),
             None,
@@ -1096,7 +1101,7 @@ pub async fn list_resources(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(message, None),
+            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
             ClientError::NotFound { message } => {
                 rmcp::ErrorData::invalid_params(format!("unknown filter: {message}"), None)
             }
@@ -1213,7 +1218,7 @@ pub async fn update_resource(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(message, None),
+            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
             other => {
                 rmcp::ErrorData::internal_error(format!("Failed to update resource: {other}"), None)
             }
@@ -1263,7 +1268,7 @@ pub async fn annotate_resource(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(message, None),
+            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
             other => rmcp::ErrorData::internal_error(
                 format!("Failed to annotate resource: {other}"),
                 None,
@@ -1324,7 +1329,7 @@ pub async fn update_resource_meta(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(message, None),
+            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
             other => rmcp::ErrorData::internal_error(
                 format!("Failed to update resource meta: {other}"),
                 None,
@@ -1375,7 +1380,7 @@ pub async fn delete_resource(
             ClientError::Server {
                 status: 400,
                 message,
-            } => rmcp::ErrorData::invalid_params(message, None),
+            } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
             other => {
                 rmcp::ErrorData::internal_error(format!("Failed to delete resource: {other}"), None)
             }
