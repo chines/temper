@@ -20,6 +20,8 @@ use temper_services::services::context_service::resolve_context_ref;
 use temper_workflow::operations::{Backend, ReblockResources, Surface};
 use uuid::Uuid;
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 
 // ── Input structs ──────────────────────────────────────────────────────────────
@@ -106,9 +108,9 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
 /// CLI equivalent: `temper admin reblock --resource|--context|--all`.
 pub async fn resource_reblock(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ResourceReblockInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 

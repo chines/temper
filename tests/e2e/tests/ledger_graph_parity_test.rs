@@ -356,9 +356,7 @@ use common::E2eTestApp;
 use parity::{code_of, input, one_text};
 
 /// The parity harness, once per test: the relay-ready service over this app's real
-/// listener (its profile cache IS the direct families' caller path), and the
-/// harness principal's parts — byte-stable across the swap, where they become the
-/// bearer's vehicle.
+/// listener, and the harness principal's parts — the bearer's vehicle through the door.
 async fn harness(pool: PgPool) -> (E2eTestApp, TemperMcpService, axum::http::request::Parts) {
     let app = common::setup_relay(pool).await;
     let svc = app.mcp_relay_service(app.pool.clone()).await;

@@ -17,6 +17,8 @@ use temper_substrate::payloads::{
     AnchorRef, EnforcementMode as SubstrateEnforcementMode, KindOwner,
 };
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -35,9 +37,9 @@ pub struct GetShapeInput {
 
 pub async fn list_shapes(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ListShapesInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
 
     let anchor = parse_home_anchor(&input.home_type, &input.home_id)?;
@@ -54,9 +56,9 @@ pub async fn list_shapes(
 
 pub async fn get_shape(
     svc: &TemperMcpService,
+    profile: Profile,
     input: GetShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
 
     let shape_id = parse_shape_ref(&input.shape_id)?;
@@ -118,9 +120,9 @@ pub struct DeclareShapeInput {
 
 pub async fn declare_shape(
     svc: &TemperMcpService,
+    profile: Profile,
     input: DeclareShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 

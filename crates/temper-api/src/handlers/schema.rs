@@ -8,7 +8,7 @@
 //! **They are still authenticated, and deliberately so.** They are mounted with the rest
 //! of the gated surface — authenticated *and* system-access-gated — rather than beside
 //! `/api/health`. Caller-independence is a property of the answer, not a reason to publish
-//! it: the MCP door asks `require_profile()` before rendering the same derivation, and a
+//! it: the MCP door runs the same auth gate before rendering the same derivation, and a
 //! door that dropped the gate because the payload looked harmless would be deciding
 //! disclosure by how the bytes read.
 //!

@@ -141,11 +141,35 @@ async fn active_approved_allowed_on_both_surfaces(pool: sqlx::PgPool) {
         "API must admit an active, approved profile"
     );
 
-    // MCP surface: the production gate resolves + authorizes without error.
+    // MCP surface: the production gate resolves + authorizes without error — and
+    // returns the identity it admitted. Parity means the SAME profile the API
+    // resolves for the same bearer, so consume the return and compare.
+    let api_profile = app
+        .reqwest_client
+        .get(app.url("/api/profile"))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .expect("api profile request");
+    assert_eq!(api_profile.status(), StatusCode::OK, "profile preflight");
+    let api_profile_id: uuid::Uuid = api_profile
+        .json::<serde_json::Value>()
+        .await
+        .expect("profile json")["id"]
+        .as_str()
+        .expect("profile id")
+        .parse()
+        .expect("profile id parse");
+
     let svc = build_mcp_service(&pool).await;
-    svc.ensure_profile_from_parts(&mcp_parts("e2e-test-user"))
+    let profile = svc
+        .ensure_profile_from_parts(&mcp_parts("e2e-test-user"))
         .await
         .expect("MCP must admit an active, approved profile");
+    assert_eq!(
+        profile.id, api_profile_id,
+        "both surfaces must resolve the SAME profile for the same identity"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

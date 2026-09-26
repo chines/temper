@@ -320,8 +320,9 @@ impl AuthenticatedProfile {
         &self.claims
     }
 
-    /// Consume the proof for its profile. For callers that store the identity beyond the request
-    /// (temper-mcp caches it on the session) and would otherwise clone to get around the borrow.
+    /// Consume the proof for its profile. The caller owns the returned profile for THIS
+    /// request — it threads down the call chain as a per-request value and is never
+    /// stored or cached beyond it.
     pub fn into_profile(self) -> Profile {
         self.profile
     }

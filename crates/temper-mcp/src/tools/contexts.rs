@@ -10,6 +10,8 @@ use temper_core::types::context::{ContextCreateRequest, ShareContextRequest};
 use temper_core::types::ids::{ContextId, ProfileId};
 use temper_services::error::ApiError;
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 use crate::tools::cognitive_maps::{context_analytics, context_region_metrics, context_shape};
 
@@ -110,9 +112,10 @@ pub struct RenameContextInput {
     pub name: String,
 }
 
-pub async fn list_contexts(svc: &TemperMcpService) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
+pub async fn list_contexts(
+    svc: &TemperMcpService,
+    profile: Profile,
+) -> Result<CallToolResult, rmcp::ErrorData> {
     let rows = temper_services::services::context_service::list_visible(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
@@ -128,10 +131,9 @@ pub async fn list_contexts(svc: &TemperMcpService) -> Result<CallToolResult, rmc
 
 pub async fn get_context(
     svc: &TemperMcpService,
+    profile: Profile,
     input: GetContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let row = temper_services::services::context_service::get_visible(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
@@ -148,9 +150,9 @@ pub async fn get_context(
 
 pub async fn create_context(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ContextCreateRequest,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let caller = ProfileId::from(profile.id);
 
     let (owner_table, owner_id) = temper_services::services::context_service::resolve_create_owner(
@@ -183,10 +185,9 @@ pub async fn create_context(
 /// Idempotent — `shared: false` when the share already existed.
 pub async fn share_context(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ShareContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let outcome = temper_services::services::context_service::share(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
@@ -211,10 +212,9 @@ pub async fn share_context(
 /// `reassigned: false` when the context was already owned by the target team.
 pub async fn transfer_context(
     svc: &TemperMcpService,
+    profile: Profile,
     input: TransferContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let outcome = temper_services::services::context_service::reassign(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
@@ -234,10 +234,9 @@ pub async fn transfer_context(
 /// [`share_context`]. No-op safe — `unshared: false` when there was no share to remove.
 pub async fn unshare_context(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ShareContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let outcome = temper_services::services::context_service::unshare(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
@@ -261,10 +260,9 @@ pub async fn unshare_context(
 /// `renamed: false` when the canonical name already equalled the stored one.
 pub async fn rename_context(
     svc: &TemperMcpService,
+    profile: Profile,
     input: RenameContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let outcome = temper_services::services::context_service::rename(
         &svc.api_state.pool,
         ProfileId::from(profile.id),
@@ -322,15 +320,16 @@ pub struct ContextReadInput {
 /// Dispatch the consolidated context-read tool.
 pub async fn context_read(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ContextReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.view {
-        ContextReadView::List => list_contexts(svc).await,
+        ContextReadView::List => list_contexts(svc, profile).await,
         ContextReadView::Get => {
             let id = input.id.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("get requires `id`".to_string(), None)
             })?;
-            get_context(svc, GetContextInput { id }).await
+            get_context(svc, profile, GetContextInput { id }).await
         }
         ContextReadView::Shape => {
             let context = input.context.ok_or_else(|| {
@@ -338,6 +337,7 @@ pub async fn context_read(
             })?;
             context_shape(
                 svc,
+                profile,
                 ContextShapeInput {
                     context,
                     lens: input.lens,
@@ -351,6 +351,7 @@ pub async fn context_read(
             })?;
             context_region_metrics(
                 svc,
+                profile,
                 ContextShapeInput {
                     context,
                     lens: input.lens,
@@ -362,7 +363,7 @@ pub async fn context_read(
             let context = input.context.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("analytics requires `context`".to_string(), None)
             })?;
-            context_analytics(svc, ContextAnalyticsInput { context }).await
+            context_analytics(svc, profile, ContextAnalyticsInput { context }).await
         }
     }
 }
@@ -411,6 +412,7 @@ pub struct ContextManageInput {
 /// Dispatch the consolidated context-manage tool.
 pub async fn context_manage(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ContextManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
@@ -420,6 +422,7 @@ pub async fn context_manage(
             })?;
             create_context(
                 svc,
+                profile,
                 ContextCreateRequest {
                     name,
                     owner: input.owner,
@@ -434,7 +437,7 @@ pub async fn context_manage(
             let name = input.name.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("rename requires `name`".to_string(), None)
             })?;
-            rename_context(svc, RenameContextInput { context, name }).await
+            rename_context(svc, profile, RenameContextInput { context, name }).await
         }
         ContextManageAction::Share => {
             let context = input.context.ok_or_else(|| {
@@ -443,7 +446,7 @@ pub async fn context_manage(
             let team = input.team.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("share requires `team`".to_string(), None)
             })?;
-            share_context(svc, ShareContextInput { context, team }).await
+            share_context(svc, profile, ShareContextInput { context, team }).await
         }
         ContextManageAction::Unshare => {
             let context = input.context.ok_or_else(|| {
@@ -452,7 +455,7 @@ pub async fn context_manage(
             let team = input.team.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("unshare requires `team`".to_string(), None)
             })?;
-            unshare_context(svc, ShareContextInput { context, team }).await
+            unshare_context(svc, profile, ShareContextInput { context, team }).await
         }
         ContextManageAction::Transfer => {
             let context = input.context.ok_or_else(|| {
@@ -461,7 +464,7 @@ pub async fn context_manage(
             let to_team = input.team.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("transfer requires `team`".to_string(), None)
             })?;
-            transfer_context(svc, TransferContextInput { context, to_team }).await
+            transfer_context(svc, profile, TransferContextInput { context, to_team }).await
         }
     }
 }

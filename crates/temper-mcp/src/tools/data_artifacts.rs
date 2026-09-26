@@ -13,6 +13,8 @@ use temper_services::backend::{substrate_read, DbBackend};
 use temper_services::error::ApiError;
 use temper_workflow::operations::{Backend, CommitDataArtifact, Surface};
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -38,9 +40,9 @@ pub struct GetArtifactInput {
 
 pub async fn list_artifacts(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ListArtifactsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
 
     let resource_id = parse_resource_ref(&input.resource_id)?;
@@ -64,9 +66,9 @@ pub async fn list_artifacts(
 
 pub async fn get_artifact(
     svc: &TemperMcpService,
+    profile: Profile,
     input: GetArtifactInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
 
     let artifact_id = parse_artifact_ref(&input.artifact_id)?;
@@ -134,9 +136,9 @@ pub struct CommitArtifactInput {
 
 pub async fn commit_artifact(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CommitArtifactInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 

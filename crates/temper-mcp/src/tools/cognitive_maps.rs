@@ -29,14 +29,15 @@ use temper_services::services::context_service::resolve_context_ref;
 use temper_services::services::{access_service, cogmap_service, materialize_service};
 use temper_workflow::operations::{Backend, CreateCognitiveMap, MaterializeOnThreshold, Surface};
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 
 pub async fn cogmap_shape(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     // Resolve refs → UUIDs (trailing-UUID-only; slug half ignored). Use the same resolver the CLI uses.
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
@@ -70,10 +71,9 @@ pub async fn cogmap_shape(
 
 pub async fn cogmap_region_metrics(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapRegionMetricsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -105,10 +105,9 @@ pub async fn cogmap_region_metrics(
 
 pub async fn cogmap_analytics(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapAnalyticsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -181,10 +180,9 @@ pub struct CogmapReadCharterInput {
 /// gets an empty vec, never an error.
 pub async fn cogmap_read_charter(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapReadCharterInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -217,10 +215,9 @@ pub struct CogmapListInput {
 /// cogmap tool.
 pub async fn cogmap_list(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapListInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let mut rows = cogmap_service::list_visible(&svc.api_state.pool, ProfileId::from(profile.id))
         .await
         .map_err(|e| rmcp::ErrorData::internal_error(format!("cogmap_list failed: {e}"), None))?;
@@ -246,10 +243,9 @@ pub struct CogmapShowInput {
 /// no-leak convention as `cogmap_analytics`.
 pub async fn cogmap_show(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapShowInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -296,9 +292,9 @@ pub struct CogmapCreateInput {
 /// with an EMPTY charter (see [`CogmapCreateInput`]).
 pub async fn cogmap_create(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapCreateInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
@@ -345,9 +341,9 @@ pub async fn cogmap_create(
 /// `anchor_readable_by_profile`).
 pub async fn cogmap_materialize_delta(
     svc: &TemperMcpService,
+    profile: Profile,
     input: MaterializeDeltaInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let cogmap = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -373,9 +369,9 @@ pub async fn cogmap_materialize_delta(
 /// CLI equivalent: `temper cogmap materialize <ref> [--threshold N]`.
 pub async fn cogmap_materialize(
     svc: &TemperMcpService,
+    profile: Profile,
     input: MaterializeTriggerInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let cogmap = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -438,10 +434,9 @@ fn map_api_error(context: &str, err: ApiError) -> rmcp::ErrorData {
 /// `cogmap_service::bind_team` directly, which enforces the two-sided gate before any write.
 pub async fn cogmap_bind(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapBindInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -466,10 +461,9 @@ pub async fn cogmap_bind(
 /// Unbind a cognitive map from a team. SERVICE-DIRECT, two-sided gated (see [`cogmap_bind`]).
 pub async fn cogmap_unbind(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapBindInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -547,9 +541,9 @@ fn resolve_principal(
 /// (coherence: you cannot write/grant what you cannot read).
 pub async fn cogmap_grant(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapGrantInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -587,9 +581,9 @@ pub async fn cogmap_grant(
 /// [`cogmap_grant`]). Absent grant ⇒ no-op success.
 pub async fn cogmap_revoke(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapRevokeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
         .0;
@@ -646,9 +640,9 @@ fn lens_of(lens: Option<&str>) -> Result<Option<Uuid>, rmcp::ErrorData> {
 /// `context_shape` — the context's materialized regions (surface tier), most salient first.
 pub async fn context_shape(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ContextShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
     let anchor = context_anchor(svc, profile_id, &input.context).await?;
 
@@ -671,9 +665,9 @@ pub async fn context_shape(
 /// `context_region_metrics` — the per-region analytics tier for a context.
 pub async fn context_region_metrics(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ContextShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
     let anchor = context_anchor(svc, profile_id, &input.context).await?;
 
@@ -704,9 +698,9 @@ pub async fn context_region_metrics(
 /// "not readable" and "does not exist" are one message on purpose.
 pub async fn context_analytics(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ContextAnalyticsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
     let anchor = context_anchor(svc, profile_id, &input.context).await?;
 
@@ -739,9 +733,9 @@ pub async fn context_analytics(
 /// (write requires DIRECT membership with an authoring role), inside the backend command.
 pub async fn context_materialize(
     svc: &TemperMcpService,
+    profile: Profile,
     input: ContextMaterializeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
     let anchor = context_anchor(svc, profile_id, &input.context).await?;
 
@@ -808,12 +802,14 @@ pub struct CogmapReadInput {
 /// Dispatch the consolidated cogmap-read tool.
 pub async fn cogmap_read(
     svc: &TemperMcpService,
+    profile: Profile,
     input: CogmapReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.view {
         CogmapReadView::Show => {
             cogmap_show(
                 svc,
+                profile,
                 CogmapShowInput {
                     cogmap: input.cogmap,
                 },
@@ -823,6 +819,7 @@ pub async fn cogmap_read(
         CogmapReadView::Shape => {
             cogmap_shape(
                 svc,
+                profile,
                 CogmapShapeInput {
                     cogmap: input.cogmap,
                     lens: input.lens,
@@ -833,6 +830,7 @@ pub async fn cogmap_read(
         CogmapReadView::Metrics => {
             cogmap_region_metrics(
                 svc,
+                profile,
                 CogmapRegionMetricsInput {
                     cogmap: input.cogmap,
                     lens: input.lens,
@@ -843,6 +841,7 @@ pub async fn cogmap_read(
         CogmapReadView::Analytics => {
             cogmap_analytics(
                 svc,
+                profile,
                 CogmapAnalyticsInput {
                     cogmap: input.cogmap,
                 },
@@ -852,6 +851,7 @@ pub async fn cogmap_read(
         CogmapReadView::Charter => {
             cogmap_read_charter(
                 svc,
+                profile,
                 CogmapReadCharterInput {
                     cogmap: input.cogmap,
                 },
@@ -861,6 +861,7 @@ pub async fn cogmap_read(
         CogmapReadView::MaterializeDelta => {
             cogmap_materialize_delta(
                 svc,
+                profile,
                 MaterializeDeltaInput {
                     cogmap: input.cogmap,
                     threshold: input.threshold,

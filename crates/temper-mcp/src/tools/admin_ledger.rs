@@ -16,6 +16,8 @@ use temper_core::types::ids::ProfileId;
 use temper_services::error::ApiError;
 use temper_services::services::admin_ledger_service;
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 
 /// Page size when the agent does not ask, and the ceiling when it asks for too much. Kept equal
@@ -76,9 +78,9 @@ pub(crate) fn page_bounds(input: &AdminLedgerInput) -> (i64, i64) {
 
 pub async fn admin_ledger(
     svc: &TemperMcpService,
+    profile: Profile,
     input: AdminLedgerInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let caller = ProfileId::from(profile.id);
 
     let (limit, offset) = page_bounds(&input);
