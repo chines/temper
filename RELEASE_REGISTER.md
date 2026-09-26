@@ -23,6 +23,27 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **The resources and search families' 400 faces drop the status label — the `api_error_cause` strip reaches the door's first two families**
+  The seven relayed 400 arms (create/list/update/annotate/update_resource_meta/
+  delete on resources; search's caller-error arm) now speak the server's own
+  sentence bare via the shared `api_error_cause` strip, exactly as the
+  ledger/graph families have since G3c. The relayed 400 body carries the API's
+  rendered Display (`Bad request: …`), a label the direct bindings never
+  rendered — they destructured the variant — so the label was a
+  door-introduced artifact: the latent direct-parity gap Pete ruled swept
+  (goal Amendment 2026-09-26, ruling 2). Search's arm also drops its
+  `search: ` context prefix, so no caller reads a label stacked on a label.
+  Query contributes no face: its 400 arrives typed as `PlanRefused` with its
+  own rendering, untouched. Both parity suites declare the delta in their
+  headers and their swept faces' pins flipped in the same commit. Who
+  observes: an MCP-calling agent, whose visible change is the dropped
+  label/prefix prose — refusal KIND and gate identical (`invalid_params`
+  either way).
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+
 - **The temper-mcp service's shared profile cache is torn down — per-request identity, no auth state on the service**
   An internal identity-plumbing refactor of the MCP service, declared because the
   wire-touched path moved: the service struct's last auth state (the `profile`

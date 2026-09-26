@@ -22,6 +22,13 @@
 //!   changed rendered kind (`internal_error` → `invalid_params`) at the swap —
 //!   the suite pinned the direct face before the swap and pins the door's face
 //!   now, and the change is named here and in the swap commit.
+//!   [The 400-label sweep, 2026-09-26] the door face's prose changed again,
+//!   on purpose: the sentence now renders BARE — `api_error_cause` strips the
+//!   API Display's `Bad request: ` status label the relayed body carries, and
+//!   the arm's own `search: ` context prefix drops with it. **SECOND DECLARED
+//!   PARITY DELTA**: prose only, kind and gate identical; the face the G3c
+//!   families already speak and the direct binding's own bare render. The pin
+//!   below flipped to the exact bare sentence in the same commit.
 //! - *Opaque faults* — **SECOND DECLARED PARITY DELTA, prose only**: the direct
 //!   binding rendered an unclassifiable failure as `internal_error("Search
 //!   failed: {e}")` with the `ApiError` Display; the door renders
@@ -312,7 +319,10 @@ async fn empty_results_carry_the_arm_disposition_not_a_bare_list(pool: PgPool) {
 /// binding wrapped it as `internal_error` (pinned there by this suite before the
 /// swap); through the door it arrives as the API's 400 and speaks the server's own
 /// sentence as `invalid_params` — the `contexts.rs::map_api_error` BadRequest arm's
-/// precedent.
+/// precedent. [The 400-label sweep, 2026-09-26 — SECOND DECLARED PARITY DELTA]
+/// the sentence renders bare: no `search: ` context prefix, no `Bad request: `
+/// status label. The exact-equality pin IS the delta's bite witness — with the
+/// strip reverted the label rides back in and this test reddens.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_degenerate_embedding_refuses_as_a_caller_error(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
@@ -325,9 +335,11 @@ async fn a_degenerate_embedding_refuses_as_a_caller_error(pool: PgPool) {
         -32602,
         "a caller error, not a fault — the declared delta: {err}"
     );
-    assert!(
-        err.message.contains("embedding has no direction"),
-        "the server's own sentence: {err}"
+    assert_eq!(
+        err.message,
+        "embedding has no direction (zero magnitude or non-finite components); \
+         cosine distance against it is undefined",
+        "the server's own sentence, bare — the swept face: {err}"
     );
 }
 

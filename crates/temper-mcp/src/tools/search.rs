@@ -12,7 +12,7 @@ use rmcp::model::CallToolResult;
 use temper_client::error::ClientError;
 use temper_core::types::api::SearchParams;
 
-use crate::service::{AcrossAuth, TemperMcpService};
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 pub async fn search(
     svc: &TemperMcpService,
@@ -45,14 +45,19 @@ pub async fn search(
 /// at the API) — so it speaks the server's own sentence as `invalid_params`, the same
 /// care `contexts.rs::map_api_error` gives `BadRequest`. The direct binding wrapped
 /// every error as `internal_error`; this one face's rendered kind changed with the
-/// door, and the parity suite pins the change as its declared delta. Everything else
-/// stays opaque, matching the established pattern.
+/// door, and the parity suite pins the change as its declared delta. [The 400-label
+/// sweep, 2026-09-26] the sentence now renders bare — `api_error_cause` strips the
+/// API Display's `Bad request: ` status label the relayed body carries, and the
+/// arm's own `search: ` context prefix drops with it (a label stacked on a label) —
+/// the face the G3c families already speak, adopted as the family's second declared
+/// parity delta. Kind and gate identical. Everything else stays opaque, matching the
+/// established pattern.
 fn map_search_error(context: &str, err: ClientError) -> rmcp::ErrorData {
     match err {
         ClientError::Server {
             status: 400,
             message,
-        } => rmcp::ErrorData::invalid_params(format!("{context}: {message}"), None),
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
         other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
     }
 }
