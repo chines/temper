@@ -246,7 +246,9 @@ impl TemperMcpService {
     /// per-request from the JWT claims that the auth middleware injected
     /// into the HTTP extensions. The caller threads the returned profile
     /// into its own tool functions — identity is a per-request value, never
-    /// a shared slot.
+    /// a shared slot. **Trust invariant:** `parts` must be middleware-produced —
+    /// the gate reads the injected claims at face value and does not re-verify
+    /// the JWT; verification happened at the edge that built the extensions.
     pub async fn ensure_profile_from_parts(
         &self,
         parts: &http::request::Parts,
