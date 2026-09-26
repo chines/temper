@@ -190,11 +190,10 @@ async fn cli_rename(
     (out.status.success(), combined)
 }
 
-/// An MCP service over the same pool, with its profile cache seeded for `sub`.
-///
-/// One service per principal: the cache is per-service, so the reader and the stranger cannot
-/// share one. Local to this file, matching `resource_facet_e2e_test.rs`'s own copy.
-async fn mcp_service_for(pool: &sqlx::PgPool, sub: &str) -> temper_mcp::service::TemperMcpService {
+/// An MCP service over the same pool. The service carries no auth state, so
+/// the reader and the stranger share ONE instance; each call resolves its own
+/// principal through the gate. Local to this file.
+async fn mcp_service_for(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpService {
     let decoding_key =
         jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
             .expect("decoding key");
@@ -223,13 +222,18 @@ async fn mcp_service_for(pool: &sqlx::PgPool, sub: &str) -> temper_mcp::service:
         blob_disabled_by_policy: false,
     };
     let state = AppState::new(pool.clone(), jwks_store, api_config);
-    let svc = temper_mcp::service::TemperMcpService::new(
+    temper_mcp::service::TemperMcpService::new(
         state,
         temper_mcp::service::relay_off_config(),
         temper_mcp::service::shared_relay_pool(),
-    );
+    )
+}
 
-    let (parts, ()) = axum::http::Request::builder()
+/// Request `Parts` whose claims name `sub` — the identity the gate resolves for a
+/// call. `exp` is fine unenforced here: the JWT middleware validated it in prod;
+/// the gate re-checks nothing about expiry, only the standing.
+fn mcp_parts_for(sub: &str) -> axum::http::request::Parts {
+    axum::http::Request::builder()
         .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
         .extension(temper_services::auth::RawJwtClaims {
             sub: sub.to_string(),
@@ -242,21 +246,20 @@ async fn mcp_service_for(pool: &sqlx::PgPool, sub: &str) -> temper_mcp::service:
         })
         .body(())
         .expect("build request")
-        .into_parts();
-    svc.ensure_profile_from_parts(&parts)
-        .await
-        .expect("seed profile cache");
-    svc
+        .into_parts()
+        .0
 }
 
 /// The refusal message the MCP `rename_context` tool renders for a caller.
 async fn mcp_rename_refusal(
     svc: &temper_mcp::service::TemperMcpService,
+    profile: &temper_core::types::Profile,
     context_id: Uuid,
     name: &str,
 ) -> String {
     let err = temper_mcp::tools::contexts::rename_context(
         svc,
+        profile.clone(),
         temper_mcp::tools::contexts::RenameContextInput {
             context: context_id,
             name: name.to_owned(),
@@ -340,8 +343,17 @@ async fn the_two_dialects_survive_every_surface(pool: sqlx::PgPool) {
     // ── MCP ──────────────────────────────────────────────────────────────────────────────────
     // The surface with its own mapper (`map_api_error`), which the shared gate never sees — so
     // this is the door where the rendering could diverge even though the decision cannot.
-    let reader_svc = mcp_service_for(&pool, "e2e-second-user").await;
-    let reader_mcp = mcp_rename_refusal(&reader_svc, *context.id, "Reader MCP").await;
+    // ONE shared service instance: the reader's and the stranger's calls each
+    // resolve their own principal through the gate, so identity separation is
+    // per-call, not per-service.
+    let reader_svc = mcp_service_for(&pool).await;
+    let reader_parts = mcp_parts_for("e2e-second-user");
+    let reader_profile = reader_svc
+        .ensure_profile_from_parts(&reader_parts)
+        .await
+        .expect("the reader resolves through the gate");
+    let reader_mcp =
+        mcp_rename_refusal(&reader_svc, &reader_profile, *context.id, "Reader MCP").await;
     assert!(
         reader_mcp.contains("administer the context"),
         "MCP renders the 403 as the (one-sided) administration requirement: {reader_mcp}"
@@ -351,8 +363,13 @@ async fn the_two_dialects_survive_every_surface(pool: sqlx::PgPool) {
         "rename has no target team — that clause belongs to share/unshare/transfer: {reader_mcp}"
     );
 
-    let stranger_svc = mcp_service_for(&pool, "e2e-third-user").await;
-    let stranger_mcp = mcp_rename_refusal(&stranger_svc, *context.id, "Stranger MCP").await;
+    let stranger_parts = mcp_parts_for("e2e-third-user");
+    let stranger_profile = reader_svc
+        .ensure_profile_from_parts(&stranger_parts)
+        .await
+        .expect("the stranger resolves through the gate");
+    let stranger_mcp =
+        mcp_rename_refusal(&reader_svc, &stranger_profile, *context.id, "Stranger MCP").await;
     assert!(
         stranger_mcp.contains("context not found or not readable"),
         "MCP carries the service's own withholding message: {stranger_mcp}"

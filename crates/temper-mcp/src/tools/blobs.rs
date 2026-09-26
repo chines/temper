@@ -26,6 +26,8 @@ use temper_core::types::ids::{BlobId, ProfileId};
 use temper_services::error::ApiError;
 use temper_workflow::operations::Surface;
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 
 // ── Input structs ──────────────────────────────────────────────────────────────
@@ -271,20 +273,21 @@ fn blob_parts(
 
 pub async fn blob_read(
     svc: &TemperMcpService,
+    profile: Profile,
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
-        BlobReadAction::Read => read_blob(svc, input).await,
-        BlobReadAction::List => list_blobs(svc, input).await,
+        BlobReadAction::Read => read_blob(svc, profile, input).await,
+        BlobReadAction::List => list_blobs(svc, profile, input).await,
     }
 }
 
 async fn read_blob(
     svc: &TemperMcpService,
+    profile: Profile,
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_read";
-    let profile = svc.require_profile().await?;
     let caller = ProfileId::from(profile.id);
     let blob_id = input.blob_id.ok_or_else(|| {
         rmcp::ErrorData::invalid_params("read requires `blob_id`".to_string(), None)
@@ -343,10 +346,10 @@ async fn read_blob(
 
 async fn list_blobs(
     svc: &TemperMcpService,
+    profile: Profile,
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_list";
-    let profile = svc.require_profile().await?;
     let caller = ProfileId::from(profile.id);
     if svc.api_state.blob_store.is_none() {
         return Err(map_api_error(ACTION, svc.api_state.blob_refusal()));
@@ -372,20 +375,21 @@ async fn list_blobs(
 
 pub async fn blob_manage(
     svc: &TemperMcpService,
+    profile: Profile,
     input: BlobManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
-        BlobManageAction::Commit => commit_blob(svc, input).await,
-        BlobManageAction::Relate => relate_blob(svc, input).await,
+        BlobManageAction::Commit => commit_blob(svc, profile, input).await,
+        BlobManageAction::Relate => relate_blob(svc, profile, input).await,
     }
 }
 
 async fn commit_blob(
     svc: &TemperMcpService,
+    profile: Profile,
     input: BlobManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_commit";
-    let profile = svc.require_profile().await?;
     let caller = ProfileId::from(profile.id);
     let home_table = input.home_table.ok_or_else(|| {
         rmcp::ErrorData::invalid_params("commit requires `home_table`".to_string(), None)
@@ -448,10 +452,10 @@ async fn commit_blob(
 
 async fn relate_blob(
     svc: &TemperMcpService,
+    profile: Profile,
     input: BlobManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_relate";
-    let profile = svc.require_profile().await?;
     let caller = ProfileId::from(profile.id);
     let blob_id = input.blob_id.ok_or_else(|| {
         rmcp::ErrorData::invalid_params("relate requires `blob_id`".to_string(), None)

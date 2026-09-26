@@ -14,6 +14,8 @@ use temper_services::backend::DbBackend;
 use temper_services::services::steward_service;
 use temper_workflow::operations::{AdvanceStewardWatermark, Backend, Surface};
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -60,9 +62,9 @@ fn parse_cogmap(s: &str) -> Result<CogmapId, rmcp::ErrorData> {
 
 pub async fn steward_ingest_delta(
     svc: &TemperMcpService,
+    profile: Profile,
     input: StewardDeltaInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let cogmap = parse_cogmap(&input.cogmap)?;
 
     let delta = steward_service::ingest_delta(
@@ -81,9 +83,9 @@ pub async fn steward_ingest_delta(
 
 pub async fn steward_advance_watermark(
     svc: &TemperMcpService,
+    profile: Profile,
     input: StewardAdvanceWatermarkInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let cogmap = parse_cogmap(&input.cogmap)?;
 
     let cmd = AdvanceStewardWatermark {

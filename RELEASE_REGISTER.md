@@ -23,6 +23,23 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **The temper-mcp service's shared profile cache is torn down — per-request identity, no auth state on the service**
+  An internal identity-plumbing refactor of the MCP service, declared because the
+  wire-touched path moved: the service struct's last auth state (the `profile`
+  slot and its lock) is deleted; `ensure_profile_from_parts` stops caching and
+  RETURNS the resolved profile, and every still-direct tool function receives it
+  as a parameter instead of reading the shared slot. On a stateful deployment the
+  slot was a cross-request wrong-identity TOCTOU (request A's gate fills it,
+  request B's gate overwrites it, A's tool fn reads B's profile); with the field
+  gone, identity is a per-request value and the compiler makes cross-request
+  bleed unrepresentable. Who observes: nobody — behavior-neutral per request
+  (the same Level 1 + 2 gate runs at the top of every direct method), and no wire
+  shape moves: tool names, inputs, outputs, and refusal sentences are byte-stable.
+pr: self
+classes: additive
+surfaces: mcp, internal
+status: signal-only
+
 - **This release — the 0.5.4 fleet alignment: VERSION 0.5.3 → 0.5.4 across crates, packages, and clients**
   The release train's own wire delta is none: version fields and the generated
   cores re-stale with the bump (the D-S3 baseline — no shape movement); the

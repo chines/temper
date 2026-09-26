@@ -88,8 +88,8 @@ pub async fn run_query(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     // The client is constructed BEFORE the act measures: an arrival with no bearer, or a
     // deployment missing its relay config, is refused by the constructor and never enters
-    // the distribution — the direct binding's `require_profile`-first ordering excluded
-    // unauthenticated arrivals the same way. Measuring before the send (not after) keeps
+    // the distribution — the direct binding's gate-first ordering excluded unauthenticated
+    // arrivals the same way. Measuring before the send (not after) keeps
     // the property `CompositionShape` requires: the act is counted before the server
     // decides whether to answer it. The `mcp` door is measured separately from `http`
     // because `embeddings_supplied` is structurally zero here — this door cannot run the

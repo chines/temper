@@ -9,6 +9,8 @@ use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 
 // ---------------------------------------------------------------------------
@@ -26,9 +28,10 @@ pub struct DescribeDocTypeInput {
 // Tool implementations
 // ---------------------------------------------------------------------------
 
-pub async fn list_doc_types(svc: &TemperMcpService) -> Result<CallToolResult, rmcp::ErrorData> {
-    let _profile = svc.require_profile().await?;
-
+pub async fn list_doc_types(
+    _svc: &TemperMcpService,
+    _profile: Profile,
+) -> Result<CallToolResult, rmcp::ErrorData> {
     // Doc-types are name-keyed in the substrate — enumerate the embedded schema set
     // (the single source of truth) rather than a DB table.
     let summaries = temper_workflow::schema::list_doc_types();
@@ -40,11 +43,10 @@ pub async fn list_doc_types(svc: &TemperMcpService) -> Result<CallToolResult, rm
 }
 
 pub async fn describe_doc_type(
-    svc: &TemperMcpService,
+    _svc: &TemperMcpService,
+    _profile: Profile,
     input: DescribeDocTypeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let _profile = svc.require_profile().await?;
-
     let response = temper_workflow::schema::describe_doc_type(&input.name).map_err(|e| {
         rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_PARAMS,
@@ -62,9 +64,10 @@ pub async fn describe_doc_type(
 /// Describe the recognized open_meta conventions — the self-describing schema (recognized keys, their
 /// shapes, FTS-indexing markers) plus discouraged keys. Mirrors the CLI `resource describe-open-meta`
 /// command; both render the shared `temper_workflow::schema::OpenMetaConvention`.
-pub async fn describe_open_meta(svc: &TemperMcpService) -> Result<CallToolResult, rmcp::ErrorData> {
-    let _profile = svc.require_profile().await?;
-
+pub async fn describe_open_meta(
+    _svc: &TemperMcpService,
+    _profile: Profile,
+) -> Result<CallToolResult, rmcp::ErrorData> {
     let convention = temper_workflow::schema::describe_open_meta().map_err(|e| {
         rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INTERNAL_ERROR,
@@ -110,17 +113,18 @@ pub struct DescribeSchemaInput {
 /// Dispatch the consolidated describe-schema tool.
 pub async fn describe_schema(
     svc: &TemperMcpService,
+    profile: Profile,
     input: DescribeSchemaInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.view {
-        DescribeSchemaView::DocTypes => list_doc_types(svc).await,
+        DescribeSchemaView::DocTypes => list_doc_types(svc, profile).await,
         DescribeSchemaView::DocType => {
             let name = input.name.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("doc_type requires `name`".to_string(), None)
             })?;
-            describe_doc_type(svc, DescribeDocTypeInput { name }).await
+            describe_doc_type(svc, profile, DescribeDocTypeInput { name }).await
         }
-        DescribeSchemaView::OpenMeta => describe_open_meta(svc).await,
+        DescribeSchemaView::OpenMeta => describe_open_meta(svc, profile).await,
     }
 }
 

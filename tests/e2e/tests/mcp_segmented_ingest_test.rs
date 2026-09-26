@@ -1,6 +1,7 @@
 //! Segmented ingest driven the way an MCP caller drives it: through the production tool functions
-//! (`tools::ingest::*` on the interim direct binding, whose caller the service's own profile cache
-//! still resolves), with no client-side chunks, no embedder, and no `.temper/` manifest. The
+//! (`tools::ingest::*` on the direct binding, whose caller the suite resolves through the service's
+//! one gate — `ensure_profile_from_parts` — and threads into each call), with no client-side
+//! chunks, no embedder, and no `.temper/` manifest. The
 //! one-shot reference create crosses the network door (`relay_client` → the real `create_app`
 //! listener → the API's ingest door) on the same principal's bearer.
 //!
@@ -17,6 +18,7 @@ mod common;
 
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::{BlocksResponse, SegmentedBeginResponse};
+use temper_core::types::Profile;
 use temper_mcp::service::TemperMcpService;
 use temper_mcp::tools::ingest::{
     IngestAppendInput, IngestBeginInput, IngestBlocksInput, IngestFinalizeInput,
@@ -78,14 +80,21 @@ fn begin_input(context_ref: &str, title: &str, segment0: &str) -> IngestBeginInp
     }
 }
 
-async fn append(svc: &TemperMcpService, resource: &str, seq: u32, text: &str) -> BlocksResponse {
-    append_with_sources(svc, resource, seq, text, None).await
+async fn append(
+    svc: &TemperMcpService,
+    profile: &Profile,
+    resource: &str,
+    seq: u32,
+    text: &str,
+) -> BlocksResponse {
+    append_with_sources(svc, profile, resource, seq, text, None).await
 }
 
 /// Append one segment, optionally carrying per-block provenance sources — the `ingest_append`
 /// sources path (issue #354).
 async fn append_with_sources(
     svc: &TemperMcpService,
+    profile: &Profile,
     resource: &str,
     seq: u32,
     text: &str,
@@ -94,6 +103,7 @@ async fn append_with_sources(
     parse_tool_json(
         temper_mcp::tools::ingest::ingest_append(
             svc,
+            profile.clone(),
             IngestAppendInput {
                 resource: resource.to_string(),
                 seq,
@@ -107,10 +117,11 @@ async fn append_with_sources(
     )
 }
 
-async fn blocks(svc: &TemperMcpService, resource: &str) -> BlocksResponse {
+async fn blocks(svc: &TemperMcpService, profile: &Profile, resource: &str) -> BlocksResponse {
     parse_tool_json(
         temper_mcp::tools::ingest::ingest_blocks(
             svc,
+            profile.clone(),
             IngestBlocksInput {
                 resource: resource.to_string(),
             },
@@ -120,9 +131,16 @@ async fn blocks(svc: &TemperMcpService, resource: &str) -> BlocksResponse {
     )
 }
 
-async fn finalize(svc: &TemperMcpService, resource: &str, expected_blocks: u32, body_hash: &str) {
+async fn finalize(
+    svc: &TemperMcpService,
+    profile: &Profile,
+    resource: &str,
+    expected_blocks: u32,
+    body_hash: &str,
+) {
     temper_mcp::tools::ingest::ingest_finalize(
         svc,
+        profile.clone(),
         IngestFinalizeInput {
             resource: resource.to_string(),
             expected_blocks,
@@ -173,20 +191,31 @@ async fn stored_body_hash(pool: &sqlx::PgPool, resource: uuid::Uuid) -> Option<S
 }
 
 /// Run a full segmented session over the corpus, returning the resource id.
-async fn ingest_segmented(svc: &TemperMcpService, context_ref: &str, title: &str) -> uuid::Uuid {
+async fn ingest_segmented(
+    svc: &TemperMcpService,
+    profile: &Profile,
+    context_ref: &str,
+    title: &str,
+) -> uuid::Uuid {
     let segments = corpus();
     let begin: SegmentedBeginResponse = parse_tool_json(
-        temper_mcp::tools::ingest::ingest_begin(svc, begin_input(context_ref, title, segments[0]))
-            .await
-            .expect("ingest_begin"),
+        temper_mcp::tools::ingest::ingest_begin(
+            svc,
+            profile.clone(),
+            begin_input(context_ref, title, segments[0]),
+        )
+        .await
+        .expect("ingest_begin"),
     );
     let resource = begin.resource_id.to_string();
 
     let mut body_hash = begin.body_hash;
     for (i, segment) in segments.iter().enumerate().skip(1) {
-        body_hash = append(svc, &resource, i as u32, segment).await.body_hash;
+        body_hash = append(svc, profile, &resource, i as u32, segment)
+            .await
+            .body_hash;
     }
-    finalize(svc, &resource, segments.len() as u32, &body_hash).await;
+    finalize(svc, profile, &resource, segments.len() as u32, &body_hash).await;
     begin.resource_id
 }
 
@@ -243,13 +272,18 @@ async fn segmented_server_chunked_ingest_equals_a_one_shot_create(pool: sqlx::Pg
 
     let svc = app.mcp_relay_service(pool.clone()).await;
     let parts = app.relay_parts();
+    // The direct binding's caller resolves through the same gate production dispatch runs.
+    let caller = svc
+        .ensure_profile_from_parts(&app.direct_parts())
+        .await
+        .expect("profile");
 
     // The reference: one call, whole document, server chunks it in one pass.
     let reference = one_shot_create(&svc, &parts, "@me/mcp-segmented", &corpus().concat()).await;
 
     // The subject: begin + N appends + finalize, server chunks each segment independently and
     // carries the heading breadcrumb across every block boundary.
-    let segmented = ingest_segmented(&svc, "@me/mcp-segmented", "Segmented").await;
+    let segmented = ingest_segmented(&svc, &caller, "@me/mcp-segmented", "Segmented").await;
 
     assert_eq!(
         body_text(&pool, segmented, profile).await,
@@ -290,22 +324,27 @@ async fn an_interrupted_segmented_ingest_resumes_from_the_server_alone(pool: sql
         .expect("context create");
 
     let svc = app.mcp_relay_service(pool.clone()).await;
+    let caller = svc
+        .ensure_profile_from_parts(&app.direct_parts())
+        .await
+        .expect("profile");
     let segments = corpus();
 
     let begin: SegmentedBeginResponse = parse_tool_json(
         temper_mcp::tools::ingest::ingest_begin(
             &svc,
+            caller.clone(),
             begin_input("@me/mcp-resume", "Interrupted", segments[0]),
         )
         .await
         .expect("ingest_begin"),
     );
     let resource = begin.resource_id.to_string();
-    append(&svc, &resource, 1, segments[1]).await;
+    append(&svc, &caller, &resource, 1, segments[1]).await;
     // Segment 2 never lands — the process died here.
 
     // Resume with no local manifest: ask the server what it has.
-    let landed = blocks(&svc, &resource).await;
+    let landed = blocks(&svc, &caller, &resource).await;
     let have: Vec<u32> = landed.blocks.iter().map(|b| b.seq).collect();
     assert_eq!(have, vec![0, 1], "the server knows exactly what landed");
 
@@ -316,15 +355,15 @@ async fn an_interrupted_segmented_ingest_resumes_from_the_server_alone(pool: sql
 
     let mut body_hash = landed.body_hash;
     for i in missing {
-        body_hash = append(&svc, &resource, i as u32, segments[i])
+        body_hash = append(&svc, &caller, &resource, i as u32, segments[i])
             .await
             .body_hash;
     }
-    finalize(&svc, &resource, segments.len() as u32, &body_hash).await;
+    finalize(&svc, &caller, &resource, segments.len() as u32, &body_hash).await;
 
     // A resumed session must be indistinguishable from one that never broke. The reference is an
     // uninterrupted SEGMENTED ingest — same block structure, so the merkle is comparable too.
-    let reference = ingest_segmented(&svc, "@me/mcp-resume", "Uninterrupted").await;
+    let reference = ingest_segmented(&svc, &caller, "@me/mcp-resume", "Uninterrupted").await;
     assert_eq!(
         body_text(&pool, begin.resource_id, profile).await,
         body_text(&pool, reference, profile).await,
@@ -350,11 +389,16 @@ async fn re_appending_a_landed_segment_is_an_idempotent_no_op(pool: sqlx::PgPool
         .expect("context create");
 
     let svc = app.mcp_relay_service(pool.clone()).await;
+    let profile = svc
+        .ensure_profile_from_parts(&app.direct_parts())
+        .await
+        .expect("profile");
     let segments = corpus();
 
     let begin: SegmentedBeginResponse = parse_tool_json(
         temper_mcp::tools::ingest::ingest_begin(
             &svc,
+            profile.clone(),
             begin_input("@me/mcp-idempotent", "Idempotent", segments[0]),
         )
         .await
@@ -362,8 +406,8 @@ async fn re_appending_a_landed_segment_is_an_idempotent_no_op(pool: sqlx::PgPool
     );
     let resource = begin.resource_id.to_string();
 
-    let first = append(&svc, &resource, 1, segments[1]).await;
-    let again = append(&svc, &resource, 1, segments[1]).await;
+    let first = append(&svc, &profile, &resource, 1, segments[1]).await;
+    let again = append(&svc, &profile, &resource, 1, segments[1]).await;
 
     assert_eq!(
         first.blocks.len(),
@@ -391,10 +435,15 @@ async fn an_append_whose_content_does_not_hash_to_its_declared_hash_is_rejected(
         .expect("context create");
 
     let svc = app.mcp_relay_service(pool.clone()).await;
+    let profile = svc
+        .ensure_profile_from_parts(&app.direct_parts())
+        .await
+        .expect("profile");
     let segments = corpus();
     let begin: SegmentedBeginResponse = parse_tool_json(
         temper_mcp::tools::ingest::ingest_begin(
             &svc,
+            profile.clone(),
             begin_input("@me/mcp-badhash", "BadHash", segments[0]),
         )
         .await
@@ -403,6 +452,7 @@ async fn an_append_whose_content_does_not_hash_to_its_declared_hash_is_rejected(
 
     let err = temper_mcp::tools::ingest::ingest_append(
         &svc,
+        profile.clone(),
         IngestAppendInput {
             resource: begin.resource_id.to_string(),
             seq: 1,
@@ -419,7 +469,7 @@ async fn an_append_whose_content_does_not_hash_to_its_declared_hash_is_rejected(
         "the error must name the offending field: {err:?}"
     );
 
-    let landed = blocks(&svc, &begin.resource_id.to_string()).await;
+    let landed = blocks(&svc, &profile, &begin.resource_id.to_string()).await;
     assert_eq!(landed.blocks.len(), 1, "a rejected append lands nothing");
 }
 
@@ -455,12 +505,17 @@ async fn appended_segments_record_block_aligned_provenance(pool: sqlx::PgPool) {
         .expect("context create");
 
     let svc = app.mcp_relay_service(pool.clone()).await;
+    let caller = svc
+        .ensure_profile_from_parts(&app.direct_parts())
+        .await
+        .expect("profile");
     let segments = corpus();
 
     // Begin carries no sources (block 0 is un-attributed).
     let begin: SegmentedBeginResponse = parse_tool_json(
         temper_mcp::tools::ingest::ingest_begin(
             &svc,
+            caller.clone(),
             begin_input("@me/mcp-prov", "Attributed", segments[0]),
         )
         .await
@@ -474,6 +529,7 @@ async fn appended_segments_record_block_aligned_provenance(pool: sqlx::PgPool) {
     let src_two = "https://example.com/PR/2";
     append_with_sources(
         &svc,
+        &caller,
         &resource,
         1,
         segments[1],
@@ -483,6 +539,7 @@ async fn appended_segments_record_block_aligned_provenance(pool: sqlx::PgPool) {
     // finalize echoes the body_hash after the *last* append.
     let body_hash = append_with_sources(
         &svc,
+        &caller,
         &resource,
         2,
         segments[2],
@@ -490,7 +547,7 @@ async fn appended_segments_record_block_aligned_provenance(pool: sqlx::PgPool) {
     )
     .await
     .body_hash;
-    finalize(&svc, &resource, segments.len() as u32, &body_hash).await;
+    finalize(&svc, &caller, &resource, segments.len() as u32, &body_hash).await;
 
     let rows = provenance(&pool, profile, begin.resource_id).await;
 

@@ -21,6 +21,8 @@ use temper_core::types::ingest::{AppendBlockPayload, FinalizePayload, SegmentedB
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{Backend, Surface};
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 use crate::tools::resources::{build_create_command, CreateResourceInput};
 
@@ -126,9 +128,9 @@ pub struct IngestBlocksInput {
 
 pub async fn ingest_begin(
     svc: &TemperMcpService,
+    profile: Profile,
     input: IngestBeginInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
 
     // Segment 0's integrity is checked here, on the surface: it travels as the create body, so the
@@ -167,9 +169,9 @@ pub async fn ingest_begin(
 
 pub async fn ingest_append(
     svc: &TemperMcpService,
+    profile: Profile,
     input: IngestAppendInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
     let resource = parse_resource(&input.resource)?;
 
@@ -210,9 +212,9 @@ pub async fn ingest_append(
 
 pub async fn ingest_finalize(
     svc: &TemperMcpService,
+    profile: Profile,
     input: IngestFinalizeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
     let resource = parse_resource(&input.resource)?;
 
@@ -243,9 +245,9 @@ pub async fn ingest_finalize(
 
 pub async fn ingest_blocks(
     svc: &TemperMcpService,
+    profile: Profile,
     input: IngestBlocksInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
     let resource = parse_resource(&input.resource)?;
 
@@ -324,6 +326,7 @@ pub struct SegmentedIngestInput {
 /// Dispatch the consolidated segmented-ingest tool.
 pub async fn segmented_ingest(
     svc: &TemperMcpService,
+    profile: Profile,
     input: SegmentedIngestInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
@@ -336,6 +339,7 @@ pub async fn segmented_ingest(
             })?;
             ingest_begin(
                 svc,
+                profile,
                 IngestBeginInput {
                     create,
                     content_hash,
@@ -361,6 +365,7 @@ pub async fn segmented_ingest(
             })?;
             ingest_append(
                 svc,
+                profile,
                 IngestAppendInput {
                     resource,
                     seq,
@@ -389,6 +394,7 @@ pub async fn segmented_ingest(
             })?;
             ingest_finalize(
                 svc,
+                profile,
                 IngestFinalizeInput {
                     resource,
                     expected_blocks,
@@ -401,7 +407,7 @@ pub async fn segmented_ingest(
             let resource = input.resource.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("blocks requires `resource`".to_string(), None)
             })?;
-            ingest_blocks(svc, IngestBlocksInput { resource }).await
+            ingest_blocks(svc, profile, IngestBlocksInput { resource }).await
         }
     }
 }

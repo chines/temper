@@ -55,9 +55,16 @@ fn text_of(result: rmcp::model::CallToolResult) -> String {
     }
 }
 
-/// Build an MCP service over the test pool and seed its profile cache for the
-/// `e2e-test-user` sub — the same pattern `act_authorship_mcp_e2e.rs` uses.
-async fn mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpService {
+/// Build an MCP service over the test pool and resolve the direct families'
+/// caller through its one gate — the same `ensure_profile_from_parts` path
+/// production dispatch runs — for the `e2e-test-user` sub. Returns the pair so
+/// every tool call is handed the profile it acts under.
+async fn mcp_service(
+    pool: &sqlx::PgPool,
+) -> (
+    temper_mcp::service::TemperMcpService,
+    temper_core::types::Profile,
+) {
     let decoding_key =
         jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
             .expect("decoding key");
@@ -106,10 +113,11 @@ async fn mcp_service(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpServi
         .body(())
         .expect("build request");
     let (req_parts, ()) = req.into_parts();
-    svc.ensure_profile_from_parts(&req_parts)
+    let profile = svc
+        .ensure_profile_from_parts(&req_parts)
         .await
-        .expect("seed profile cache");
-    svc
+        .expect("resolve the caller profile through the gate");
+    (svc, profile)
 }
 
 /// A context holding one resource — the minimal world where the defaulting arm resolves.
@@ -185,10 +193,11 @@ async fn explicit_kind_owner_declares_on_an_empty_context_over_mcp(pool: PgPool)
         .create("e2e-refusal-empty-mcp", None)
         .await
         .expect("context create failed");
-    let svc = mcp_service(&pool).await;
+    let (svc, caller) = mcp_service(&pool).await;
 
     let result = temper_mcp::tools::data_artifact_shapes::declare_shape(
         &svc,
+        caller,
         temper_mcp::tools::data_artifact_shapes::DeclareShapeInput {
             home_type: "context".to_string(),
             home_id: context.id.to_string(),
@@ -273,10 +282,11 @@ async fn sql_refusal_carries_its_vocabulary_over_mcp(pool: PgPool) {
         .create("e2e-refusal-vocab-mcp", None)
         .await
         .expect("context create failed");
-    let svc = mcp_service(&pool).await;
+    let (svc, caller) = mcp_service(&pool).await;
 
     let err = temper_mcp::tools::data_artifact_shapes::declare_shape(
         &svc,
+        caller,
         temper_mcp::tools::data_artifact_shapes::DeclareShapeInput {
             home_type: "context".to_string(),
             home_id: context.id.to_string(),
@@ -409,10 +419,11 @@ async fn enforcing_refusal_names_the_violations_over_mcp(pool: PgPool) {
         )
         .await
         .expect("declaring an enforcing shape in a context with a resource must succeed");
-    let svc = mcp_service(&pool).await;
+    let (svc, caller) = mcp_service(&pool).await;
 
     let err = temper_mcp::tools::data_artifacts::commit_artifact(
         &svc,
+        caller,
         temper_mcp::tools::data_artifacts::CommitArtifactInput {
             resource_id: resource_id.to_string(),
             kind: "measurement".to_string(),

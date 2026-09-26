@@ -70,6 +70,31 @@ impl E2eTestApp {
         self.relay_parts_for(&self.token)
     }
 
+    /// Request parts for the DIRECT families' one resolution path: both extensions
+    /// the gate reads (`RawJwtClaims` + `BearerToken`, as the JWT middleware injects
+    /// them in production) naming this app's principal. A direct family resolves its
+    /// caller by passing these to `svc.ensure_profile_from_parts` and threading the
+    /// returned profile into the tool call — there is no service-side cache to seed.
+    /// (Contrast [`Self::relay_parts`]: those parts cross the network door and need
+    /// only the bearer, because the API adjudicates them from the wire.)
+    pub fn direct_parts(&self) -> axum::http::request::Parts {
+        axum::http::Request::builder()
+            .extension(temper_mcp::middleware::BearerToken(self.token.clone()))
+            .extension(temper_services::auth::RawJwtClaims {
+                sub: "e2e-test-user".to_string(),
+                email: None,
+                email_verified: None,
+                azp: None,
+                gty: None,
+                exp: (Utc::now() + Duration::hours(1)).timestamp(),
+                iat: 0,
+            })
+            .body(())
+            .expect("direct parts build")
+            .into_parts()
+            .0
+    }
+
     /// [`Self::relay_parts`] for an ARBITRARY minted token — the second identity of
     /// an owner/other test. Identity rides the bearer alone, so both identities can
     /// share the one MCP service.
@@ -100,13 +125,13 @@ impl E2eTestApp {
         }
     }
 
-    /// The MCP service the resources-family suites drive. The relay config is ON
-    /// (this app's listener, the harness credential, the shared pool) beside the
-    /// interim direct-binding state over the same pool, and the profile cache is
-    /// seeded the way the not-yet-migrated direct families (`tools::ingest::*`)
-    /// still resolve their caller. The seeded identity is the same principal
-    /// [`Self::relay_parts`] presents to the API, so both paths execute as one
-    /// caller and the two disciplines hold side by side, neither half-migrated.
+    /// The MCP service every suite drives. The relay config is ON (this app's
+    /// listener, the harness credential, the shared pool) beside the direct
+    /// families over the same pool. The service carries NO auth state: a
+    /// direct family's caller is whatever profile the SUITE resolves through
+    /// the one gate (`svc.ensure_profile_from_parts(&parts)`) and threads
+    /// into the tool function — the same path production dispatch takes, so
+    /// each call acts as its own principal.
     pub async fn mcp_relay_service(&self, pool: PgPool) -> temper_mcp::service::TemperMcpService {
         let decoding_key =
             jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
@@ -135,33 +160,11 @@ impl E2eTestApp {
             blob: None,
             blob_disabled_by_policy: false,
         };
-        let svc = temper_mcp::service::TemperMcpService::new(
+        temper_mcp::service::TemperMcpService::new(
             AppState::new(pool, jwks_store, api_config),
             self.mcp_relay_config(),
             temper_mcp::service::shared_relay_pool(),
-        );
-
-        // Seed the profile cache from synthetic parts — the DIRECT families'
-        // caller path (`require_profile`). The resources family never reads this
-        // cache: its caller is adjudicated by the API from the bearer.
-        let req = axum::http::Request::builder()
-            .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-            .extension(temper_services::auth::RawJwtClaims {
-                sub: "e2e-test-user".to_string(),
-                email: None,
-                email_verified: None,
-                azp: None,
-                gty: None,
-                exp: (Utc::now() + Duration::hours(1)).timestamp(),
-                iat: 0,
-            })
-            .body(())
-            .expect("build request");
-        let (req_parts, ()) = req.into_parts();
-        svc.ensure_profile_from_parts(&req_parts)
-            .await
-            .expect("seed profile cache");
-        svc
+        )
     }
 }
 

@@ -6,11 +6,12 @@
 //! extensions. This surface constructs no principal of its own: it presents a verified
 //! token and maps `AuthzError` to rmcp (see `map_authz_error`).
 //!
-//! In stateless mode (Vercel serverless), `initialize()` may run on a
-//! different invocation than the subsequent tool call, so we cannot rely
-//! on profile caching across requests. Instead, each tool handler
-//! extracts the HTTP `Parts` from rmcp's `Extension` and resolves the
-//! profile from the JWT claims before executing.
+//! The service carries NO auth state: the identity a request acts under exists only
+//! as the value the gate returns. `ensure_profile_from_parts` resolves the profile
+//! and hands it back; each direct tool handler extracts the HTTP `Parts` from rmcp's
+//! `Extension`, resolves the profile at the top of the method, and passes it down as
+//! a parameter. A profile that crossed between requests is not a bug to guard — the
+//! compiler makes it unrepresentable.
 
 use rmcp::{
     handler::server::{common::Extension, wrapper::Parameters},
@@ -23,7 +24,6 @@ use rmcp::{
 };
 use std::borrow::Cow;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use temper_client::auth::MemoryTokenStore;
 use temper_client::error::ClientError;
@@ -108,8 +108,6 @@ const RELAY_NON_IDEMPOTENT_ATTEMPTS: u32 = 2;
 #[derive(Clone)]
 pub struct TemperMcpService {
     pub api_state: AppState,
-    /// Cached profile resolved from the Auth0 `sub` claim.
-    profile: Arc<Mutex<Option<Profile>>>,
     /// The relay's configuration — API base URL and service credential (injectable;
     /// §D6). The resources family's tools cross the deployed API through a per-request
     /// client built from these; every other family still executes direct against
@@ -125,7 +123,6 @@ impl std::fmt::Debug for TemperMcpService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TemperMcpService")
             .field("api_state", &self.api_state)
-            .field("profile", &self.profile)
             .field(
                 "mcp_config.api_base_url",
                 &self.mcp_config.api_base_url.as_ref().map(|_| "set"),
@@ -150,7 +147,6 @@ impl TemperMcpService {
     pub fn new(api_state: AppState, mcp_config: McpConfig, shared_http: reqwest::Client) -> Self {
         Self {
             api_state,
-            profile: Arc::new(Mutex::new(None)),
             mcp_config,
             shared_http,
         }
@@ -243,15 +239,18 @@ impl TemperMcpService {
         })
     }
 
-    /// Resolve the profile from HTTP request parts and cache it.
+    /// Resolve the profile from HTTP request parts and return it.
     ///
-    /// In stateless mode each request creates a fresh service instance, so
-    /// the profile must be resolved per-request from the JWT claims that
-    /// the auth middleware injected into the HTTP extensions.
+    /// In stateless mode each request creates a fresh service instance, and
+    /// the service carries no auth state at all, so the profile is resolved
+    /// per-request from the JWT claims that the auth middleware injected
+    /// into the HTTP extensions. The caller threads the returned profile
+    /// into its own tool functions — identity is a per-request value, never
+    /// a shared slot.
     pub async fn ensure_profile_from_parts(
         &self,
         parts: &http::request::Parts,
-    ) -> Result<(), rmcp::ErrorData> {
+    ) -> Result<Profile, rmcp::ErrorData> {
         let (claims, token) = authed_request(parts)?;
 
         // Level 1: classify → human email ladder → resolve → deactivation gate, all in
@@ -289,17 +288,7 @@ impl TemperMcpService {
                 other => map_authz_error(other),
             })?;
 
-        let mut guard = self.profile.lock().await;
-        *guard = Some(authed.into_profile());
-        Ok(())
-    }
-
-    /// Get the authenticated caller's profile, or return a protocol error.
-    pub async fn require_profile(&self) -> Result<Profile, rmcp::ErrorData> {
-        let guard = self.profile.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| rmcp::ErrorData::internal_error("Not authenticated".to_string(), None))
+        Ok(authed.into_profile())
     }
 
     // ── Tools (consolidated: 64 → 26) ─────────────────────────────────
@@ -444,8 +433,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::reblock::ResourceReblockInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::reblock::resource_reblock(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::reblock::resource_reblock(self, profile, input).await
     }
 
     // ── Search & Query (unchanged) ─────────────────────────────────────
@@ -501,8 +490,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::blobs::BlobReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::blobs::blob_read(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::blobs::blob_read(self, profile, input).await
     }
 
     #[tool(
@@ -513,8 +502,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::blobs::BlobManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::blobs::blob_manage(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::blobs::blob_manage(self, profile, input).await
     }
 
     // ── Relationship (consolidated 4→1 write) ──────────────────────────
@@ -598,8 +587,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::cognitive_maps::CogmapReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_read(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_read(self, profile, input).await
     }
 
     #[tool(
@@ -610,8 +599,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::cognitive_maps::CogmapListInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_list(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_list(self, profile, input).await
     }
 
     #[tool(
@@ -622,8 +611,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::cognitive_maps::CogmapCreateInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_create(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_create(self, profile, input).await
     }
 
     #[tool(
@@ -634,8 +623,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::materialize::MaterializeTriggerInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_materialize(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::cogmap_materialize(self, profile, input).await
     }
 
     // ── Context (consolidated 5→1 read, 5→1 write) ────────────────────
@@ -648,8 +637,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::contexts::ContextReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::context_read(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::contexts::context_read(self, profile, input).await
     }
 
     #[tool(
@@ -660,8 +649,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::contexts::ContextManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::context_manage(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::contexts::context_manage(self, profile, input).await
     }
 
     #[tool(
@@ -672,8 +661,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::materialize::ContextMaterializeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::context_materialize(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::cognitive_maps::context_materialize(self, profile, input).await
     }
 
     // ── Schema (consolidated 3→1 read) ─────────────────────────────────
@@ -686,8 +675,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::doc_types::DescribeSchemaInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::doc_types::describe_schema(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::doc_types::describe_schema(self, profile, input).await
     }
 
     // ── Invocation (consolidated 2→1 read, 2→1 write) ─────────────────
@@ -700,8 +689,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::invocations::InvocationReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::invocations::invocation_read(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::invocations::invocation_read(self, profile, input).await
     }
 
     #[tool(
@@ -712,8 +701,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::invocations::InvocationManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::invocations::invocation_manage(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::invocations::invocation_manage(self, profile, input).await
     }
 
     // ── Segmented ingest (consolidated 4→1 write) ──────────────────────
@@ -726,8 +715,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::ingest::SegmentedIngestInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::ingest::segmented_ingest(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::segmented_ingest(self, profile, input).await
     }
 
     // ── Steward (unchanged, scoped descriptions) ───────────────────────
@@ -740,8 +729,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardDeltaInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_ingest_delta(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::steward::steward_ingest_delta(self, profile, input).await
     }
 
     #[tool(
@@ -752,8 +741,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardAdvanceWatermarkInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_advance_watermark(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::steward::steward_advance_watermark(self, profile, input).await
     }
 
     #[tool(
@@ -764,8 +753,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifacts::ListArtifactsInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifacts::list_artifacts(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifacts::list_artifacts(self, profile, input).await
     }
 
     #[tool(
@@ -776,8 +765,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifacts::GetArtifactInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifacts::get_artifact(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifacts::get_artifact(self, profile, input).await
     }
 
     #[tool(
@@ -788,8 +777,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifacts::CommitArtifactInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifacts::commit_artifact(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifacts::commit_artifact(self, profile, input).await
     }
 
     #[tool(
@@ -800,8 +789,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::ListShapesInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifact_shapes::list_shapes(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifact_shapes::list_shapes(self, profile, input).await
     }
 
     #[tool(
@@ -812,8 +801,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::GetShapeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifact_shapes::get_shape(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifact_shapes::get_shape(self, profile, input).await
     }
 
     #[tool(
@@ -824,8 +813,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::DeclareShapeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifact_shapes::declare_shape(self, input).await
+        let profile = self.ensure_profile_from_parts(&parts).await?;
+        tools::data_artifact_shapes::declare_shape(self, profile, input).await
     }
 }
 

@@ -20,6 +20,8 @@ use temper_core::types::invocation_requests::{InvocationAck, InvocationCloseAck}
 use temper_services::backend::DbBackend;
 use temper_workflow::operations::{Backend, CloseInvocation, OpenInvocation, Surface};
 
+use temper_core::types::Profile;
+
 use crate::service::TemperMcpService;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -78,9 +80,9 @@ fn parse_invocation(s: &str) -> Result<uuid::Uuid, rmcp::ErrorData> {
 
 pub async fn invocation_open(
     svc: &TemperMcpService,
+    profile: Profile,
     input: InvocationOpenInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
 
     let originating_cogmap = parse_cogmap(&input.originating_cogmap)?;
@@ -113,9 +115,9 @@ pub async fn invocation_open(
 
 pub async fn invocation_close(
     svc: &TemperMcpService,
+    profile: Profile,
     input: InvocationCloseInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let profile_id = ProfileId::from(profile.id);
 
     let invocation = parse_invocation(&input.invocation)?;
@@ -145,9 +147,9 @@ pub async fn invocation_close(
 
 pub async fn invocation_show(
     svc: &TemperMcpService,
+    profile: Profile,
     input: InvocationShowInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
     let invocation = parse_invocation(&input.invocation)?;
 
     let view = temper_services::backend::substrate_read::invocation_show_select(
@@ -166,10 +168,9 @@ pub async fn invocation_show(
 
 pub async fn invocation_list(
     svc: &TemperMcpService,
+    profile: Profile,
     input: InvocationListInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile = svc.require_profile().await?;
-
     let cogmap = match input.cogmap.as_deref() {
         Some(c) => Some(parse_invocation(c)?),
         None => None,
@@ -233,6 +234,7 @@ pub struct InvocationManageInput {
 /// Dispatch the consolidated invocation-manage tool.
 pub async fn invocation_manage(
     svc: &TemperMcpService,
+    profile: Profile,
     input: InvocationManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
@@ -248,6 +250,7 @@ pub async fn invocation_manage(
             })?;
             invocation_open(
                 svc,
+                profile,
                 InvocationOpenInput {
                     trigger_kind,
                     originating_cogmap,
@@ -265,6 +268,7 @@ pub async fn invocation_manage(
             })?;
             invocation_close(
                 svc,
+                profile,
                 InvocationCloseInput {
                     invocation,
                     disposition,
@@ -310,6 +314,7 @@ pub struct InvocationReadInput {
 /// Dispatch the consolidated invocation-read tool.
 pub async fn invocation_read(
     svc: &TemperMcpService,
+    profile: Profile,
     input: InvocationReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.view {
@@ -317,11 +322,12 @@ pub async fn invocation_read(
             let invocation = input.invocation.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("show requires `invocation`".to_string(), None)
             })?;
-            invocation_show(svc, InvocationShowInput { invocation }).await
+            invocation_show(svc, profile, InvocationShowInput { invocation }).await
         }
         InvocationReadView::List => {
             invocation_list(
                 svc,
+                profile,
                 InvocationListInput {
                     cogmap: input.cogmap,
                     status: input.status,
