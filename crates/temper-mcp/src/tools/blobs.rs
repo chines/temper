@@ -161,6 +161,19 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Decode a blob commit's base64 `content`. Whitespace is stripped first: MCP
+/// carries JSON only, so an agent hands the tool the encoded file as one long string,
+/// and encoders wrap (`base64` defaults to 76 columns). Symbols outside the standard
+/// alphabet stay refused — the strip admits layout, never pronunciation of a
+/// different encoding (URL-safe `-`/`_`, missing padding all still refuse).
+fn decode_commit_content(content_b64: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    let stripped: String = content_b64
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    base64::engine::general_purpose::STANDARD.decode(stripped.as_bytes())
+}
+
 /// Map a blob-service error onto an MCP error, in the contexts-tool mapper's shape:
 /// `NotFound` (the invisible-or-absent face the visibility gates deliberately render),
 /// `Conflict` and `BadRequest` (the vocabularies — threshold, cap, allowlist, home scope,
@@ -403,17 +416,15 @@ async fn commit_blob(
     let content_b64 = input.content.ok_or_else(|| {
         rmcp::ErrorData::invalid_params("commit requires `content` (base64)".to_string(), None)
     })?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(content_b64.as_bytes())
-        .map_err(|e| {
-            rmcp::ErrorData::invalid_params(
-                format!(
-                    "{ACTION}: `content` is not valid base64 — the bytes ride base64 \
-                         because MCP carries JSON only: {e}"
-                ),
-                None,
-            )
-        })?;
+    let bytes = decode_commit_content(&content_b64).map_err(|e| {
+        rmcp::ErrorData::invalid_params(
+            format!(
+                "{ACTION}: `content` is not valid base64 — the bytes ride base64 \
+                     because MCP carries JSON only: {e}"
+            ),
+            None,
+        )
+    })?;
     let content_bytes = bytes.len() as i64;
     let (store, config) = blob_parts(svc, ACTION)?;
 
@@ -736,6 +747,36 @@ mod tests {
             err.code,
             rmcp::model::ErrorCode::INTERNAL_ERROR,
             "a short read stays a visible internal error — never a success"
+        );
+    }
+
+    /// Whitespace-wrapped base64 commits decode identically to their unwrapped form —
+    /// the strip admits layout (MIME wrapping), nothing else; URL-safe alphabet
+    /// members and missing padding stay refused.
+    #[test]
+    fn the_commit_decoder_strips_whitespace_and_keeps_the_alphabet_strict() {
+        let bytes = b"the full-resolution figure";
+        let encoded =
+            base64::engine::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+        let wrapped = encoded
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(76)
+            .map(|c| c.iter().collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        assert_eq!(
+            decode_commit_content(&wrapped).expect("wrapped decodes"),
+            decode_commit_content(&encoded).expect("plain decodes"),
+            "wrapping is layout, not content"
+        );
+        assert!(
+            decode_commit_content(&encoded.replace('=', " ")).is_err(),
+            "missing padding still refuses"
+        );
+        assert!(
+            decode_commit_content(&encoded.replace('a', "-")).is_err() || encoded.is_empty(),
+            "URL-safe symbols still refuse"
         );
     }
 
