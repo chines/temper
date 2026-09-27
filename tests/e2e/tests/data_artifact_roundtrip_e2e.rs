@@ -333,16 +333,14 @@ async fn flat_artifact_get_by_id_answers_folded_rows_and_gates_invisible_callers
         .await
         .expect("resource create failed");
 
-    let commit = |content: serde_json::Value| {
-        ArtifactCommitRequest {
-            kind: "measurement".to_string(),
-            kind_owner: None,
-            intent: "current".to_string(),
-            precedence: 0.0,
-            content,
-            supersedes: Vec::new(),
-            act: Default::default(),
-        }
+    let commit = |content: serde_json::Value| ArtifactCommitRequest {
+        kind: "measurement".to_string(),
+        kind_owner: None,
+        intent: "current".to_string(),
+        precedence: 0.0,
+        content,
+        supersedes: Vec::new(),
+        act: Default::default(),
     };
     let first = app
         .client
@@ -384,12 +382,11 @@ async fn flat_artifact_get_by_id_answers_folded_rows_and_gates_invisible_callers
         .send()
         .await
         .expect("provision the outsider");
-    let outsider_id: uuid::Uuid =
-        sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
-            .bind("second@test.example.com")
-            .fetch_one(&app.pool)
-            .await
-            .expect("the outsider profile");
+    let outsider_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
+        .bind("second@test.example.com")
+        .fetch_one(&app.pool)
+        .await
+        .expect("the outsider profile");
     common::approve(&app.pool, outsider_id).await;
 
     let outsider = client_for(&app, &outsider_token);
@@ -420,12 +417,11 @@ async fn cogmap_home_shapes_declare_list_get_round_trip_and_authority_gate(pool:
 
     let app = common::setup(pool).await;
 
-    let owner_id: uuid::Uuid =
-        sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
-            .bind("e2e@test.example.com")
-            .fetch_one(&app.pool)
-            .await
-            .expect("the harness profile");
+    let owner_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
+        .bind("e2e@test.example.com")
+        .fetch_one(&app.pool)
+        .await
+        .expect("the harness profile");
     common::grant_cogmap_write(&app.pool, L0_COGMAP, owner_id).await;
 
     let request = ShapeDeclareRequest {
@@ -480,12 +476,11 @@ async fn cogmap_home_shapes_declare_list_get_round_trip_and_authority_gate(pool:
         .send()
         .await
         .expect("provision the reader");
-    let reader_id: uuid::Uuid =
-        sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
-            .bind("second@test.example.com")
-            .fetch_one(&app.pool)
-            .await
-            .expect("the reader profile");
+    let reader_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
+        .bind("second@test.example.com")
+        .fetch_one(&app.pool)
+        .await
+        .expect("the reader profile");
     common::approve(&app.pool, reader_id).await;
 
     let refused = client_for(&app, &reader_token)
