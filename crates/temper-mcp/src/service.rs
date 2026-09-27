@@ -589,8 +589,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::cognitive_maps::CogmapReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_read(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::cognitive_maps::cogmap_read(self, &parts, input).await
     }
 
     #[tool(
@@ -601,8 +602,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::cognitive_maps::CogmapListInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_list(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::cognitive_maps::cogmap_list(self, &parts, input).await
     }
 
     #[tool(
@@ -613,8 +615,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::cognitive_maps::CogmapCreateInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_create(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::cognitive_maps::cogmap_create(self, &parts, input).await
     }
 
     #[tool(
@@ -625,8 +628,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::materialize::MaterializeTriggerInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::cogmap_materialize(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::cognitive_maps::cogmap_materialize(self, &parts, input).await
     }
 
     // ── Context (consolidated 5→1 read, 5→1 write) ────────────────────
@@ -639,8 +643,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::contexts::ContextReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::context_read(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::contexts::context_read(self, &parts, input).await
     }
 
     #[tool(
@@ -651,8 +656,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::contexts::ContextManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::contexts::context_manage(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::contexts::context_manage(self, &parts, input).await
     }
 
     #[tool(
@@ -663,8 +669,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::materialize::ContextMaterializeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::cognitive_maps::context_materialize(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::cognitive_maps::context_materialize(self, &parts, input).await
     }
 
     // ── Schema (consolidated 3→1 read) ─────────────────────────────────
@@ -677,8 +684,14 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::doc_types::DescribeSchemaInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::doc_types::describe_schema(self, profile, input).await
+        // NOT the network door — there is no binding behind it: every view is pure
+        // compute over the compile-time-embedded schemas, so nothing forwards and
+        // NO gate runs beyond the MCP edge's JWT validation. The parts are taken
+        // shape-only so the source gate's one dispatch shape holds for the cluster.
+        // A recorded decision (review round 2026-09-27): the exposure is static
+        // product vocabulary — the same schemas the public docs publish — never
+        // tenant data; the direct binding's Level 2 check ran for nothing here.
+        tools::doc_types::describe_schema(self, &parts, input).await
     }
 
     // ── Invocation (consolidated 2→1 read, 2→1 write) ─────────────────
@@ -691,8 +704,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::invocations::InvocationReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::invocations::invocation_read(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::invocations::invocation_read(self, &parts, input).await
     }
 
     #[tool(
@@ -703,8 +717,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::invocations::InvocationManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::invocations::invocation_manage(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::invocations::invocation_manage(self, &parts, input).await
     }
 
     // ── Segmented ingest (consolidated 4→1 write) ──────────────────────

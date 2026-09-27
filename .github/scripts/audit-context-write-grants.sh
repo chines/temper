@@ -12,14 +12,17 @@
 # a delegation act no design has been written for — authoring into a context without owning it,
 # belonging to its team, or holding a minting design.
 #
-# DOOR COUNT, AND WHY IT MOVED — three, not four. The fourth door was the MCP
-# resources family's DIRECT grant (`temper-mcp/src/tools/resources.rs`, subject
-# `kb_resources`). It died at that family's own beat — the network door
-# (G3a-prime, 2026-09-23): the family's grant act now crosses the wire to the
-# API's door, which this scan still watches, so the invariant loses no surface
-# and gains none. The MCP cogmaps grant door (`tools/cognitive_maps.rs`) is
-# still direct and still in view; when the cogmaps family crosses at ITS beat,
-# the floor below drops to 2 by this same edit-with-a-named-decision rule.
+# DOOR COUNT, AND WHY IT MOVED — two, not three. The third door was the MCP
+# cogmaps family's DIRECT grant (`temper-mcp/src/tools/cognitive_maps.rs`,
+# subject `kb_cogmaps`). It died at that family's own beat — the network door
+# (G3d, 2026-09-27): the family's grant act now crosses the wire to the API's
+# door, which this scan still watches (the API handler widens the wire body into
+# the `GrantCapabilityRequest` with its subject literal), so the invariant loses
+# no surface and gains none — the edit-with-a-named-decision rule this header
+# named when the resources door moved. The two remaining scan-visible literals are
+# both API handlers (cognitive_maps, resources): the CLI's grant rides the
+# cogmaps handler through temper-client, so the scan's field of view is the whole
+# mint surface, not just one surface's source.
 #
 # This script keeps that state observable: the first surface that can light the arm fails CI
 # until a human records the design decision. There is deliberately no UPDATE_BASELINE and no
@@ -74,9 +77,9 @@ CURRENT_REQUESTS="$(request_subjects)"
 CONTEXT_REQUESTS="$(printf '%s\n' "$CURRENT_REQUESTS" | grep ' kb_contexts$' || true)"
 DOOR_COUNT="$(printf '%s\n' "$CURRENT_REQUESTS" | grep -c . || true)"
 
-if [[ "$DOOR_COUNT" -lt 3 ]]; then
+if [[ "$DOOR_COUNT" -lt 2 ]]; then
   echo "audit-context-write-grants: FAIL — the door scan found $DOOR_COUNT GrantCapabilityRequest" >&2
-  echo "  subject literals (expected ≥ 3 — see DOOR COUNT in the header). The scan broke;" >&2
+  echo "  subject literals (expected ≥ 2 — see DOOR COUNT in the header). The scan broke;" >&2
   echo "  it did not find the doors gone. Check CRATES_DIR=$CRATES_DIR." >&2
   fail=1
 fi

@@ -5,134 +5,180 @@
 //! `context_analytics`, `context_materialize`. They share the reads beneath them — the substrate
 //! read is anchor-generic, so the only thing that differs is how the anchor is addressed (a context
 //! ref, not a resource ref) and which lens it materializes under.
+//!
+//! # Execution crosses the network door (beat G3d — the fifth family to cross)
+//!
+//! Every tool here forwards to its deployed route (the same routes the CLI calls) through a
+//! per-request temper-client HTTP relay built from the request's `Parts`: Level 1 + 2 run at the
+//! API on the caller's own bearer; the service credential + `mcp` carrier ride the default
+//! headers, so the act is attributed `@mcp` at the ledger. The ONE retained in-process read is
+//! the context-ref resolver (`@me/<slug>` is MCP-local input shaping whose `@me` only exists
+//! here — the resources family's retained-resolver precedent; it resolves the profile from parts
+//! the way the direct binding's gate did). MCP-local ref parsing stays pre-wire.
+//!
+//! `cogmap_read_charter` crosses by PROJECTION, not a new route: the door's charter view is the
+//! show route plus a field projection (`CogmapDetail.charter` is composed from the same
+//! `cogmap_charter_select`). The declared delta: an unreadable map's charter flips from the
+//! direct binding's 200-empty to the show route's 404 sentence — the route family's own
+//! deny-is-an-error posture.
+//!
+//! # Parity deltas declared at the swap (the G3c delta format)
+//!
+//! - **NotFound prefixes drop** — the direct mappers prefixed every not-found
+//!   `{action}: `; the door carries the server's own sentence un-prefixed, kind and
+//!   gate identical (the G3c delta's reapplication). `ForbiddenDetail` and the terse
+//!   `Forbidden` arms KEEP their `{action}: ` prefixes: those sentences are the tool's
+//!   disclosure dialect, not the server's, and no pin moved on them.
+//! - **Un-armed refusals become caller-actionable** — the direct catch-alls rendered
+//!   the unreadable-anchor `materialize_delta` 404 and the closed/missing-context
+//!   `internal_error`; the door's 404/409/403/400 bodies are caller-actionable, so
+//!   they render `invalid_params` with the server's own sentence (the G3c
+//!   closed-invocation family).
+//! - **`context_materialize`'s bare-`Forbidden` face** (named, never pinned — the
+//!   service's own unit test pins the gate beneath it) now renders the terse tool
+//!   sentence `context_materialize: cannot author this context` under
+//!   `invalid_params` instead of the direct catch-all's internal fault.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_client::error::ClientError;
 use temper_core::context_ref::parse_context_ref;
-use temper_core::error::TemperError;
 use temper_core::types::cognitive_maps::{
-    BindTeamRequest, CogmapAnalyticsInput, CogmapRegionMetricsInput, CogmapShapeInput,
-    ContextAnalyticsInput, ContextShapeInput, GrantCapabilityRequest, RevokeCapabilityRequest,
+    BindTeamRequest, CogmapAnalyticsInput, CogmapGrantBody, CogmapRegionMetricsInput,
+    CogmapRevokeBody, CogmapShapeInput, ContextAnalyticsInput, ContextShapeInput,
 };
-use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{CogmapId, ProfileId};
 use temper_core::types::materialize::{
     ContextMaterializeInput, MaterializeAck, MaterializeDeltaInput, MaterializeTriggerInput,
 };
 use temper_core::types::reconcile::CreateCogmapRequest;
-use temper_services::backend::DbBackend;
-use temper_services::error::ApiError;
 use temper_services::services::context_service::resolve_context_ref;
-use temper_services::services::{access_service, cogmap_service, materialize_service};
-use temper_workflow::operations::{Backend, CreateCognitiveMap, MaterializeOnThreshold, Surface};
 
-use temper_core::types::Profile;
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
-use crate::service::TemperMcpService;
+fn to_text<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Map a READ-path error arm-for-arm with the direct binding. `NotFound` carries the
+/// server's own sentence, un-prefixed (the G3c delta); everything else stays opaque
+/// under the direct wrapper's voice. The deny-as-data faces (`shape`'s object,
+/// `metrics`' empty array) never reach this mapper — they are 200s. The direct
+/// shared mapper's bare-`Forbidden` arm (rendered "not authorized for {context}")
+/// is dead here and dropped: the read routes answer the visibility gate with a 404
+/// (not-found posture), and the post-edge standing refusal is intercepted by
+/// `AcrossAuth` before any call-site mapping runs.
+fn map_read_err(e: ClientError, action: &str) -> rmcp::ErrorData {
+    match e {
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        other => rmcp::ErrorData::internal_error(format!("{action} failed: {other}"), None),
+    }
+}
+
+/// Map a context-service error onto an MCP error, arm-for-arm with the direct
+/// binding's `ApiError` mapper. `Forbidden` speaks the fixed tool sentence; `NotFound`
+/// carries the server's own sentence (the direct binding's `{context}: ` prefix drops —
+/// the declared delta); 400/409 speak the server's sentence via the shared strip.
+fn map_api_error(context: &str, err: ClientError) -> rmcp::ErrorData {
+    match err {
+        ClientError::Forbidden => {
+            rmcp::ErrorData::invalid_params(format!("not authorized for {context}"), None)
+        }
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
+    }
+}
 
 pub async fn cogmap_shape(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     // Resolve refs → UUIDs (trailing-UUID-only; slug half ignored). Use the same resolver the CLI uses.
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
     let lens_id = match input.lens.as_deref() {
         Some(l) => Some(
             temper_workflow::operations::parse_ref(l)
                 .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad lens ref: {e}"), None))?
-                .0,
+                .uuid(),
         ),
         None => None,
     };
 
-    let shape = temper_services::backend::substrate_read::anchor_shape_select(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
-        lens_id,
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("cogmap_shape failed: {e}"), None))?;
+    let shape = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .shape(cogmap_id, lens_id)
+        .await
+        .across_auth(|e| map_read_err(e, "cogmap_shape"))?;
 
     // The payload is the `AnchorShape` OBJECT, not a bare array — so the fallback is `{}`. Handing
     // an agent `[]` where the schema promises an object is the silent contract lie this read exists
     // to end.
-    let text = serde_json::to_string_pretty(&shape).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&shape)),
     ]))
 }
 
 pub async fn cogmap_region_metrics(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapRegionMetricsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
     let lens_id = match input.lens.as_deref() {
         Some(l) => Some(
             temper_workflow::operations::parse_ref(l)
                 .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad lens ref: {e}"), None))?
-                .0,
+                .uuid(),
         ),
         None => None,
     };
 
-    let rows = temper_services::backend::substrate_read::anchor_region_metrics_select(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        HomeAnchor::Cogmap(CogmapId::from(cogmap_id)),
-        lens_id,
-    )
-    .await
-    .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("cogmap_region_metrics failed: {e}"), None)
-    })?;
+    let rows = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .region_metrics(cogmap_id, lens_id)
+        .await
+        .across_auth(|e| map_read_err(e, "cogmap_region_metrics"))?;
 
-    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&rows)),
     ]))
 }
 
 pub async fn cogmap_analytics(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapAnalyticsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
 
-    let got = temper_services::backend::substrate_read::cogmap_analytics_select(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        cogmap_id,
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("cogmap_analytics failed: {e}"), None))?;
+    let analytics = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .analytics(cogmap_id)
+        .await
+        .across_auth(|e| map_read_err(e, "cogmap_analytics"))?;
 
-    match got {
-        Some(analytics) => {
-            let text =
-                serde_json::to_string_pretty(&analytics).unwrap_or_else(|_| "{}".to_string());
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text(text),
-            ]))
-        }
-        None => Err(rmcp::ErrorData::invalid_params(
-            "cognitive map not found or not readable".to_string(),
-            None,
-        )),
-    }
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&analytics)),
+    ]))
 }
 
 // ── Charter trust-tier marking ────────────────────────────────────────────────
@@ -175,30 +221,33 @@ pub struct CogmapReadCharterInput {
 }
 
 /// Read a cognitive map's telos/charter blocks (statement / questions / framing) in seq order — the
-/// steward orients on this before acting. Service-direct (reads bypass the Backend trait); the access
-/// gate lives in the SQL (`cogmap_charter_select`) — a principal who cannot read the charter resource
-/// gets an empty vec, never an error.
+/// steward orients on this before acting.
+///
+/// Crosses by PROJECTION: there is no standalone charter route, so this forwards to the show
+/// route (`GET /api/cognitive-maps/{id}`) — whose `CogmapDetail.charter` is composed from the same
+/// `cogmap_charter_select` — and projects the field. The declared delta: a principal who cannot
+/// read the map gets the show route's 404 sentence (deny is an error at the route), where the
+/// direct binding answered a 200 empty vec.
 pub async fn cogmap_read_charter(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapReadCharterInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
 
-    let rows = temper_services::backend::substrate_read::cogmap_charter_select(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        cogmap_id,
-    )
-    .await
-    .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("cogmap_read_charter failed: {e}"), None)
-    })?;
+    let detail = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .show(cogmap_id)
+        .await
+        .across_auth(|e| map_read_err(e, "cogmap_read_charter"))?;
 
-    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
-    Ok(with_leading_notice(CHARTER_READING_NOTICE, text))
+    Ok(with_leading_notice(
+        CHARTER_READING_NOTICE,
+        to_text(&detail.charter),
+    ))
 }
 
 /// MCP input for `cogmap_list`. All fields optional — the default is every map you can see.
@@ -210,17 +259,21 @@ pub struct CogmapListInput {
 }
 
 /// List the cognitive maps the caller can see, each with identity + charter statement — the first
-/// move for orienting across maps. Self-scoped server-side (`cogmap_visible_maps`); an empty array
-/// means you can see no maps, never an error. Each row's `id` is directly addressable by every
-/// cogmap tool.
+/// move for orienting across maps. Self-scoped server-side; an empty array means you can see no
+/// maps, never an error. Each row's `id` is directly addressable by every cogmap tool. The
+/// `name_contains` filter is MCP-local input shaping — the wire route has no such parameter, so
+/// the rows are filtered here, identically to the direct binding.
 pub async fn cogmap_list(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapListInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let mut rows = cogmap_service::list_visible(&svc.api_state.pool, ProfileId::from(profile.id))
+    let mut rows = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .list()
         .await
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("cogmap_list failed: {e}"), None))?;
+        .across_auth(|e| map_read_err(e, "cogmap_list"))?;
 
     if let Some(needle) = input.name_contains.as_deref().map(str::to_lowercase) {
         rows.retain(|r| r.name.to_lowercase().contains(&needle));
@@ -239,29 +292,28 @@ pub struct CogmapShowInput {
 
 /// One map's full orientation in a single call: its identity, its charter blocks (statement /
 /// questions / framing), and the foundational resources it is built on (its homed set, telos
-/// flagged). Errors with "not found or not readable" when the caller cannot read the map — the same
-/// no-leak convention as `cogmap_analytics`.
+/// flagged). Refuses with the server's own "not found or not readable" sentence when the caller
+/// cannot read the map — the same no-leak convention as `cogmap_analytics`.
 pub async fn cogmap_show(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapShowInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
 
-    let detail =
-        cogmap_service::show_visible(&svc.api_state.pool, ProfileId::from(profile.id), cogmap_id)
-            .await
-            .map_err(|e| match e {
-                ApiError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
-                other => {
-                    rmcp::ErrorData::internal_error(format!("cogmap_show failed: {other}"), None)
-                }
-            })?;
+    let detail = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .show(cogmap_id)
+        .await
+        .across_auth(|e| map_read_err(e, "cogmap_show"))?;
 
-    let text = serde_json::to_string_pretty(&detail).unwrap_or_else(|_| "{}".to_string());
-    Ok(with_leading_notice(CHARTER_EXCERPT_NOTICE, text))
+    Ok(with_leading_notice(
+        CHARTER_EXCERPT_NOTICE,
+        to_text(&detail),
+    ))
 }
 
 // ── cogmap_create (genesis) ──────────────────────────────────────────────────
@@ -285,6 +337,30 @@ pub struct CogmapCreateInput {
     pub telos_resource_id: Option<Uuid>,
 }
 
+/// Genesis's own mapper: the direct binding's arm set, arm-for-arm. `ForbiddenDetail`
+/// carries the gate's sentence bare; the terse `Forbidden` and the 400/409 bodies are
+/// caller-actionable; everything else stays the direct wrapper's internal fault.
+fn map_genesis_err(e: ClientError) -> rmcp::ErrorData {
+    match e {
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+            "not authorized to create cognitive maps".to_string(),
+            None,
+        ),
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        other => rmcp::ErrorData::internal_error(
+            format!("Failed to create cognitive map: {other}"),
+            None,
+        ),
+    }
+}
+
 /// Genesis (create) a new cognitive map. Any authenticated profile may create a NON-RESERVED map and
 /// becomes its grant-holder (the backend mints a read+write+grant on the new map). The reserved-id
 /// guard lives in the backend: a caller-supplied `cogmap_id`/`telos_resource_id` is honored only for a
@@ -292,122 +368,108 @@ pub struct CogmapCreateInput {
 /// with an EMPTY charter (see [`CogmapCreateInput`]).
 pub async fn cogmap_create(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapCreateInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
-    let cmd = CreateCognitiveMap {
-        request: CreateCogmapRequest {
-            cogmap_id: input.cogmap_id,
-            telos_resource_id: input.telos_resource_id,
-            name: input.name,
-            telos_title: input.telos_title,
-            // Empty charter — the MCP server is embed-free; deliver the charter via reconcile.
-            telos: None,
-        },
-        origin: Surface::Mcp,
+    let req = CreateCogmapRequest {
+        cogmap_id: input.cogmap_id,
+        telos_resource_id: input.telos_resource_id,
+        name: input.name,
+        telos_title: input.telos_title,
+        // Empty charter — the MCP server is embed-free; deliver the charter via reconcile.
+        telos: None,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend
-        .create_cognitive_map(cmd)
+    let out = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .create_cognitive_map(&req)
         .await
-        .map_err(|e| match e {
-            TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::invalid_params(msg, None),
-            TemperError::Forbidden => rmcp::ErrorData::invalid_params(
-                "not authorized to create cognitive maps".to_string(),
-                None,
-            ),
-            TemperError::Conflict(msg) => rmcp::ErrorData::invalid_params(msg, None),
-            TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
-            other => rmcp::ErrorData::internal_error(
-                format!("Failed to create cognitive map: {other}"),
-                None,
-            ),
-        })?;
+        .across_auth(map_genesis_err)?;
 
-    let text = serde_json::to_string_pretty(&out.value).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&out)),
     ]))
 }
 
 // ── cogmap_materialize_delta (read) / cogmap_materialize (trigger) ───────────
 
+/// Map the materialize-TRIGGER's error arms. `ForbiddenDetail` (the gate's own disclosure
+/// sentence) and the terse `Forbidden` keep their `{action}: ` prefixes — the tool's
+/// disclosure dialect, byte-stable across the swap. `NotFound` carries the server's own
+/// sentence un-prefixed (the declared delta); the door's caller-actionable 400/409 speak
+/// through the shared strip.
+fn map_materialize_err(e: ClientError, action: &str) -> rmcp::ErrorData {
+    match e {
+        ClientError::ForbiddenDetail { message } => {
+            rmcp::ErrorData::invalid_params(format!("{action}: {message}"), None)
+        }
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+            format!("{action}: cannot author this cognitive map"),
+            None,
+        ),
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        other => rmcp::ErrorData::internal_error(format!("{action}: {other}"), None),
+    }
+}
+
 /// Read a cogmap's materialize delta: how many formation events have landed since the last
-/// materialize, and whether that clears the threshold. Service-direct (gates on
-/// `anchor_readable_by_profile`).
+/// materialize, and whether that clears the threshold.
 pub async fn cogmap_materialize_delta(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: MaterializeDeltaInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
 
-    let delta = materialize_service::materialize_delta(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        HomeAnchor::Cogmap(CogmapId::from(cogmap)),
-        input.threshold,
-    )
-    .await
-    .map_err(|e| map_api_error("cogmap_materialize_delta", e))?;
+    let delta = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .materialize_delta(cogmap, input.threshold)
+        .await
+        .across_auth(|e| map_read_err(e, "cogmap_materialize_delta"))?;
 
-    let text = serde_json::to_string_pretty(&delta).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&delta)),
     ]))
 }
 
 /// Re-materialize a cogmap's regions when its formation delta clears the threshold; a no-op below.
-/// Dispatches through `DbBackend` (auth-before-write + the threshold gate live there).
+/// Gated on cogmap-write at the API (auth-before-write + the threshold gate live in the backend
+/// command the route dispatches).
 ///
 /// CLI equivalent: `temper cogmap materialize <ref> [--threshold N]`.
 pub async fn cogmap_materialize(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: MaterializeTriggerInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
 
-    let cmd = MaterializeOnThreshold {
-        anchor: HomeAnchor::Cogmap(CogmapId::from(cogmap)),
-        threshold: input.threshold,
-        origin: Surface::Mcp,
-    };
-
-    let backend = DbBackend::new(svc.api_state.pool.clone(), ProfileId::from(profile.id));
-    let out = backend
-        .materialize_on_threshold(cmd)
+    let ack: MaterializeAck = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .materialize(cogmap, input.threshold)
         .await
-        .map_err(|e| match e {
-            TemperError::ForbiddenDetail(msg) => {
-                rmcp::ErrorData::invalid_params(format!("cogmap_materialize: {msg}"), None)
-            }
-            TemperError::Forbidden => rmcp::ErrorData::invalid_params(
-                "cogmap_materialize: cannot author this cognitive map".to_string(),
-                None,
-            ),
-            TemperError::NotFound(msg) => {
-                rmcp::ErrorData::invalid_params(format!("cogmap_materialize: {msg}"), None)
-            }
-            other => rmcp::ErrorData::internal_error(format!("cogmap_materialize: {other}"), None),
-        })?;
+        .across_auth(|e| map_materialize_err(e, "cogmap_materialize"))?;
 
-    let ack: MaterializeAck = out.value;
-    let text = serde_json::to_string_pretty(&ack).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&ack)),
     ]))
 }
 
-// ── cogmap_bind / cogmap_unbind (service-direct) ─────────────────────────────
+// ── cogmap_bind / cogmap_unbind (wire write) ─────────────────────────────────
 
 /// MCP input for cogmap_bind / cogmap_unbind. `cogmap` is a ref (UUID or decorated `slug-<uuid>`);
 /// `team_id` is the team's raw UUID (id-based, mirroring the HTTP wire shape).
@@ -419,71 +481,58 @@ pub struct CogmapBindInput {
     pub team_id: Uuid,
 }
 
-/// Map a service `ApiError` to an rmcp protocol error. `Forbidden` ⇒ invalid_params;
-/// everything else ⇒ internal_error.
-fn map_api_error(context: &str, err: ApiError) -> rmcp::ErrorData {
-    match err {
-        ApiError::Forbidden => {
-            rmcp::ErrorData::invalid_params(format!("not authorized for {context}"), None)
-        }
-        other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
-    }
-}
-
-/// Bind a cognitive map to a team. SERVICE-DIRECT (binding is not a Backend command) — calls
-/// `cogmap_service::bind_team` directly, which enforces the two-sided gate before any write.
+/// Bind a cognitive map to a team, through the door. The two-sided gate (admin, or administer the
+/// map AND manage the team) runs at the API before the write.
 pub async fn cogmap_bind(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapBindInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
 
-    let outcome = cogmap_service::bind_team(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        cogmap_id,
-        &BindTeamRequest {
-            team_id: input.team_id,
-        },
-    )
-    .await
-    .map_err(|e| map_api_error("cogmap_bind", e))?;
+    let outcome = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .bind_team(
+            cogmap_id,
+            &BindTeamRequest {
+                team_id: input.team_id,
+            },
+        )
+        .await
+        .across_auth(|e| map_api_error("cogmap_bind", e))?;
 
-    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&outcome)),
     ]))
 }
 
-/// Unbind a cognitive map from a team. SERVICE-DIRECT, two-sided gated (see [`cogmap_bind`]).
+/// Unbind a cognitive map from a team, through the door. Same two-sided gate as [`cogmap_bind`];
+/// no-op safe.
 pub async fn cogmap_unbind(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapBindInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
 
-    let outcome = cogmap_service::unbind_team(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        cogmap_id,
-        input.team_id,
-    )
-    .await
-    .map_err(|e| map_api_error("cogmap_unbind", e))?;
+    let outcome = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .unbind_team(cogmap_id, input.team_id)
+        .await
+        .across_auth(|e| map_api_error("cogmap_unbind", e))?;
 
-    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&outcome)),
     ]))
 }
 
-// ── cogmap_grant / cogmap_revoke (service-direct) ────────────────────────────
+// ── cogmap_grant / cogmap_revoke (wire write) ────────────────────────────────
 
 /// MCP input for cogmap_grant. `cogmap` is a ref; exactly one of `to_profile`/`to_team` names the
 /// principal (raw UUID). Capability flags select which rights to grant (`read` is implied by
@@ -536,17 +585,18 @@ fn resolve_principal(
     }
 }
 
-/// Grant a capability on a cognitive map. SERVICE-DIRECT, gated by `is_system_admin OR can_grant`
-/// (see `access_service::grant_capability`). `read` is forced on when `write`/`grant` is set
-/// (coherence: you cannot write/grant what you cannot read).
+/// Grant a capability on a cognitive map, through the door. Gated by
+/// `is_system_admin OR can_grant` at the API (the same `access_service` gate the direct binding
+/// ran in-process). `read` is forced on when `write`/`grant` is set (coherence: you cannot
+/// write/grant what you cannot read).
 pub async fn cogmap_grant(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapGrantInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
     let (principal_table, principal_id) = resolve_principal(input.to_profile, input.to_team)?;
 
     if !(input.read || input.write || input.grant) {
@@ -555,9 +605,9 @@ pub async fn cogmap_grant(
             None,
         ));
     }
-    let req = GrantCapabilityRequest {
-        subject_table: "kb_cogmaps".to_string(),
-        subject_id: cogmap_id,
+    // The wire body carries the principal + capabilities only — the route widens it into a
+    // `GrantCapabilityRequest` with `subject_table='kb_cogmaps'`, `subject_id={id}`.
+    let body = CogmapGrantBody {
         principal_table,
         principal_id,
         can_read: input.read || input.write || input.grant, // coherence: write|grant ⇒ read
@@ -566,72 +616,77 @@ pub async fn cogmap_grant(
         can_grant: input.grant,
     };
 
-    let outcome =
-        access_service::grant_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
-            .await
-            .map_err(|e| map_api_error("cogmap_grant", e))?;
+    let outcome = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .grant(cogmap_id, &body)
+        .await
+        .across_auth(|e| map_api_error("cogmap_grant", e))?;
 
-    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&outcome)),
     ]))
 }
 
-/// Revoke a capability grant on a cognitive map. SERVICE-DIRECT, admin/can_grant-gated (see
-/// [`cogmap_grant`]). Absent grant ⇒ no-op success.
+/// Revoke a capability grant on a cognitive map, through the door. Admin/can_grant-gated at the
+/// API (see [`cogmap_grant`]). Absent grant ⇒ no-op success.
 pub async fn cogmap_revoke(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapRevokeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap_id = temper_workflow::operations::parse_ref(&input.cogmap)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
+        .uuid();
     let (principal_table, principal_id) = resolve_principal(input.from_profile, input.from_team)?;
 
-    let req = RevokeCapabilityRequest {
-        subject_table: "kb_cogmaps".to_string(),
-        subject_id: cogmap_id,
+    let body = CogmapRevokeBody {
         principal_table,
         principal_id,
     };
-    let outcome =
-        access_service::revoke_capability(&svc.api_state.pool, ProfileId::from(profile.id), &req)
-            .await
-            .map_err(|e| map_api_error("cogmap_revoke", e))?;
+    let outcome = svc
+        .relay_client(parts)?
+        .cognitive_maps()
+        .revoke(cogmap_id, &body)
+        .await
+        .across_auth(|e| map_api_error("cogmap_revoke", e))?;
 
-    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&outcome)),
     ]))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Context orientation tools (spec §3.7, T8).
 //
-// The region reads beneath these are the SAME anchor-generic calls the cogmap tools above make —
-// only the addressing differs. A context is named by context ref (`@me/temper`), which is resolved
-// through `resolve_context_ref` (itself visibility-gated), not by the resource-ref parser.
+// The region reads beneath these are the SAME routes the cogmap tools forward to — only the
+// addressing differs. A context is named by context ref (`@me/temper`), which resolves
+// IN-PROCESS (the one retained read): the ref grammar is MCP-local input shaping and `@me`
+// only exists at this surface, so the profile resolves from parts the way the direct
+// binding's gate did, then the resolved UUID crosses the wire.
 
-/// Resolve a context ref (`@me/<slug>`, `+<team>/<slug>`, or a UUID) to its anchor.
+/// Resolve a context ref (`@me/<slug>`, `+<team>/<slug>`, or a UUID) to its anchor id.
+/// The resolver is visibility-gated exactly as before; its two refusals — the parse
+/// error and `context not found: …` — stay MCP-local, pre-wire.
 async fn context_anchor(
     svc: &TemperMcpService,
-    profile_id: ProfileId,
+    parts: &http::request::Parts,
     context_ref: &str,
-) -> Result<HomeAnchor, rmcp::ErrorData> {
+) -> Result<Uuid, rmcp::ErrorData> {
     let cref = parse_context_ref(context_ref)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context ref: {e}"), None))?;
-    let context = resolve_context_ref(&svc.api_state.pool, profile_id, &cref)
+    let profile = svc.ensure_profile_from_parts(parts).await?;
+    let context = resolve_context_ref(&svc.api_state.pool, profile.id.into(), &cref)
         .await
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
-    Ok(HomeAnchor::Context(context))
+    Ok(*context)
 }
 
 /// Optional lens ref → UUID.
 fn lens_of(lens: Option<&str>) -> Result<Option<Uuid>, rmcp::ErrorData> {
     lens.map(|l| {
         temper_workflow::operations::parse_ref(l)
-            .map(|p| p.0)
+            .map(|p| p.uuid())
             .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad lens ref: {e}"), None))
     })
     .transpose()
@@ -640,51 +695,43 @@ fn lens_of(lens: Option<&str>) -> Result<Option<Uuid>, rmcp::ErrorData> {
 /// `context_shape` — the context's materialized regions (surface tier), most salient first.
 pub async fn context_shape(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: ContextShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile_id = ProfileId::from(profile.id);
-    let anchor = context_anchor(svc, profile_id, &input.context).await?;
+    let context_id = context_anchor(svc, parts, &input.context).await?;
+    let lens = lens_of(input.lens.as_deref())?;
 
-    let shape = temper_services::backend::substrate_read::anchor_shape_select(
-        &svc.api_state.pool,
-        profile_id,
-        anchor,
-        lens_of(input.lens.as_deref())?,
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("context_shape failed: {e}"), None))?;
+    let shape = svc
+        .relay_client(parts)?
+        .contexts()
+        .shape(context_id, lens)
+        .await
+        .across_auth(|e| map_read_err(e, "context_shape"))?;
 
     // Object, not array — see the note in `cogmap_shape`; the fallback must match the schema.
-    let text = serde_json::to_string_pretty(&shape).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&shape)),
     ]))
 }
 
 /// `context_region_metrics` — the per-region analytics tier for a context.
 pub async fn context_region_metrics(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: ContextShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile_id = ProfileId::from(profile.id);
-    let anchor = context_anchor(svc, profile_id, &input.context).await?;
+    let context_id = context_anchor(svc, parts, &input.context).await?;
+    let lens = lens_of(input.lens.as_deref())?;
 
-    let rows = temper_services::backend::substrate_read::anchor_region_metrics_select(
-        &svc.api_state.pool,
-        profile_id,
-        anchor,
-        lens_of(input.lens.as_deref())?,
-    )
-    .await
-    .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("context_region_metrics failed: {e}"), None)
-    })?;
+    let rows = svc
+        .relay_client(parts)?
+        .contexts()
+        .region_metrics(context_id, lens)
+        .await
+        .across_auth(|e| map_read_err(e, "context_region_metrics"))?;
 
-    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&rows)),
     ]))
 }
 
@@ -698,66 +745,59 @@ pub async fn context_region_metrics(
 /// "not readable" and "does not exist" are one message on purpose.
 pub async fn context_analytics(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: ContextAnalyticsInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile_id = ProfileId::from(profile.id);
-    let anchor = context_anchor(svc, profile_id, &input.context).await?;
+    let context_id = context_anchor(svc, parts, &input.context).await?;
 
-    let got = temper_services::backend::substrate_read::context_analytics_select(
-        &svc.api_state.pool,
-        profile_id,
-        anchor.uuid(),
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("context_analytics failed: {e}"), None))?;
+    let staleness = svc
+        .relay_client(parts)?
+        .contexts()
+        .analytics(context_id)
+        .await
+        .across_auth(|e| map_read_err(e, "context_analytics"))?;
 
-    match got {
-        Some(staleness) => {
-            // Object, not array — the fallback must match the schema.
-            let text =
-                serde_json::to_string_pretty(&staleness).unwrap_or_else(|_| "{}".to_string());
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text(text),
-            ]))
-        }
-        None => Err(rmcp::ErrorData::invalid_params(
-            "context not found or not readable".to_string(),
-            None,
-        )),
-    }
+    // Object, not array — the fallback must match the schema.
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(to_text(&staleness)),
+    ]))
 }
 
 /// `context_materialize` — re-form the context's regions when its formation delta clears the
-/// threshold. Below threshold it is an idempotent no-op. Gated on `context_authorable_by_profile`
-/// (write requires DIRECT membership with an authoring role), inside the backend command.
+/// threshold. Below threshold it is an idempotent no-op. Gated on
+/// `context_authorable_by_profile` (write requires DIRECT membership with an authoring role)
+/// at the API, inside the backend command the route dispatches.
 pub async fn context_materialize(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: ContextMaterializeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile_id = ProfileId::from(profile.id);
-    let anchor = context_anchor(svc, profile_id, &input.context).await?;
+    let context_id = context_anchor(svc, parts, &input.context).await?;
 
-    let cmd = MaterializeOnThreshold {
-        anchor,
-        threshold: input.threshold,
-        origin: Surface::Mcp,
-    };
-    let backend = DbBackend::new(svc.api_state.pool.clone(), profile_id);
-    let ack: MaterializeAck = backend
-        .materialize_on_threshold(cmd)
+    let ack: MaterializeAck = svc
+        .relay_client(parts)?
+        .contexts()
+        .materialize(context_id, input.threshold)
         .await
-        .map_err(ApiError::from)
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("context_materialize failed: {e}"), None)
-        })?
-        .value;
+        .across_auth(map_context_materialize_err)?;
 
-    let text = serde_json::to_string_pretty(&ack).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&ack)),
     ]))
+}
+
+/// The context trigger's own mapper: the bare-`Forbidden` authority face (the context gate
+/// keeps the argument-free refusal by design) renders the terse tool sentence under
+/// `invalid_params` — named at the swap, never pinned direct (the service's own unit test
+/// pins the gate beneath it). Everything else matches the cogmap trigger arm-for-arm.
+fn map_context_materialize_err(e: ClientError) -> rmcp::ErrorData {
+    match e {
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+            "context_materialize: cannot author this context".to_string(),
+            None,
+        ),
+        other => map_materialize_err(other, "context_materialize"),
+    }
 }
 
 // ── Consolidated read tool (6→1) ───────────────────────────────────────────────
@@ -802,14 +842,14 @@ pub struct CogmapReadInput {
 /// Dispatch the consolidated cogmap-read tool.
 pub async fn cogmap_read(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: CogmapReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.view {
         CogmapReadView::Show => {
             cogmap_show(
                 svc,
-                profile,
+                parts,
                 CogmapShowInput {
                     cogmap: input.cogmap,
                 },
@@ -819,7 +859,7 @@ pub async fn cogmap_read(
         CogmapReadView::Shape => {
             cogmap_shape(
                 svc,
-                profile,
+                parts,
                 CogmapShapeInput {
                     cogmap: input.cogmap,
                     lens: input.lens,
@@ -830,7 +870,7 @@ pub async fn cogmap_read(
         CogmapReadView::Metrics => {
             cogmap_region_metrics(
                 svc,
-                profile,
+                parts,
                 CogmapRegionMetricsInput {
                     cogmap: input.cogmap,
                     lens: input.lens,
@@ -841,7 +881,7 @@ pub async fn cogmap_read(
         CogmapReadView::Analytics => {
             cogmap_analytics(
                 svc,
-                profile,
+                parts,
                 CogmapAnalyticsInput {
                     cogmap: input.cogmap,
                 },
@@ -851,7 +891,7 @@ pub async fn cogmap_read(
         CogmapReadView::Charter => {
             cogmap_read_charter(
                 svc,
-                profile,
+                parts,
                 CogmapReadCharterInput {
                     cogmap: input.cogmap,
                 },
@@ -861,7 +901,7 @@ pub async fn cogmap_read(
         CogmapReadView::MaterializeDelta => {
             cogmap_materialize_delta(
                 svc,
-                profile,
+                parts,
                 MaterializeDeltaInput {
                     cogmap: input.cogmap,
                     threshold: input.threshold,

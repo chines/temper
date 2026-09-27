@@ -1,19 +1,47 @@
 //! Context tools — list and inspect knowledge base contexts.
+//!
+//! # Execution crosses the network door (beat G3d — the fifth family to cross)
+//!
+//! Every tool forwards to its deployed `/api/contexts` route through a per-request
+//! temper-client relay built from the request's `Parts`: Level 1 + 2 run at the API on the
+//! caller's own bearer. The create path's owner resolution rides the same wire body
+//! (`ContextCreateRequest.owner`) the route resolves server-side.
+//!
+//! # Parity deltas declared at the swap (the G3c delta format)
+//!
+//! - **NotFound / Conflict / 400 sentences arrive bare** — the direct mappers prefixed
+//!   every one `{context}: `; the door carries the server's own sentence, the
+//!   `Conflict: `/`Bad request: ` status labels stripped by the shared cause helper,
+//!   kind and gate identical. The `403` requirement sentences are the TOOL's words
+//!   (the wire's bare 403 carries none) and are byte-stable, their pins carried.
+//! - **`get` of a retired-but-administered context now answers the row** — the
+//!   route's restore-reachability fallback (`get_retired_administered`) sits behind
+//!   the door, where the direct binding's `get_visible`-only read refused. Declared,
+//!   not smuggled: the caller's own administered data, identical to what the CLI's
+//!   `GET /api/contexts/{id}` already returns — MCP converges to the route family's
+//!   own semantics. The suite pins no face on this read either way.
+//! - **`create`'s owner-resolution `403`** (a caller who does not manage the team
+//!   that would own the context) renders the tool's requirement sentence under
+//!   `invalid_params`, where the direct binding mapped it to the internal
+//!   catch-all — the declared caller-actionable delta.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_client::error::ClientError;
 use temper_core::types::cognitive_maps::{ContextAnalyticsInput, ContextShapeInput};
-use temper_core::types::context::{ContextCreateRequest, ShareContextRequest};
-use temper_core::types::ids::{ContextId, ProfileId};
-use temper_services::error::ApiError;
+use temper_core::types::context::{
+    ContextCreateRequest, ReassignContextRequest, RenameContextRequest, ShareContextRequest,
+};
 
-use temper_core::types::Profile;
-
-use crate::service::TemperMcpService;
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 use crate::tools::cognitive_maps::{context_analytics, context_region_metrics, context_shape};
+
+fn to_text<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
+}
 
 /// Which admission rule a context tool's `403` describes.
 ///
@@ -46,32 +74,35 @@ impl ForbiddenRule {
     }
 }
 
-/// Map a context-service error onto an MCP error. `Forbidden` (the authorization gate named by
-/// `rule`), `NotFound` (missing context or team), `Conflict` (a taken slug) and `BadRequest` (an
-/// unusable name) become invalid-params so the agent sees an actionable message rather than an
-/// opaque internal error.
+/// Map a context-write error onto an MCP error. The `403` (the authorization gate named by
+/// `rule`), `404` (missing context or team), `409` (a taken slug) and `400` (an unusable name)
+/// become invalid-params so the agent sees an actionable message rather than an opaque internal
+/// error.
 ///
 /// `Forbidden` and `NotFound` must stay **distinguishable** here: the gate answers `403` to a
 /// caller who reads the context but does not administer it and `404` to one who cannot see it, and
 /// collapsing the two into indistinguishable text would discard the disclosure distinction the
 /// service deliberately draws.
-fn map_api_error(context: &str, rule: ForbiddenRule, err: ApiError) -> rmcp::ErrorData {
+///
+/// The `403`'s requirement clause is the TOOL's sentence (the wire's bare 403 body carries no
+/// requirement text), byte-identical to the direct binding's. The `404`/`409`/`400` sentences are
+/// the server's own, carried through the door — the direct binding's `{context}: ` prefix does not
+/// re-apply (the declared delta); 400/409 carry the API's rendered `Bad request: `/`Conflict: `
+/// labels, stripped by the shared cause helper.
+fn map_api_error(context: &str, rule: ForbiddenRule, err: ClientError) -> rmcp::ErrorData {
     match err {
-        ApiError::Forbidden => rmcp::ErrorData::invalid_params(
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
             format!("{context} requires that {}", rule.requirement()),
             None,
         ),
-        // Carry the service's own message rather than replacing it with a constant: it names
-        // which of the context or the team was unresolvable, which this arm could only guess at.
-        ApiError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("{context}: {msg}"), None)
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
         }
-        // Same reason, and the actionable half in both cases is exactly what the service put in
-        // the message: the `409` names the colliding slug, the `400` names what about the given
-        // name has no addressable content. A constant here could only guess at either.
-        ApiError::Conflict(msg) | ApiError::BadRequest(msg) => {
-            rmcp::ErrorData::invalid_params(format!("{context}: {msg}"), None)
-        }
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
         other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
     }
 }
@@ -112,169 +143,186 @@ pub struct RenameContextInput {
     pub name: String,
 }
 
+/// The create path's own mapper: same voice as the writes, plus the owner-resolution
+/// faces that ride the wire body. The bare `403` (a caller who does not manage the team
+/// that would own the context) speaks the tool's requirement sentence — the direct
+/// binding mapped this face to the internal catch-all, the declared delta.
+fn map_create_err(err: ClientError) -> rmcp::ErrorData {
+    match err {
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+            "create_context requires that you manage the team that will own it (owner/maintainer)"
+                .to_string(),
+            None,
+        ),
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        other => rmcp::ErrorData::internal_error(format!("create_context failed: {other}"), None),
+    }
+}
+
 pub async fn list_contexts(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let rows = temper_services::services::context_service::list_visible(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to list contexts: {e}"), None))?;
+    let rows = svc
+        .relay_client(parts)?
+        .contexts()
+        .list()
+        .await
+        .across_auth(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to list contexts: {e}"), None)
+        })?;
 
-    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&rows)),
     ]))
 }
 
 pub async fn get_context(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: GetContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let row = temper_services::services::context_service::get_visible(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        ContextId::from(input.id),
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get context: {e}"), None))?;
+    // A read denies with the server's own sentence (the same arm-for-arm shape the
+    // orientation reads use); everything else stays the direct wrapper's fault voice.
+    let row = svc
+        .relay_client(parts)?
+        .contexts()
+        .get(input.id)
+        .await
+        .across_auth(|e| match e {
+            ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+            other => {
+                rmcp::ErrorData::internal_error(format!("Failed to get context: {other}"), None)
+            }
+        })?;
 
-    let text = serde_json::to_string_pretty(&row).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&row)),
     ]))
 }
 
 pub async fn create_context(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: ContextCreateRequest,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let caller = ProfileId::from(profile.id);
+    let row = svc
+        .relay_client(parts)?
+        .contexts()
+        .create(&input.name, input.owner)
+        .await
+        .across_auth(map_create_err)?;
 
-    let (owner_table, owner_id) = temper_services::services::context_service::resolve_create_owner(
-        &svc.api_state.pool,
-        caller,
-        input.owner.as_ref(),
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to resolve owner: {e}"), None))?;
-
-    let row = temper_services::services::context_service::create(
-        &svc.api_state.pool,
-        caller,
-        &owner_table,
-        owner_id,
-        &input.name,
-    )
-    .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to create context: {e}"), None))?;
-
-    let text = serde_json::to_string_pretty(&row).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&row)),
     ]))
 }
 
-/// Share a context into a team's read-reach. SERVICE-DIRECT, authorized by
-/// `context_service::share` (its two-sided `can_share` gate: system-admin, OR the caller
-/// administers the context AND manages the target team) before the write.
-/// Idempotent — `shared: false` when the share already existed.
+/// Share a context into a team's read-reach, through the door. Authorized by the two-sided
+/// `can_share` gate at the API (system-admin, OR the caller administers the context AND manages
+/// the target team) before the write. Idempotent — `shared: false` when the share already existed.
 pub async fn share_context(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: ShareContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let outcome = temper_services::services::context_service::share(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        input.context,
-        &ShareContextRequest {
-            team_id: input.team,
-        },
-    )
-    .await
-    .map_err(|e| map_api_error("share_context", ForbiddenRule::ContextAndTargetTeam, e))?;
+    let outcome = svc
+        .relay_client(parts)?
+        .contexts()
+        .share_team(
+            input.context,
+            &ShareContextRequest {
+                team_id: input.team,
+            },
+        )
+        .await
+        .across_auth(|e| map_api_error("share_context", ForbiddenRule::ContextAndTargetTeam, e))?;
 
-    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&outcome)),
     ]))
 }
 
-/// Transfer a context's ownership to a team. SERVICE-DIRECT, authorized by
-/// `context_service::reassign` (the two-sided `can_share` gate) before the write. Binding a
-/// context to a team is the single path to shared authorship — read-sharing stays
-/// [`share_context`]; writing into a context requires team ownership. Idempotent —
-/// `reassigned: false` when the context was already owned by the target team.
+/// Transfer a context's ownership to a team, through the door. Authorized by the two-sided
+/// `can_share` gate at the API. Binding a context to a team is the single path to shared
+/// authorship — read-sharing stays [`share_context`]; writing into a context requires team
+/// ownership. Idempotent — `reassigned: false` when the context was already owned by the target
+/// team.
 pub async fn transfer_context(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: TransferContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let outcome = temper_services::services::context_service::reassign(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        input.context,
-        input.to_team,
-    )
-    .await
-    .map_err(|e| map_api_error("transfer_context", ForbiddenRule::ContextAndTargetTeam, e))?;
+    let outcome = svc
+        .relay_client(parts)?
+        .contexts()
+        .reassign(
+            input.context,
+            &ReassignContextRequest {
+                to_team_id: input.to_team,
+            },
+        )
+        .await
+        .across_auth(|e| {
+            map_api_error("transfer_context", ForbiddenRule::ContextAndTargetTeam, e)
+        })?;
 
-    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&outcome)),
     ]))
 }
 
-/// Unshare a context from a team. SERVICE-DIRECT, same `can_share` authorization as
-/// [`share_context`]. No-op safe — `unshared: false` when there was no share to remove.
+/// Unshare a context from a team, through the door. Same `can_share` authorization as
+/// [`share_context`], at the API. No-op safe — `unshared: false` when there was no share to
+/// remove.
 pub async fn unshare_context(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: ShareContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let outcome = temper_services::services::context_service::unshare(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        input.context,
-        input.team,
-    )
-    .await
-    .map_err(|e| map_api_error("unshare_context", ForbiddenRule::ContextAndTargetTeam, e))?;
+    let outcome = svc
+        .relay_client(parts)?
+        .contexts()
+        .unshare_team(input.context, input.team)
+        .await
+        .across_auth(|e| {
+            map_api_error("unshare_context", ForbiddenRule::ContextAndTargetTeam, e)
+        })?;
 
-    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&outcome)),
     ]))
 }
 
 /// Rename a context — the one act that moves its `(name, slug)` identity pair in place.
-/// SERVICE-DIRECT, authorized by `context_service::rename` (the one-sided `ContextAdminAuthority`
-/// gate: you administer the context, or you are an instance admin) before the write; this tool adds
-/// no authorization of its own. The slug is **derived** from the name, so a rename **re-addresses**
-/// the context — the outcome carries the composed `context_ref` to use from now on. Idempotent —
-/// `renamed: false` when the canonical name already equalled the stored one.
+/// Authorized by the one-sided `ContextAdminAuthority` gate at the API (you administer the
+/// context, or you are an instance admin); this tool adds no authorization of its own. The slug is
+/// **derived** from the name, so a rename **re-addresses** the context — the outcome carries the
+/// composed `context_ref` to use from now on. Idempotent — `renamed: false` when the canonical
+/// name already equalled the stored one.
 pub async fn rename_context(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: RenameContextInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let outcome = temper_services::services::context_service::rename(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        input.context,
-        &input.name,
-    )
-    .await
-    .map_err(|e| map_api_error("rename_context", ForbiddenRule::ContextAdministration, e))?;
+    let outcome = svc
+        .relay_client(parts)?
+        .contexts()
+        .rename(input.context, &RenameContextRequest { name: input.name })
+        .await
+        .across_auth(|e| {
+            map_api_error("rename_context", ForbiddenRule::ContextAdministration, e)
+        })?;
 
-    let text = serde_json::to_string_pretty(&outcome).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(text),
+        rmcp::model::ContentBlock::text(to_text(&outcome)),
     ]))
 }
 
@@ -320,16 +368,16 @@ pub struct ContextReadInput {
 /// Dispatch the consolidated context-read tool.
 pub async fn context_read(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: ContextReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.view {
-        ContextReadView::List => list_contexts(svc, profile).await,
+        ContextReadView::List => list_contexts(svc, parts).await,
         ContextReadView::Get => {
             let id = input.id.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("get requires `id`".to_string(), None)
             })?;
-            get_context(svc, profile, GetContextInput { id }).await
+            get_context(svc, parts, GetContextInput { id }).await
         }
         ContextReadView::Shape => {
             let context = input.context.ok_or_else(|| {
@@ -337,7 +385,7 @@ pub async fn context_read(
             })?;
             context_shape(
                 svc,
-                profile,
+                parts,
                 ContextShapeInput {
                     context,
                     lens: input.lens,
@@ -351,7 +399,7 @@ pub async fn context_read(
             })?;
             context_region_metrics(
                 svc,
-                profile,
+                parts,
                 ContextShapeInput {
                     context,
                     lens: input.lens,
@@ -363,7 +411,7 @@ pub async fn context_read(
             let context = input.context.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("analytics requires `context`".to_string(), None)
             })?;
-            context_analytics(svc, profile, ContextAnalyticsInput { context }).await
+            context_analytics(svc, parts, ContextAnalyticsInput { context }).await
         }
     }
 }
@@ -412,7 +460,7 @@ pub struct ContextManageInput {
 /// Dispatch the consolidated context-manage tool.
 pub async fn context_manage(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: ContextManageInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
@@ -422,7 +470,7 @@ pub async fn context_manage(
             })?;
             create_context(
                 svc,
-                profile,
+                parts,
                 ContextCreateRequest {
                     name,
                     owner: input.owner,
@@ -437,7 +485,7 @@ pub async fn context_manage(
             let name = input.name.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("rename requires `name`".to_string(), None)
             })?;
-            rename_context(svc, profile, RenameContextInput { context, name }).await
+            rename_context(svc, parts, RenameContextInput { context, name }).await
         }
         ContextManageAction::Share => {
             let context = input.context.ok_or_else(|| {
@@ -446,7 +494,7 @@ pub async fn context_manage(
             let team = input.team.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("share requires `team`".to_string(), None)
             })?;
-            share_context(svc, profile, ShareContextInput { context, team }).await
+            share_context(svc, parts, ShareContextInput { context, team }).await
         }
         ContextManageAction::Unshare => {
             let context = input.context.ok_or_else(|| {
@@ -455,7 +503,7 @@ pub async fn context_manage(
             let team = input.team.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("unshare requires `team`".to_string(), None)
             })?;
-            unshare_context(svc, profile, ShareContextInput { context, team }).await
+            unshare_context(svc, parts, ShareContextInput { context, team }).await
         }
         ContextManageAction::Transfer => {
             let context = input.context.ok_or_else(|| {
@@ -464,7 +512,7 @@ pub async fn context_manage(
             let to_team = input.team.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("transfer requires `team`".to_string(), None)
             })?;
-            transfer_context(svc, profile, TransferContextInput { context, to_team }).await
+            transfer_context(svc, parts, TransferContextInput { context, to_team }).await
         }
     }
 }
@@ -499,7 +547,7 @@ mod tests {
         let forbidden = map_api_error(
             "share_context",
             ForbiddenRule::ContextAndTargetTeam,
-            ApiError::Forbidden,
+            ClientError::Forbidden,
         );
         assert!(
             forbidden.message.contains("administer the context"),
@@ -508,7 +556,9 @@ mod tests {
         let not_found = map_api_error(
             "share_context",
             ForbiddenRule::ContextAndTargetTeam,
-            ApiError::NotFound("team seed-team not found or not readable".to_string()),
+            ClientError::NotFound {
+                message: "team seed-team not found or not readable".to_string(),
+            },
         );
         assert!(
             not_found.message.contains("seed-team"),
@@ -526,7 +576,7 @@ mod tests {
         let forbidden = map_api_error(
             "rename_context",
             ForbiddenRule::ContextAdministration,
-            ApiError::Forbidden,
+            ClientError::Forbidden,
         );
         assert!(
             forbidden.message.contains("administer the context"),
@@ -540,12 +590,16 @@ mod tests {
 
     #[test]
     fn map_api_error_renders_conflict_as_invalid_params_carrying_the_message() {
+        // The door's 409 body carries the API's rendered Display (`Conflict: …`); the
+        // mapper strips the status label and speaks the server's own sentence bare.
         let conflict = map_api_error(
             "rename_context",
             ForbiddenRule::ContextAdministration,
-            ApiError::Conflict(
-                "@cole already owns a context with slug 'notes'; pick another name".to_string(),
-            ),
+            ClientError::Conflict {
+                message:
+                    "Conflict: @cole already owns a context with slug 'notes'; pick another name"
+                        .to_string(),
+            },
         );
         assert_eq!(
             conflict.code,
@@ -556,14 +610,22 @@ mod tests {
             conflict.message.contains("slug 'notes'"),
             "the colliding slug is the actionable half and must survive: {conflict:?}"
         );
+        assert!(
+            !conflict.message.contains("Conflict:"),
+            "the status label is stripped — the sentence speaks bare: {conflict:?}"
+        );
     }
 
     #[test]
     fn map_api_error_renders_bad_request_as_invalid_params_carrying_the_message() {
+        // Same story for the 400: the `Bad request: ` label comes off at the mapper.
         let bad_request = map_api_error(
             "rename_context",
             ForbiddenRule::ContextAdministration,
-            ApiError::BadRequest("name '!!!' has no addressable content".to_string()),
+            ClientError::Server {
+                status: 400,
+                message: "Bad request: name '!!!' has no addressable content".to_string(),
+            },
         );
         assert_eq!(
             bad_request.code,
@@ -573,6 +635,10 @@ mod tests {
         assert!(
             bad_request.message.contains("no addressable content"),
             "the service's message must survive onto MCP: {bad_request:?}"
+        );
+        assert!(
+            !bad_request.message.contains("Bad request:"),
+            "the status label is stripped: {bad_request:?}"
         );
     }
 }

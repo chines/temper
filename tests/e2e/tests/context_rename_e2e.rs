@@ -36,9 +36,6 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use temper_core::types::context::RenameContextRequest;
-use temper_services::auth_config::{AuthConfig, AuthMode};
-use temper_services::config::ApiConfig;
-use temper_services::state::{AppState, JwksKeyStore};
 
 /// Provision a profile by hitting an authed endpoint (auto-provision on first request).
 async fn provision(app: &common::E2eTestApp, token: &str) -> Uuid {
@@ -192,74 +189,17 @@ async fn cli_rename(
 
 /// An MCP service over the same pool. The service carries no auth state, so
 /// the reader and the stranger share ONE instance; each call resolves its own
-/// principal through the gate. Local to this file.
-async fn mcp_service_for(pool: &sqlx::PgPool) -> temper_mcp::service::TemperMcpService {
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let state = AppState::new(pool.clone(), jwks_store, api_config);
-    temper_mcp::service::TemperMcpService::new(
-        state,
-        temper_mcp::service::relay_off_config(),
-        temper_mcp::service::shared_relay_pool(),
-    )
-}
-
-/// Request `Parts` whose claims name `sub` — the identity the gate resolves for a
-/// call. `exp` is fine unenforced here: the JWT middleware validated it in prod;
-/// the gate re-checks nothing about expiry, only the standing.
-fn mcp_parts_for(sub: &str) -> axum::http::request::Parts {
-    axum::http::Request::builder()
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: sub.to_string(),
-            email: None,
-            email_verified: None,
-            azp: None,
-            gty: None,
-            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
-            iat: 0,
-        })
-        .body(())
-        .expect("build request")
-        .into_parts()
-        .0
-}
-
-/// The refusal message the MCP `rename_context` tool renders for a caller.
+/// The refusal message the MCP `rename_context` tool renders for a caller. The
+/// tool is relayed, so the caller's identity is their own real bearer in `parts`.
 async fn mcp_rename_refusal(
     svc: &temper_mcp::service::TemperMcpService,
-    profile: &temper_core::types::Profile,
+    parts: &axum::http::request::Parts,
     context_id: Uuid,
     name: &str,
 ) -> String {
     let err = temper_mcp::tools::contexts::rename_context(
         svc,
-        profile.clone(),
+        parts,
         temper_mcp::tools::contexts::RenameContextInput {
             context: context_id,
             name: name.to_owned(),
@@ -274,7 +214,7 @@ async fn mcp_rename_refusal(
 /// distinguishable from each other, on HTTP, on the CLI and on MCP.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_two_dialects_survive_every_surface(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
 
     let admin_id = provision(&app, &app.token).await;
     let reader_token = common::generate_second_user_jwt();
@@ -343,17 +283,12 @@ async fn the_two_dialects_survive_every_surface(pool: sqlx::PgPool) {
     // ── MCP ──────────────────────────────────────────────────────────────────────────────────
     // The surface with its own mapper (`map_api_error`), which the shared gate never sees — so
     // this is the door where the rendering could diverge even though the decision cannot.
-    // ONE shared service instance: the reader's and the stranger's calls each
-    // resolve their own principal through the gate, so identity separation is
-    // per-call, not per-service.
-    let reader_svc = mcp_service_for(&pool).await;
-    let reader_parts = mcp_parts_for("e2e-second-user");
-    let reader_profile = reader_svc
-        .ensure_profile_from_parts(&reader_parts)
-        .await
-        .expect("the reader resolves through the gate");
+    // The tool crosses the network door (beat G3d), so the leg drives the relay with each
+    // identity's REAL bearer — one shared service instance, identity per-call, not per-service.
+    let reader_svc = app.mcp_relay_service(pool.clone()).await;
+    let reader_parts = app.relay_parts_for(&reader_token);
     let reader_mcp =
-        mcp_rename_refusal(&reader_svc, &reader_profile, *context.id, "Reader MCP").await;
+        mcp_rename_refusal(&reader_svc, &reader_parts, *context.id, "Reader MCP").await;
     assert!(
         reader_mcp.contains("administer the context"),
         "MCP renders the 403 as the (one-sided) administration requirement: {reader_mcp}"
@@ -363,13 +298,9 @@ async fn the_two_dialects_survive_every_surface(pool: sqlx::PgPool) {
         "rename has no target team — that clause belongs to share/unshare/transfer: {reader_mcp}"
     );
 
-    let stranger_parts = mcp_parts_for("e2e-third-user");
-    let stranger_profile = reader_svc
-        .ensure_profile_from_parts(&stranger_parts)
-        .await
-        .expect("the stranger resolves through the gate");
+    let stranger_parts = app.relay_parts_for(&stranger_token);
     let stranger_mcp =
-        mcp_rename_refusal(&reader_svc, &stranger_profile, *context.id, "Stranger MCP").await;
+        mcp_rename_refusal(&reader_svc, &stranger_parts, *context.id, "Stranger MCP").await;
     assert!(
         stranger_mcp.contains("context not found or not readable"),
         "MCP carries the service's own withholding message: {stranger_mcp}"
