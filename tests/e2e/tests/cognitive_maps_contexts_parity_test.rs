@@ -1,21 +1,22 @@
 #![cfg(feature = "test-db")]
-//! The cognitive_maps + contexts families' parity suite, authored against the DIRECT
-//! binding first (beat G3d — the fourth proof of the G3a-prime pattern, the register's
-//! largest cluster).
+//! The cognitive_maps + contexts families' parity suite (beat G3d — the register's
+//! largest cluster), authored green against the DIRECT binding first (the fourth
+//! proof of the G3a-prime pattern) and carried through the network door in the swap
+//! commit: every refusal face below was pinned against the direct callsites BEFORE
+//! the tools crossed, so parity is proven, not presumed.
 //!
 //! Applies [the G3c discipline](temper task: the `ledger_graph_parity_test.rs` header)
-//! to ten tools before the migration touches them: cogmap read/list/create/materialize,
-//! context read/manage/materialize, describe_schema, invocation read/manage. A parity
-//! suite that never saw the old binding cannot prove parity. At the swap the tools
-//! cross the network door and the driving changes with them: the tools take the
-//! request's `Parts` instead of a resolved `Profile`, and these drivers' one bridging
-//! line (`ensure_profile_from_parts` here, the relayed parts handed straight through
-//! there) is the only line that changes — signatures byte-stable, assertions carried.
+//! to ten tools: cogmap read/list/create/materialize, context read/manage/materialize,
+//! describe_schema, invocation read/manage. The tools take the request's `Parts` and
+//! forward to their deployed routes; these drivers hand the parts straight through —
+//! signatures byte-stable from the pre-swap suite, assertions carried or flipped
+//! under a declared delta.
 //!
 //! # The refusal faces, named before they are witnessed (learning 4)
 //!
 //! Each face below was verified at its callsite before being pinned (arm shape, not
-//! line number).
+//! line number). Faces marked FLIPPED DELTA changed rendering at the swap, in the
+//! same commit as the migration, per the G3c delta format.
 //!
 //! **cogmap reads** (`tools/cognitive_maps.rs`)
 //! - *Garbage refs* — `parse_ref` failures render `invalid_params` at the parse
@@ -25,9 +26,10 @@
 //!   answers a 200 `[]`; `analytics` refuses `invalid_params` with the fixed
 //!   no-leak sentence "cognitive map not found or not readable"; `show` carries the
 //!   service's own identical sentence (its `NotFound` arm destructures the payload
-//!   bare); `charter` answers a 200 `[]` beside the leading READING NOTICE. A reader
-//!   who cannot see the map is never told more than "not found or not readable" —
-//!   and never errors where the posture is data.
+//!   bare); `charter` is the FLIPPED projection delta below — the door denies it
+//!   with the show route's sentence. A reader who cannot see the map is never told
+//!   more than "not found or not readable" — and never errors where the posture is
+//!   data (charter's deny-is-an-error posture is the one declared exception).
 //! - *`materialize_delta`* — an unreadable anchor raises `ApiError::NotFound`, which
 //!   the direct `map_api_error` has no arm for: it falls to the `internal_error`
 //!   catch-all carrying the service's sentence. **DECLARED PARITY DELTA CANDIDATE**:
@@ -66,7 +68,8 @@
 //! - *Taken names auto-suffix* — `create` never conflicts on a slug; the second
 //!   create at a colliding name lands at a suffixed slug. The Conflict faces live on
 //!   `rename` ("{owner} already owns a context with slug '{slug}'; pick another
-//!   name") — pinned with the colliding slug named.
+//!   name") — pinned with the colliding slug named; at the door the sentence arrives
+//!   bare, the `Conflict: ` label stripped and the tool prefix dropped.
 //! - *The two-sided gate* (share/unshare/transfer) denies bare `Forbidden` and the
 //!   tool speaks the requirement: "… administer the context and manage the target
 //!   team …". Rename's one-sided gate denies 403 to a reader-non-administeror and
@@ -74,9 +77,10 @@
 //!   constructed here (a visible-but-not-administered context needs a shared team
 //!   context + non-manager member) — the 403 arm is named, not pinned.
 //! - *Idempotent no-op-safes* — `shared: false` / `unshared: false` on repeats.
-//! - *`create` with a `+team` owner the caller cannot manage* — the direct tool maps
+//! - *`create` with a `+team` owner the caller cannot manage* — the direct tool mapped
 //!   EVERY create failure through `internal_error` (owner resolution included).
-//!   **DELTA CANDIDATE**: the door's 403/404 render `invalid_params`. Pinned direct.
+//!   **FLIPPED DELTA**: the door's 403/404 render `invalid_params`; the non-manager
+//!   arm now speaks the tool's requirement sentence.
 //!
 //! **context materialize**
 //! - *Below threshold for the owner* — the documented no-op ack.
@@ -103,37 +107,40 @@
 //!   `NotFound` arm renders `invalid_params` prefixed.
 //! - *Close* — a terminal envelope refuses `Conflict`("invocation {id} is already
 //!   '{status}' — close is a one-shot terminal transition"), which the direct
-//!   `map_err` has no Conflict arm for: **THE DECLARED PARITY DELTA** — pinned
-//!   `internal_error` here, flipped to `invalid_params` with the server's sentence
-//!   at the swap, the G3c flipped delta's twin. An unknown/unreadable id collapses
-//!   to `NotFound("invocation {id} not found")` → `invalid_params` prefixed (the
-//!   arm G3c's suite already wire-pinned; reused, not re-authored).
-//! - *Reads deny with data, never errors* — `show` of an unknown/unreadable envelope
-//!   answers the JSON text `null`; `list` answers `[]` filtered to the caller's own
-//!   reach. **DELTA CANDIDATE** for `show`: the wire route 404s where the direct
-//!   read answers null — named for the swap to re-derive.
+//!   `map_err` had no Conflict arm for: **THE FLIPPED PARITY DELTA** — pinned
+//!   `internal_error` pre-swap, `invalid_params` with the server's sentence at the
+//!   door, the G3c flipped delta's twin. An unknown/unreadable id collapses
+//!   to `NotFound("invocation {id} not found")` → `invalid_params`, the server's
+//!   sentence bare (the arm G3c's suite already wire-pinned; reused, not re-authored).
+//! - *Reads deny* — `list` denies with data, never errors: the outsider's view is
+//!   their own (empty) reach. `show` FLIPPED: the direct readback answered the JSON
+//!   text `null`; the wire route 404s unknown and unreadable alike (the leak-safe
+//!   contract), so the door renders `invalid_params` with the route's sentence.
 //!
-//! # The declared door mechanics the swap must keep (named now, argued at the PR)
+//! # The door mechanics the swap kept (declared pre-swap, argued at the PR)
 //!
-//! - **Charter crosses by projection, not a new route**: no standalone charter route
+//! - **Charter crossed by projection, not a new route**: no standalone charter route
 //!   exists, and `GET /api/cognitive-maps/{id}`'s `CogmapDetail.charter` is the
 //!   identical `Vec<CharterBlock>` composed FROM the same `cogmap_charter_select` —
 //!   the door's charter view is the show route plus a field projection. The declared
-//!   delta: an unreadable map's charter flips from the direct 200-empty to the show
-//!   route's 404 sentence (the route family's own deny-is-an-error posture).
-//! - **Context refs resolve in-process after the swap** — the orientation routes are
-//!   UUID-addressed and the ref grammar (`@me/<slug>`, `+team/<slug>`) is MCP-local
-//!   input shaping, the resources family's retained-resolver precedent; the resolver
-//!   keeps its `context not found: …` face, profile resolved per-request from parts.
+//!   delta REALIZED: an unreadable map's charter flips from the direct 200-empty to
+//!   the show route's 404 sentence (the route family's own deny-is-an-error posture).
+//! - **Context refs resolve in-process** — the orientation routes are UUID-addressed
+//!   and the ref grammar (`@me/<slug>`, `+team/<slug>`) is MCP-local input shaping,
+//!   the resources family's retained-resolver precedent; the resolver keeps its
+//!   `context not found: …` face, profile resolved per-request from parts.
 //!
 //! # How the tools are driven
 //!
-//! Through the tool functions — the same hop production dispatch makes. Pre-swap the
-//! driver resolves the caller from parts the way the handlers do
-//! (`ensure_profile_from_parts` over `direct_parts`-shaped extensions) and threads
-//! the profile; at the swap the same drivers hand the parts to the relayed tools.
-//! A second identity is its own parts: its real token, warmed through the listener,
-//! standing-approved — no synthetic claims.
+//! Through the tool functions — the same hop production dispatch makes. The drivers
+//! hand the request's `Parts` straight to the relayed tools: the parts carry the
+//! FULL production shape (the claims the middleware injects beside the bearer), the
+//! API adjudicates Level 1 + 2 from the wire, and the one retained in-process read
+//! (the context-anchor resolver) reads the claims. A second identity is its own
+//! parts: its real token, warmed through the listener, standing-approved — no
+//! synthetic claims. The suite header above still names the DIRECT faces the
+//! pre-swap pins held: a refusal sentence that survives the door unchanged is the
+//! proof the suite exists to give.
 
 mod common;
 
@@ -147,8 +154,8 @@ mod parity {
     use sqlx::PgPool;
     use uuid::Uuid;
 
-    /// The harness principal's email — the one `approve_app_principal` provisions and
-    /// standing-approves, and the profile `direct_parts` resolves.
+    /// The harness principal's email — the one `approve_app_principal` provisions
+    /// and standing-approves, the identity `direct_parts` carries.
     pub const EMAIL: &str = "e2e@test.example.com";
 
     /// The L0 kernel cognitive map reserved id (birth migration `20260625000001`) —
@@ -188,8 +195,8 @@ mod parity {
     /// A SECOND approved identity, warmed through the real listener (JIT
     /// provisioning with the correct handle, per-surface emitters, and its own
     /// default context) and standing-approved by its own email — the G3a idiom.
-    /// Returns what the direct driving needs: the token and the claims its
-    /// `direct_parts_for` parts carry.
+    /// Returns the token and the claims-carrying identity fields (the admin leg
+    /// still needs the email to promote its profile).
     pub async fn second_identity(
         app: &super::common::E2eTestApp,
         pool: &PgPool,
@@ -217,12 +224,13 @@ mod parity {
         (token, sub, email)
     }
 
-    /// Direct-family parts for an ARBITRARY approved identity — both extensions the
-    /// gate reads (`RawJwtClaims` + `BearerToken`, as the JWT middleware injects them
-    /// in production), carrying that identity's real claims. The pre-swap twin of
-    /// `relay_parts_for`; at the swap these builders die and the drivers hand the
-    /// token to `relay_parts_for` instead.
-    pub fn direct_parts_for(
+    /// The production parts shape for an ARBITRARY approved identity: the claims
+    /// extension beside the bearer, exactly as the JWT middleware injects them. The
+    /// door forwards on the bearer alone; the one retained in-process read (the
+    /// context-anchor resolver) reads the claims — so a bare `relay_parts_for`
+    /// (bearer only) would blind THAT read. Identity is consistent by construction:
+    /// both halves come from the one `(token, sub, email)` triple.
+    pub fn identity_parts_for(
         _app: &super::common::E2eTestApp,
         token: &str,
         sub: &str,
@@ -240,7 +248,7 @@ mod parity {
                 iat: 0,
             })
             .body(())
-            .expect("direct parts build")
+            .expect("identity parts build")
             .into_parts()
             .0
     }
@@ -282,8 +290,9 @@ use common::E2eTestApp;
 use parity::{code_of, input, notice_then_body, one_text};
 
 /// The parity harness, once per test: the relay-ready app over this pool, the MCP
-/// service, and the harness principal's direct parts — the pre-swap bearer vehicle
-/// the gate resolves a profile from.
+/// service, and the harness principal's parts — the full production shape, claims
+/// beside bearer (the door forwards on the bearer; the retained context-anchor
+/// resolver reads the claims).
 async fn harness(pool: PgPool) -> (E2eTestApp, TemperMcpService, axum::http::request::Parts) {
     let app = common::setup_relay(pool).await;
     let svc = app.mcp_relay_service(app.pool.clone()).await;
@@ -302,10 +311,9 @@ async fn run_cogmap_read(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::cognitive_maps::cogmap_read(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::cognitive_maps::CogmapReadInput>(params),
     )
     .await
@@ -316,10 +324,9 @@ async fn run_cogmap_list(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::cognitive_maps::cogmap_list(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::cognitive_maps::CogmapListInput>(params),
     )
     .await
@@ -330,10 +337,9 @@ async fn run_cogmap_create(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::cognitive_maps::cogmap_create(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::cognitive_maps::CogmapCreateInput>(params),
     )
     .await
@@ -344,10 +350,9 @@ async fn run_cogmap_materialize(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::cognitive_maps::cogmap_materialize(
         svc,
-        profile,
+        parts,
         input::<temper_core::types::materialize::MaterializeTriggerInput>(params),
     )
     .await
@@ -358,10 +363,9 @@ async fn run_context_read(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::contexts::context_read(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::contexts::ContextReadInput>(params),
     )
     .await
@@ -372,10 +376,9 @@ async fn run_context_manage(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::contexts::context_manage(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::contexts::ContextManageInput>(params),
     )
     .await
@@ -386,10 +389,9 @@ async fn run_context_materialize(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::cognitive_maps::context_materialize(
         svc,
-        profile,
+        parts,
         input::<temper_core::types::materialize::ContextMaterializeInput>(params),
     )
     .await
@@ -400,10 +402,9 @@ async fn run_describe_schema(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::doc_types::describe_schema(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::doc_types::DescribeSchemaInput>(params),
     )
     .await
@@ -414,10 +415,9 @@ async fn run_invocation_read(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::invocations::invocation_read(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::invocations::InvocationReadInput>(params),
     )
     .await
@@ -428,10 +428,9 @@ async fn run_invocation_manage(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::invocations::invocation_manage(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::invocations::InvocationManageInput>(params),
     )
     .await
@@ -439,15 +438,16 @@ async fn run_invocation_manage(
 
 // ── Suite-local fixtures ───────────────────────────────────────────────────────
 
-/// A second identity's parts, ready to drive — the direct twin of `relay_parts_for`.
+/// A second identity's parts, ready to drive — the full production shape, both
+/// extensions carrying the one identity.
 async fn outsider_parts(app: &E2eTestApp, tag: &str) -> axum::http::request::Parts {
     let (token, sub, email) = parity::second_identity(app, &app.pool, tag).await;
-    parity::direct_parts_for(app, &token, &sub, &email)
+    parity::identity_parts_for(app, &token, &sub, &email)
 }
 
 /// Genesis through the tool — the family's own write path, never a struct-literal
 /// command: the deserializer pins the wire fields and the tool pins the command
-/// shaping (empty charter, Mcp origin).
+/// shaping (the empty charter; the `@mcp` surface rides the door's carrier).
 async fn genesis(
     svc: &TemperMcpService,
     parts: &axum::http::request::Parts,
@@ -625,32 +625,28 @@ async fn analytics_refuses_an_unreadable_or_absent_map_with_the_no_leak_sentence
     }
 }
 
-/// `charter`'s deny posture is the empty vec beside the trust-tier notice — the
-/// marking rides the response no matter what the content is, and a non-reader gets
-/// an answer, never an error. Pinned against the grant-private genesis so the face
-/// under test is the deny, not L0's genuinely-empty kernel charter.
+/// `charter` denies an unreadable map with the show route's sentence — the door's
+/// charter view is the show route plus a field projection (no additive route), and
+/// the route family's deny-is-an-error posture travels with it. THE DECLARED
+/// PROJECTION DELTA, flipped in the same commit as the swap: the direct binding
+/// answered a 200 empty vec beside the reading notice (pinned there pre-swap).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn charter_answers_empty_for_an_unreadable_map_beside_the_reading_notice(pool: PgPool) {
+async fn charter_denies_an_unreadable_map_with_the_show_routes_sentence(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
     let (map_id, _telos, _created) = genesis(&svc, &parts, "Unchartered").await;
     let other_parts = outsider_parts(&_app, "charter").await;
 
-    let res = run_cogmap_read(
+    let err = run_cogmap_read(
         &svc,
         &other_parts,
         json!({ "view": "charter", "cogmap": map_id.to_string() }),
     )
     .await
-    .expect("an unreadable map answers empty");
-    let (notice, blocks) = notice_then_body(&res);
-    assert!(
-        notice.starts_with("READING NOTICE"),
-        "the charter trust tier is stated where the content arrives: {notice}"
-    );
+    .expect_err("the projection's deny is the route's error");
+    assert_eq!(code_of(&err), -32602, "caller error: {err}");
     assert_eq!(
-        blocks.as_array().map(Vec::len),
-        Some(0),
-        "deny is the empty vec, never an error: {blocks}"
+        err.message, "cognitive map not found or not readable",
+        "the show route's own sentence, byte-exact: {err}"
     );
 }
 
@@ -685,7 +681,7 @@ async fn list_answers_only_maps_the_caller_can_see_beside_the_excerpt_notice(poo
     let (_id, _telos, created) = genesis(&svc, &parts, "Solo Map").await;
     assert!(created, "first genesis creates");
     let (token, sub, email) = parity::second_identity(&app, &app.pool, "list").await;
-    let other_parts = parity::direct_parts_for(&app, &token, &sub, &email);
+    let other_parts = parity::identity_parts_for(&app, &token, &sub, &email);
 
     let (notice, mine) = notice_then_body(
         &run_cogmap_list(&svc, &parts, json!({}))
@@ -767,11 +763,12 @@ async fn materialize_delta_reports_the_formation_delta_for_a_readable_map(pool: 
     );
 }
 
-/// THE DELTA-CANDIDATE FACE: an unreadable anchor raises the service's
-/// `NotFound`, which the direct `map_api_error` has no arm for — the catch-all
-/// renders it `internal_error` carrying the service's sentence. The wire route
-/// 404s this face, so the swap flips this pin to `invalid_params` with the
-/// server's sentence (the G3c closed-invocation family), in the same commit.
+/// THE FLIPPED DELTA FACE: an unreadable anchor raises the service's `NotFound`,
+/// which the direct `map_api_error` had no arm for — the catch-all rendered it
+/// `internal_error` carrying the service's sentence (pinned there by this suite
+/// pre-swap). The wire route 404s the face, and the door renders it `invalid_params`
+/// with the server's own sentence — the G3c closed-invocation family, flipped in the
+/// same commit as the swap.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn materialize_delta_refuses_an_unreadable_map_with_the_service_sentence(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
@@ -790,17 +787,12 @@ async fn materialize_delta_refuses_an_unreadable_map_with_the_service_sentence(p
     .expect_err("an unreadable anchor refuses");
     assert_eq!(
         code_of(&err),
-        -32603,
-        "the direct catch-all renders the un-armed NotFound as a fault — the pinned face: {err}"
+        -32602,
+        "the caller-actionable 404 arm — the flipped delta: {err}"
     );
-    assert!(
-        err.message.contains("cogmap_materialize_delta failed: "),
-        "the tool's context prefix: {err}"
-    );
-    assert!(
-        err.message
-            .contains("cognitive map not found or not readable"),
-        "the service's own sentence survives the catch-all: {err}"
+    assert_eq!(
+        err.message, "cognitive map not found or not readable",
+        "the server's own sentence, un-prefixed, byte-exact: {err}"
     );
 }
 
@@ -842,6 +834,29 @@ async fn genesis_creates_a_map_with_an_empty_charter_its_creator_can_author(pool
         detail["cogmap"]["telos_resource_id"].as_str(),
         Some(telos.to_string().as_str()),
         "the telos resource is realized: {detail}"
+    );
+
+    // The charter VIEW on a readable map still leads with the trust-tier marking —
+    // the projection's deny face flipped at the swap, but the notice must ride the
+    // content wherever the content arrives (the MCP witness for the marking; the
+    // deny face no longer carries content, so it can no longer pin it).
+    let (notice, blocks) = notice_then_body(
+        &run_cogmap_read(
+            &svc,
+            &parts,
+            json!({ "view": "charter", "cogmap": id.to_string() }),
+        )
+        .await
+        .expect("the creator reads their own charter"),
+    );
+    assert!(
+        notice.starts_with("READING NOTICE"),
+        "the charter trust tier is stated where the content arrives: {notice}"
+    );
+    assert_eq!(
+        blocks.as_array().map(Vec::len),
+        Some(0),
+        "born with an EMPTY charter, notice beside it: {blocks}"
     );
 
     let ack = one_text(
@@ -894,7 +909,7 @@ async fn a_non_admins_explicit_ids_are_replaced_by_server_minted_ones(pool: PgPo
 async fn an_admins_explicit_ids_are_honored_and_genesis_is_idempotent_there(pool: PgPool) {
     let (app, svc, _parts) = harness(pool).await;
     let (token, sub, email) = parity::second_identity(&app, &app.pool, "admin").await;
-    let admin_parts = parity::direct_parts_for(&app, &token, &sub, &email);
+    let admin_parts = parity::identity_parts_for(&app, &token, &sub, &email);
     let admin_profile = parity::profile_id_by_email(&app.pool, &email).await;
     common::make_system_admin(&app.pool, admin_profile).await;
 
@@ -979,7 +994,7 @@ async fn materialize_below_threshold_is_a_documented_no_op(pool: PgPool) {
 async fn materialize_names_the_missing_detail_for_a_reader_who_cannot_author(pool: PgPool) {
     let (app, svc, _parts) = harness(pool).await;
     let (token, sub, email) = parity::second_identity(&app, &app.pool, "matwrite").await;
-    let other_parts = parity::direct_parts_for(&app, &token, &sub, &email);
+    let other_parts = parity::identity_parts_for(&app, &token, &sub, &email);
 
     let err = run_cogmap_materialize(
         &svc,
@@ -1008,7 +1023,9 @@ async fn materialize_names_the_missing_detail_for_a_reader_who_cannot_author(poo
     );
 }
 
-/// An absent map is the NotFound arm, prefixed the same way.
+/// An absent map is the NotFound arm — the door carries the backend's own sentence
+/// un-prefixed (the direct binding's `{action}: ` prefix dropped at the swap; kind
+/// and gate identical).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn materialize_refuses_an_absent_map_with_the_not_found_arm(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
@@ -1021,11 +1038,10 @@ async fn materialize_refuses_an_absent_map_with_the_not_found_arm(pool: PgPool) 
     .await
     .expect_err("an absent map refuses");
     assert_eq!(code_of(&err), -32602, "caller error: {err}");
-    assert!(
-        err.message.contains(&format!(
-            "cogmap_materialize: cognitive map {ghost} not found"
-        )),
-        "the NotFound arm's prefixed sentence: {err}"
+    assert_eq!(
+        err.message,
+        format!("cognitive map {ghost} not found"),
+        "the server's own sentence, un-prefixed: {err}"
     );
 }
 
@@ -1126,7 +1142,7 @@ async fn an_unresolvable_context_ref_refuses_as_not_found(pool: PgPool) {
 async fn an_unreadable_context_ref_refuses_at_the_resolve_gate(pool: PgPool) {
     let (app, svc, _parts) = harness(pool).await;
     let (token, sub, email) = parity::second_identity(&app, &app.pool, "ctxread").await;
-    let other_parts = parity::direct_parts_for(&app, &token, &sub, &email);
+    let other_parts = parity::identity_parts_for(&app, &token, &sub, &email);
     let harness_context = parity::default_context_id(&app.pool).await;
 
     let err = run_context_read(
@@ -1251,7 +1267,9 @@ async fn rename_readdresses_the_context(pool: PgPool) {
 }
 
 /// The rename Conflict face names the colliding slug — caller-fixable, rendered
-/// `invalid_params` with the tool's `{context}: ` prefix over the service sentence.
+/// `invalid_params` with the server's own sentence, the `Conflict: ` status label
+/// stripped and the direct binding's `{context}: ` prefix dropped (the declared
+/// delta; the pinned sentence and the named slug carry green).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn rename_conflicts_name_the_colliding_slug(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
@@ -1287,7 +1305,10 @@ async fn rename_conflicts_name_the_colliding_slug(pool: PgPool) {
         -32602,
         "a taken slug is caller-fixable, not an internal error: {err}"
     );
-    assert!(err.message.contains("rename_context: "), "{err}");
+    assert!(
+        !err.message.contains("rename_context"),
+        "the door carries the server's sentence bare — no tool prefix: {err}"
+    );
     assert!(
         err.message.contains("already owns a context with slug"),
         "the conflict sentence: {err}"
@@ -1401,7 +1422,7 @@ async fn the_two_sided_gate_speaks_its_requirement_then_idempotence_holds(pool: 
 async fn rename_by_a_non_reader_refuses_with_the_not_found_sentence(pool: PgPool) {
     let (app, svc, _parts) = harness(pool).await;
     let (token, sub, email) = parity::second_identity(&app, &app.pool, "renread").await;
-    let other_parts = parity::direct_parts_for(&app, &token, &sub, &email);
+    let other_parts = parity::identity_parts_for(&app, &token, &sub, &email);
     let harness_context = parity::default_context_id(&app.pool).await;
 
     let err = run_context_manage(
@@ -1416,10 +1437,9 @@ async fn rename_by_a_non_reader_refuses_with_the_not_found_sentence(pool: PgPool
     .await
     .expect_err("a non-reader cannot rename what it cannot see");
     assert_eq!(code_of(&err), -32602);
-    assert!(
-        err.message
-            .contains("rename_context: context not found or not readable"),
-        "the 404 denial's carried sentence: {err}"
+    assert_eq!(
+        err.message, "context not found or not readable",
+        "the 404 denial's carried sentence, un-prefixed: {err}"
     );
 }
 
@@ -1461,11 +1481,13 @@ async fn transfer_reassigns_ownership_to_a_team(pool: PgPool) {
     );
 }
 
-/// `create` with a `+team` owner the caller cannot manage is — TODAY — the
-/// direct tool's blanket internal_error, carrying the resolver's sentence.
-/// DELTA CANDIDATE: the door's 403 renders `invalid_params`; pinned direct here.
+/// `create` with a `+team` owner the caller cannot manage is caller-actionable at
+/// the door: the FLIPPED DELTA — the direct tool mapped the resolver's `Forbidden`
+/// to the internal catch-all carrying "Failed to resolve owner: " (pinned there
+/// pre-swap); the wire route answers 403 and the tool renders the requirement the
+/// caller can act on, `invalid_params`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_team_owned_create_by_a_non_manager_is_the_catch_all_today(pool: PgPool) {
+async fn a_team_owned_create_by_a_non_manager_refuses_with_the_requirement(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
     let err = run_context_manage(
         &svc,
@@ -1480,12 +1502,13 @@ async fn a_team_owned_create_by_a_non_manager_is_the_catch_all_today(pool: PgPoo
     .expect_err("a watcher cannot create team-owned contexts");
     assert_eq!(
         code_of(&err),
-        -32603,
-        "the direct tool maps every create failure internal_error: {err}"
+        -32602,
+        "the flipped delta: caller-actionable, not a fault: {err}"
     );
-    assert!(
-        err.message.contains("Failed to resolve owner: "),
-        "the resolver's context prefix: {err}"
+    assert_eq!(
+        err.message,
+        "create_context requires that you manage the team that will own it (owner/maintainer)",
+        "the tool's requirement sentence, byte-exact: {err}"
     );
 }
 
@@ -1663,7 +1686,7 @@ async fn invocation_open_against_l0_answers_the_minted_id(pool: PgPool) {
 async fn invocation_open_refuses_a_reader_with_the_detailed_authorship_sentence(pool: PgPool) {
     let (app, svc, _parts) = harness(pool).await;
     let (token, sub, email) = parity::second_identity(&app, &app.pool, "invopen").await;
-    let other_parts = parity::direct_parts_for(&app, &token, &sub, &email);
+    let other_parts = parity::identity_parts_for(&app, &token, &sub, &email);
 
     let err = run_invocation_manage(
         &svc,
@@ -1728,12 +1751,13 @@ async fn invocation_open_refuses_an_absent_map_with_the_terse_sentence(pool: PgP
 }
 
 /// Close is a one-shot terminal transition: the happy close answers the ack, the
-/// re-close refuses — TODAY as the direct catch-all's `internal_error` (no
-/// Conflict arm). THE DECLARED PARITY DELTA: the wire's 409 is caller-actionable,
-/// so the swap flips this pin to `invalid_params` with the server's sentence —
-/// the G3c flipped delta's twin, in the same commit.
+/// re-close refuses — with the door's caller-actionable 409 arm. THE FLIPPED
+/// PARITY DELTA: the direct binding's `map_err` had no Conflict arm and rendered
+/// this face `internal_error` (pinned there pre-swap); the swap flips the pin to
+/// `invalid_params` with the server's own sentence, the `Conflict: ` label
+/// stripped — the G3c flipped delta's twin, in the same commit.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_closed_invocation_refuses_with_the_internal_error_catch_all(pool: PgPool) {
+async fn a_closed_invocation_refuses_with_the_conflict_arm(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
     let invocation = open_invocation_for_harness(&app, &svc, &parts).await;
 
@@ -1770,14 +1794,16 @@ async fn a_closed_invocation_refuses_with_the_internal_error_catch_all(pool: PgP
     .expect_err("a terminal envelope takes no second close");
     assert_eq!(
         code_of(&err),
-        -32603,
-        "the direct face: no Conflict arm, so the catch-all faults — the pinned delta: {err}"
+        -32602,
+        "a caller-actionable 409, not a fault — the flipped delta: {err}"
     );
-    assert!(err.message.contains("invocation_close: "), "{err}");
-    assert!(
-        err.message
-            .contains(&format!("invocation {invocation} is already 'completed'")),
-        "the server's own sentence survives the catch-all: {err}"
+    assert_eq!(
+        err.message,
+        format!(
+            "invocation {invocation} is already 'completed' — close is a one-shot \
+             terminal transition"
+        ),
+        "the server's own sentence, label stripped, byte-exact: {err}"
     );
 }
 
@@ -1895,15 +1921,17 @@ async fn invocation_read_list_narrows_by_status_and_by_cogmap(pool: PgPool) {
     );
 }
 
-/// Reads deny with DATA, never errors: an outsider's `show` of an envelope
-/// originating on a map they cannot read answers null and their `list` is their
-/// own (empty) view — the same no-leak convention as the cogmap reads. (The
-/// envelope's read gate rides the ORIGINATING MAP's readability, so the L0-opened
-/// envelopes of the earlier tests are visible to every approved profile — the
-/// private map is what makes the deny arm constructible.) DELTA CANDIDATE on
-/// `show`: the wire route 404s where the direct read answers null; named for the swap.
+/// Reads deny on TWO postures at the door: the outsider's `list` stays DATA —
+/// their own (empty) view, never an error — while their `show` of an envelope
+/// originating on a map they cannot read refuses with the route's uniform 404
+/// sentence (deny and absent indistinguishable, leak-safe). THE FLIPPED DELTA on
+/// `show`: the direct readback answered null (pinned there pre-swap); the wire
+/// route 404s the face and the door carries the sentence. (The envelope's read
+/// gate rides the ORIGINATING MAP's readability, so the L0-opened envelopes of
+/// the earlier tests are visible to every approved profile — the private map is
+/// what makes the deny arm constructible.)
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn an_outsiders_envelope_reads_deny_with_data_never_an_error(pool: PgPool) {
+async fn an_outsiders_list_denies_with_data_and_show_with_the_route_404(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
     // The envelope originates on the harness's grant-private map, not on L0.
     let (map_id, _telos, _created) = genesis(&svc, &parts, "Private Run Map").await;
@@ -1929,20 +1957,23 @@ async fn an_outsiders_envelope_reads_deny_with_data_never_an_error(pool: PgPool)
         .expect("uuid");
 
     let (token, sub, email) = parity::second_identity(&app, &app.pool, "invread").await;
-    let other_parts = parity::direct_parts_for(&app, &token, &sub, &email);
+    let other_parts = parity::identity_parts_for(&app, &token, &sub, &email);
 
-    let nothing = one_text(
-        &run_invocation_read(
-            &svc,
-            &other_parts,
-            json!({ "view": "show", "invocation": invocation.to_string() }),
-        )
-        .await
-        .expect("an outsider's show answers, it does not error"),
+    let err = run_invocation_read(
+        &svc,
+        &other_parts,
+        json!({ "view": "show", "invocation": invocation.to_string() }),
+    )
+    .await
+    .expect_err("an outsider's show is refused at the route's 404");
+    assert_eq!(
+        code_of(&err),
+        -32602,
+        "the route's uniform 404 is caller-actionable: {err}"
     );
-    assert!(
-        nothing.is_null(),
-        "deny is the null view — no existence oracle: {nothing}"
+    assert_eq!(
+        err.message, "invocation not found or not readable",
+        "the route's own sentence, byte-exact — deny and absent indistinguishable: {err}"
     );
 
     let rows = one_text(

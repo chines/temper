@@ -4,12 +4,19 @@
 //! embedded schemas it reads. It was private to this crate until the web surface needed
 //! to ask which states a kind of work carries; MCP is now one of the doors that renders
 //! it rather than the only one that has it.
+//!
+//! There is no binding to swap here: every view is pure compute over the embedded
+//! schemas, touches no backend and no wire. The signatures still take the request's
+//! `Parts` (shape-only, unused) so the door's one dispatch shape — and the source gate
+//! that enforces it — holds for the whole cluster without a special case. The
+//! corollary is stated where a reviewer will look for it: NO gate runs beyond the
+//! MCP edge's JWT validation (the direct binding's Level 2 check ran for nothing —
+//! the content is static product vocabulary, never tenant data; recorded at the
+//! swap's review round).
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
-
-use temper_core::types::Profile;
 
 use crate::service::TemperMcpService;
 
@@ -30,7 +37,7 @@ pub struct DescribeDocTypeInput {
 
 pub async fn list_doc_types(
     _svc: &TemperMcpService,
-    _profile: Profile,
+    _parts: &http::request::Parts,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     // Doc-types are name-keyed in the substrate — enumerate the embedded schema set
     // (the single source of truth) rather than a DB table.
@@ -44,7 +51,7 @@ pub async fn list_doc_types(
 
 pub async fn describe_doc_type(
     _svc: &TemperMcpService,
-    _profile: Profile,
+    _parts: &http::request::Parts,
     input: DescribeDocTypeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let response = temper_workflow::schema::describe_doc_type(&input.name).map_err(|e| {
@@ -66,7 +73,7 @@ pub async fn describe_doc_type(
 /// command; both render the shared `temper_workflow::schema::OpenMetaConvention`.
 pub async fn describe_open_meta(
     _svc: &TemperMcpService,
-    _profile: Profile,
+    _parts: &http::request::Parts,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let convention = temper_workflow::schema::describe_open_meta().map_err(|e| {
         rmcp::ErrorData::new(
@@ -113,18 +120,18 @@ pub struct DescribeSchemaInput {
 /// Dispatch the consolidated describe-schema tool.
 pub async fn describe_schema(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &http::request::Parts,
     input: DescribeSchemaInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.view {
-        DescribeSchemaView::DocTypes => list_doc_types(svc, profile).await,
+        DescribeSchemaView::DocTypes => list_doc_types(svc, parts).await,
         DescribeSchemaView::DocType => {
             let name = input.name.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("doc_type requires `name`".to_string(), None)
             })?;
-            describe_doc_type(svc, profile, DescribeDocTypeInput { name }).await
+            describe_doc_type(svc, parts, DescribeDocTypeInput { name }).await
         }
-        DescribeSchemaView::OpenMeta => describe_open_meta(svc, profile).await,
+        DescribeSchemaView::OpenMeta => describe_open_meta(svc, parts).await,
     }
 }
 

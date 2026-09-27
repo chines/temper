@@ -23,6 +23,48 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **The cognitive_maps + contexts families cross the network door — the register's largest cluster executes as real relayed calls**
+  Ten tool groups stop executing in-process and forward to their deployed routes
+  (`/api/cognitive-maps/…` read/genesis/materialize/bind/grant routes, the
+  `/api/contexts/…` read/manage/materialize routes, `/api/invocations` and its
+  read/close routes; describe_schema is pure compute and swaps shape-only) as
+  temper-client calls, exactly as the four families before them: the caller's
+  bearer re-issued, the service credential and the `mcp` carrier set by the relay,
+  refusals mapped arm-for-arm from the preserved bodies, and the direct methods'
+  `ensure_profile_from_parts` gates deleted whole — Level 1 + 2 execute at the API.
+  The `Surface::Mcp` origin fields the direct commands carried die to the carrier:
+  the ledger's `<handle>@mcp` emitter attribution is witnessed on a real open
+  through the door (the family's own witness test). The ONE retained in-process
+  read is the context-ref resolver (`@me/<slug>` is MCP-local input shaping whose
+  `@me` only exists at this surface — the resources family's retained-resolver
+  precedent), and `cogmap_read_charter` crosses by PROJECTION: the door's charter
+  view is the show route plus a field projection, no additive route. Tool names,
+  wire schemas, and tool descriptions are byte-identical. Who observes: an
+  MCP-calling agent, whose visible changes are the declared parity deltas named in
+  the parity suite's header — an unreadable-anchor materialize_delta, a re-closed
+  invocation (409), and a team-owned create by a non-manager now render
+  `invalid_params` with the server's/tool's own sentence (previously the direct
+  catch-alls' `internal_error`); not-found and conflict refusals drop the direct
+  maps' `{action}: `/`{context}: ` prefix and the `Conflict: `/`Bad request: `
+  status labels (kind and gate identical on every previously-pinned face; a few
+  unpinned catch-all faces changed kind to `invalid_params` with the door, named
+  in the tool files' headers); an unreadable map's charter view flips from the
+  direct 200-empty to the show route's 404 sentence (deny-is-an-error travels
+  with the projection); an outsider's invocation `show` flips from the direct
+  deny-with-null to the route's uniform 404 sentence (the `list` read keeps its
+  deny-with-data posture); and MCP `get` of a retired-but-administered context
+  now answers the row — the route's restore-reachability fallback behind the
+  door, where the direct `get_visible`-only read refused (the caller's own
+  administered data, identical to the CLI's read). The disclosure-dialect arms
+  (the detailed/terse authorship 403s, the share/rename requirement sentences)
+  are byte-stable, and describe_schema runs no gate beyond the MCP edge's JWT
+  validation — static product vocabulary, never tenant data (recorded at the
+  swap's review round).
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+
 - **The resources and search families' 400 faces drop the status label — the `api_error_cause` strip reaches the door's first two families**
   The seven relayed 400 arms (create/list/update/annotate/update_resource_meta/
   delete on resources; search's caller-error arm) now speak the server's own

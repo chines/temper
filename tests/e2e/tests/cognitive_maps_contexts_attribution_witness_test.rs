@@ -1,19 +1,21 @@
 #![cfg(feature = "test-db")]
-//! The cognitive_maps + contexts families' attribution witness, authored against
-//! the DIRECT binding first (the G3c witness idiom): the actor both bindings stamp.
+//! The cognitive_maps + contexts families' attribution witness (the G3c witness
+//! idiom), carried through the network door with its suite: the actor the door
+//! stamps.
 //!
-//! The invocation envelopes carry no dedicated surface column — `Surface::Mcp` from
-//! the tool's command survives on the ledger ONLY as the emitter entity's composed
-//! name (`<handle>@<surface-marker>`), which `resolve_emitter` resolves at the write
+//! The invocation envelopes carry no dedicated surface column — the surface survives
+//! on the ledger ONLY as the emitter entity's composed name
+//! (`<handle>@<surface-marker>`), which `resolve_emitter` resolves at the write
 //! (writes.rs:52-64) and `_event_append` stores in `emitter_entity_id`. So the
 //! witness opens an envelope through the TOOL and reads the open event's emitter
 //! entity name back through `kb_entities`: it must read `<handle>@mcp` — the
-//! harness's own handle, the `mcp` marker the direct command stamps and the door's
-//! planted carrier will stamp after the swap.
+//! harness's own handle, the `mcp` marker the door's planted carrier stamps
+//! (`X-Temper-Relayed-Surface: mcp` beside the service credential), the attribution
+//! the direct command's `Surface::Mcp` field used to carry.
 //!
-//! Bite contract (post-swap): a `Default::default()` in the swapped tool's origin
-//! mapping would emit `<handle>@web` and redden the `@mcp` assertion — exactly the
-//! G3c act-mapping probe's shape.
+//! Bite contract: a relay client that drops the carrier (or mislabels it) emits
+//! `<handle>@web` and reddens the `@mcp` assertion — probed from the relay-client
+//! builder, the one place the origin now lives.
 
 mod common;
 
@@ -32,7 +34,7 @@ async fn harness(
 ) {
     let app = common::setup_relay(pool).await;
     let svc = app.mcp_relay_service(app.pool.clone()).await;
-    let parts = app.direct_parts();
+    let parts = app.relay_parts();
     (app, svc, parts)
 }
 
@@ -50,13 +52,9 @@ async fn open_through_the_tool(
         .await
         .expect("the harness profile");
     common::grant_cogmap_write(&app.pool, L0_COGMAP, harness_profile).await;
-    let profile = svc
-        .ensure_profile_from_parts(parts)
-        .await
-        .expect("the harness profile");
     let res = temper_mcp::tools::invocations::invocation_manage(
         svc,
-        profile,
+        parts,
         serde_json::from_value(json!({
             "action": "open",
             "trigger_kind": "attribution_witness",
@@ -76,9 +74,9 @@ async fn open_through_the_tool(
 
 const L0_COGMAP: Uuid = Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
 
-/// A relayed-or-direct `invocation_open` stamps the ledger with the CALLER'S
-/// surface: the open event's emitter entity reads `<handle>@mcp` — the actor both
-/// bindings stamp. The handle is the harness's own; the marker is the surface.
+/// The relayed `invocation_open` stamps the ledger with the CALLER'S surface: the
+/// open event's emitter entity reads `<handle>@mcp` — the handle is the harness's
+/// own, and the marker is the surface the door's carrier planted.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_tool_invocation_open_stamps_the_ledger_with_the_callers_surface(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
