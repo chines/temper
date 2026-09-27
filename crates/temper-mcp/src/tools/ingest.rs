@@ -323,6 +323,49 @@ pub struct SegmentedIngestInput {
     pub expected_body_hash: Option<String>,
 }
 
+/// Map a wire-level [`SegmentedIngestInput`] of action `begin` onto the begin
+/// handler's input — the requirement arms first, then the wire-collision repair:
+/// the consolidated shape carries `content` (and `sources`) as top-level fields for
+/// APPEND, and serde binds a caller's segment-0 text to the outer slot because the
+/// outer field shares the JSON key with the flattened `create.content` — a begin by
+/// the advertised shape therefore arrived with `create.content: None` and refused
+/// "ingest_begin requires content" at the surface's integrity check. For begin the
+/// outer slot IS the segment text: honor it when the flattened side is absent.
+/// Append-begin shared keys arriving on BOTH sides keep the flattened value (never
+/// silently overwrite an explicitly nested `create.content`).
+fn begin_input_from(input: SegmentedIngestInput) -> Result<IngestBeginInput, rmcp::ErrorData> {
+    let SegmentedIngestInput {
+        action: _,
+        create,
+        content_hash,
+        block_budget,
+        total_blocks_hint,
+        source_hash,
+        content,
+        sources,
+        ..
+    } = input;
+    let mut create = create.ok_or_else(|| {
+        rmcp::ErrorData::invalid_params("begin requires create fields".to_string(), None)
+    })?;
+    if create.content.is_none() {
+        create.content = content;
+    }
+    if create.sources.is_none() {
+        create.sources = sources;
+    }
+    let content_hash = content_hash.ok_or_else(|| {
+        rmcp::ErrorData::invalid_params("begin requires `content_hash`".to_string(), None)
+    })?;
+    Ok(IngestBeginInput {
+        create,
+        content_hash,
+        block_budget,
+        total_blocks_hint,
+        source_hash,
+    })
+}
+
 /// Dispatch the consolidated segmented-ingest tool.
 pub async fn segmented_ingest(
     svc: &TemperMcpService,
@@ -330,26 +373,7 @@ pub async fn segmented_ingest(
     input: SegmentedIngestInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
-        IngestAction::Begin => {
-            let create = input.create.ok_or_else(|| {
-                rmcp::ErrorData::invalid_params("begin requires create fields".to_string(), None)
-            })?;
-            let content_hash = input.content_hash.ok_or_else(|| {
-                rmcp::ErrorData::invalid_params("begin requires `content_hash`".to_string(), None)
-            })?;
-            ingest_begin(
-                svc,
-                profile,
-                IngestBeginInput {
-                    create,
-                    content_hash,
-                    block_budget: input.block_budget,
-                    total_blocks_hint: input.total_blocks_hint,
-                    source_hash: input.source_hash,
-                },
-            )
-            .await
-        }
+        IngestAction::Begin => ingest_begin(svc, profile, begin_input_from(input)?).await,
         IngestAction::Append => {
             let resource = input.resource.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("append requires `resource`".to_string(), None)
@@ -409,5 +433,43 @@ pub async fn segmented_ingest(
             })?;
             ingest_blocks(svc, profile, IngestBlocksInput { resource }).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The consolidated tool's wire shape must route a begin call's `content` into
+    /// `create.content` — `#[serde(flatten)] Option<CreateResourceInput>` collects the
+    /// leftovers, but the outer `content` field (append's) shares the JSON key, so
+    /// raw serde binds it outer and `create.content` arrives None (the defect the
+    /// parity suite probed red). The dispatcher's reshape honors the outer slot as
+    /// begin's segment text — this pins the repair.
+    #[test]
+    fn the_consolidated_begin_input_routes_content_into_create() {
+        let input: SegmentedIngestInput = serde_json::from_value(serde_json::json!({
+            "action": "begin",
+            "context_ref": "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "doc_type_name": "research",
+            "title": "probe",
+            "content": "segment zero",
+            "content_hash": "deadbeef"
+        }))
+        .expect("begin input deserializes");
+        // The raw wire parse binds the outer slot (serde precedence) — named, not
+        // pretended flattened.
+        assert!(
+            input
+                .create
+                .as_ref()
+                .expect("create parsed")
+                .content
+                .is_none(),
+            "serde binds the shared key outer — the raw parse is the collision"
+        );
+        let begin = begin_input_from(input).expect("the reshape answers");
+        assert_eq!(begin.create.content.as_deref(), Some("segment zero"));
+        assert_eq!(begin.content_hash.as_str(), "deadbeef");
     }
 }
