@@ -23,6 +23,29 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **Two MCP wire-shape defects repaired in-band ahead of beat G4's swap — the consolidated segmented-ingest `begin` becomes usable, and blob commits accept whitespace-wrapped base64**
+  The beat G4 parity ground pass probed both red. (1) The consolidated
+  `segmented_ingest` tool's `begin` was unreachable on the wire: the outer `content`
+  field (the append step's) shares the JSON key with the flattened `create.content`,
+  and serde's outer-first binding left `create.content` `None` for every
+  begin-by-the-advertised-shape call, which the surface-side integrity check then
+  refused with "ingest_begin requires content". The dispatcher now reshapes the wire
+  input explicitly (outer `content`/`sources` honor as begin's segment text and
+  sources when the flattened side is absent — an explicitly nested field is never
+  overwritten). Tool declaration byte-identical; the repair is behavior, not
+  declaration. (2) `blob_manage` commit's base64 `content` refused any whitespace
+  (encoders wrap at 76 columns; an agent hands the tool one long wrapped string) —
+  the decode now strips ASCII whitespace first while keeping the alphabet strict
+  (URL-safe symbols and missing padding still refuse). Ruled 2026-09-27, Pete: both
+  fixed in-band with the parity work rather than preserved into the swap —
+  preserved-defect parity would have pinned a caller-visible refusal nobody defends.
+  Who observes: an MCP-calling agent, whose usable-begin and tolerant-decode are the
+  point.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+
 - **The shapes cogmap-home pair and the flat artifact read cross the wire — route-first for the beat G4 MCP door crossing**
   Three additive routes close the two per-method coverage gaps the beat G4 grounding
   found between the direct MCP tools and the wire: `GET/POST /api/cognitive-maps/{id}/shapes`

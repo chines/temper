@@ -166,6 +166,71 @@ impl E2eTestApp {
             temper_mcp::service::shared_relay_pool(),
         )
     }
+
+    /// The relay service with a live in-memory blob store — the blob families'
+    /// harness (beat G4 parity suite). `single_request_max_bytes` is deliberately
+    /// small so the read-ceiling refusal is cheap to construct; the ceiling's own
+    /// number is the operator's knob the tool names verbatim. The store is the
+    /// CALLER'S (`Arc<InMemoryBlobStore>`) so a test can seed blobs directly where a
+    /// commit gate would get in the way (the read ceiling's over-threshold fixture
+    /// commits past the very threshold it pins).
+    pub async fn mcp_relay_service_with_blob(
+        &self,
+        pool: PgPool,
+        store: std::sync::Arc<temper_substrate::blob_store::InMemoryBlobStore>,
+    ) -> temper_mcp::service::TemperMcpService {
+        let decoding_key =
+            jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
+                .expect("decoding key");
+        let jwks_store = JwksKeyStore::with_static_key(decoding_key, Algorithm::RS256);
+        let blob_config = temper_services::config::BlobConfig {
+            store_id: "test-blob-store".to_string(),
+            read_write_token: None,
+            credential_mode: temper_services::config::BlobCredentialMode::Token,
+            oidc_token_source: std::sync::Arc::new(|| None),
+            max_bytes: 100 * 1024 * 1024,
+            allowlist: vec![
+                "image/png".into(),
+                "image/jpeg".into(),
+                "image/webp".into(),
+                "image/svg+xml".into(),
+                "image/gif".into(),
+                "application/pdf".into(),
+                "text/plain".into(),
+            ],
+            single_request_max_bytes: 64,
+        };
+        let api_config = ApiConfig {
+            database_url: "unused".to_string(),
+            auth: AuthConfig {
+                issuer: "test-issuer".to_string(),
+                jwks_url: "unused".to_string(),
+                audience: TEST_AUDIENCE.to_string(),
+                mcp_audience: TEST_AUDIENCE.to_string(),
+                mode: AuthMode::ExternalIdp,
+            },
+            auth_provider_name: "test-provider".to_string(),
+            cors_origins: vec![],
+            port: 0,
+            enable_swagger: false,
+            internal_reconcile_secret: None,
+            embed_dispatch_secret: None,
+            mcp_service_secret: None,
+            vercel_connect: None,
+            slack_link: None,
+            slack_mint_secret: None,
+            rate_limit: None,
+            blob: Some(blob_config),
+            blob_disabled_by_policy: false,
+        };
+        let mut state = AppState::new(pool, jwks_store, api_config);
+        state.blob_store = Some(store);
+        temper_mcp::service::TemperMcpService::new(
+            state,
+            self.mcp_relay_config(),
+            temper_mcp::service::shared_relay_pool(),
+        )
+    }
 }
 
 /// Resolve the path to the compiled `temper` binary.
