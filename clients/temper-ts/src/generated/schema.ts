@@ -628,6 +628,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cognitive-maps/{id}/shapes": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List live shapes declared for a cognitive-map home.
+         * @description The cogmap-home twin of [the context route](list_shapes): the MCP
+         *     `list_data_artifact_shapes` tool admits both home anchors (`home_type`:
+         *     `"context"` or `"cogmap"`) and the substrate read is home-generic, but until
+         *     this route the cogmap arm had no wire door. Visibility-gated the same way: the
+         *     caller only sees shapes whose home anchor they can read, and an unreadable map
+         *     answers an empty set (never an error).
+         */
+        get: operations["list_cogmap_shapes"];
+        put?: never;
+        /**
+         * Declare a shape for a data-artifact family within a cognitive-map home.
+         * @description The cogmap-home twin of [the context route](declare_shape), added for the same
+         *     reason. Authority-gated: the caller must have authoring authority over the map
+         *     (`cogmap_authorable_by_profile`) — the service layer applies the gate before any
+         *     write, refusing with 403. The emitter marker rides the request's resolved
+         *     surface, so a shape declared through the MCP relay attributes to the caller's
+         *     own `@mcp` entity.
+         */
+        post: operations["declare_cogmap_shape"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cognitive-maps/{id}/teams": {
         parameters: {
             query?: never;
@@ -956,6 +993,34 @@ export interface paths {
         post?: never;
         /** Stop sharing a context with a team */
         delete: operations["unshare_team"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a single artifact by ID — the flat read.
+         * @description The MCP `get_data_artifact` tool takes only the artifact id (flat, visibility-gated,
+         *     answers folded rows); until this route the flat read had no wire door — only the
+         *     nested [get](get) under the resource path, and the tool's declaration cannot grow a
+         *     `resource_id` field. Visibility is gated on the artifact's actual owning resource
+         *     via `resources_visible_to`, exactly the nested read's posture: 404 when the artifact
+         *     does not exist or is not visible to the caller, folded artifacts included.
+         */
+        get: operations["get_artifact_by_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -10114,6 +10179,98 @@ export interface operations {
             };
         };
     };
+    list_cogmap_shapes: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Cognitive map ID (the shape's home anchor) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Live shapes declared for this cognitive map */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShapeView"][];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    declare_cogmap_shape: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Cognitive map ID (the shape's home anchor) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShapeDeclareRequest"];
+            };
+        };
+        responses: {
+            /** @description Declared shape */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShapeView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No authoring authority over the home cognitive map */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Cognitive map not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     bind_team: {
         parameters: {
             query?: never;
@@ -10834,6 +10991,50 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_artifact_by_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Artifact ID */
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The artifact with content */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactView"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not found or not visible */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

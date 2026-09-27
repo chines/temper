@@ -23,6 +23,31 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **The shapes cogmap-home pair and the flat artifact read cross the wire — route-first for the beat G4 MCP door crossing**
+  Three additive routes close the two per-method coverage gaps the beat G4 grounding
+  found between the direct MCP tools and the wire: `GET/POST /api/cognitive-maps/{id}/shapes`
+  (the cogmap-home twin of the context shapes pair — the MCP
+  `list_data_artifact_shape`s / `declare_data_artifact_shape` tools admit a cogmap
+  `home_type`, the substrate read/write are home-generic, and until now only the
+  context arm had a door) and `GET /api/data-artifacts/{artifact_id}` (the flat
+  visibility-gated read — the MCP `get_data_artifact` tool takes only the artifact id
+  and answers folded rows, a posture the nested resource-scoped route cannot carry and
+  the tool's declaration cannot grow a `resource_id` field for). All three mirror their
+  context/nested twins' gates arm-for-arm (visibility-gated reads, authoring-authority
+  403 on the declare, uniform 404 not-visible posture on the flat read) and ride
+  temper-client as `list_cogmap_shapes` / `declare_cogmap_shape` / `get_by_id`. One
+  behavior-neutral amend rides with them: both declare routes now resolve the emitter
+  from the request's resolved surface (`surface.marker()`) instead of the hard-coded
+  `web` literal — byte-identical for every existing caller (web degrades to `web`),
+  and the correct `@mcp` attribution once the MCP tools forward their declares through
+  the door at the beat G4 swap (the direct tool's in-process `resolve_emitter(…, "mcp")`
+  is what this preserves). Who observes: a REST/SDK caller gains capability (additive);
+  no existing caller-visible face changes.
+pr: self
+classes: additive
+surfaces: http, mcp
+status: signal-only
+
 - **The cognitive_maps + contexts families cross the network door — the register's largest cluster executes as real relayed calls**
   Ten tool groups stop executing in-process and forward to their deployed routes
   (`/api/cognitive-maps/…` read/genesis/materialize/bind/grant routes, the

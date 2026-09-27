@@ -19,6 +19,87 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
+    # Declare a shape for a data-artifact family within a cognitive-map home.
+    # The cogmap-home twin of [the context route](declare_shape), added for the same reason. Authority-gated: the caller must have authoring authority over the map (`cogmap_authorable_by_profile`) — the service layer applies the gate before any write, refusing with 403. The emitter marker rides the request's resolved surface, so a shape declared through the MCP relay attributes to the caller's own `@mcp` entity.
+    # @param id [String] Cognitive map ID (the shape&#39;s home anchor)
+    # @param shape_declare_request [ShapeDeclareRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [ShapeView]
+    def declare_cogmap_shape(id, shape_declare_request, opts = {})
+      data, _status_code, _headers = declare_cogmap_shape_with_http_info(id, shape_declare_request, opts)
+      data
+    end
+
+    # Declare a shape for a data-artifact family within a cognitive-map home.
+    # The cogmap-home twin of [the context route](declare_shape), added for the same reason. Authority-gated: the caller must have authoring authority over the map (&#x60;cogmap_authorable_by_profile&#x60;) — the service layer applies the gate before any write, refusing with 403. The emitter marker rides the request&#39;s resolved surface, so a shape declared through the MCP relay attributes to the caller&#39;s own &#x60;@mcp&#x60; entity.
+    # @param id [String] Cognitive map ID (the shape&#39;s home anchor)
+    # @param shape_declare_request [ShapeDeclareRequest] 
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(ShapeView, Integer, Hash)>] ShapeView data, response status code and response headers
+    def declare_cogmap_shape_with_http_info(id, shape_declare_request, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: DataArtifactShapesApi.declare_cogmap_shape ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling DataArtifactShapesApi.declare_cogmap_shape"
+      end
+      # verify the required parameter 'shape_declare_request' is set
+      if @api_client.config.client_side_validation && shape_declare_request.nil?
+        fail ArgumentError, "Missing the required parameter 'shape_declare_request' when calling DataArtifactShapesApi.declare_cogmap_shape"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/cognitive-maps/{id}/shapes'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      # HTTP header 'Content-Type'
+      content_type = @api_client.select_header_content_type(['application/json'])
+      if !content_type.nil?
+          header_params['Content-Type'] = content_type
+      end
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body] || @api_client.object_to_http_body(shape_declare_request)
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'ShapeView'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"DataArtifactShapesApi.declare_cogmap_shape",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:POST, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: DataArtifactShapesApi#declare_cogmap_shape\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # Declare a shape for a data-artifact family within a context home.
     # Authority-gated: the caller must have authoring authority over the context (`context_authorable_by_profile`). The service layer applies the gate before any write — a caller who cannot author the home is refused with 403.
     # @param id [String] Context ID (the shape&#39;s home anchor)
@@ -166,6 +247,76 @@ module Temper::Generated
       data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
       if @api_client.config.debugging
         @api_client.config.logger.debug "API called: DataArtifactShapesApi#get_shape\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
+    # List live shapes declared for a cognitive-map home.
+    # The cogmap-home twin of [the context route](list_shapes): the MCP `list_data_artifact_shapes` tool admits both home anchors (`home_type`: `\"context\"` or `\"cogmap\"`) and the substrate read is home-generic, but until this route the cogmap arm had no wire door. Visibility-gated the same way: the caller only sees shapes whose home anchor they can read, and an unreadable map answers an empty set (never an error).
+    # @param id [String] Cognitive map ID (the shape&#39;s home anchor)
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<ShapeView>]
+    def list_cogmap_shapes(id, opts = {})
+      data, _status_code, _headers = list_cogmap_shapes_with_http_info(id, opts)
+      data
+    end
+
+    # List live shapes declared for a cognitive-map home.
+    # The cogmap-home twin of [the context route](list_shapes): the MCP &#x60;list_data_artifact_shapes&#x60; tool admits both home anchors (&#x60;home_type&#x60;: &#x60;\&quot;context\&quot;&#x60; or &#x60;\&quot;cogmap\&quot;&#x60;) and the substrate read is home-generic, but until this route the cogmap arm had no wire door. Visibility-gated the same way: the caller only sees shapes whose home anchor they can read, and an unreadable map answers an empty set (never an error).
+    # @param id [String] Cognitive map ID (the shape&#39;s home anchor)
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(Array<ShapeView>, Integer, Hash)>] Array<ShapeView> data, response status code and response headers
+    def list_cogmap_shapes_with_http_info(id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: DataArtifactShapesApi.list_cogmap_shapes ...'
+      end
+      # verify the required parameter 'id' is set
+      if @api_client.config.client_side_validation && id.nil?
+        fail ArgumentError, "Missing the required parameter 'id' when calling DataArtifactShapesApi.list_cogmap_shapes"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/cognitive-maps/{id}/shapes'.sub('{id}', CGI.escape(id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'Array<ShapeView>'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"DataArtifactShapesApi.list_cogmap_shapes",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: DataArtifactShapesApi#list_cogmap_shapes\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
       end
       return data, status_code, headers
     end

@@ -2500,6 +2500,152 @@
         "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
       }
     },
+    "/api/cognitive-maps/{id}/shapes": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Data Artifact Shapes"
+        ],
+        "summary": "List live shapes declared for a cognitive-map home.",
+        "description": "The cogmap-home twin of [the context route](list_shapes): the MCP\n`list_data_artifact_shapes` tool admits both home anchors (`home_type`:\n`\"context\"` or `\"cogmap\"`) and the substrate read is home-generic, but until\nthis route the cogmap arm had no wire door. Visibility-gated the same way: the\ncaller only sees shapes whose home anchor they can read, and an unreadable map\nanswers an empty set (never an error).",
+        "operationId": "list_cogmap_shapes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cognitive map ID (the shape's home anchor)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live shapes declared for this cognitive map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ShapeView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifact Shapes"
+      },
+      "post": {
+        "tags": [
+          "Data Artifact Shapes"
+        ],
+        "summary": "Declare a shape for a data-artifact family within a cognitive-map home.",
+        "description": "The cogmap-home twin of [the context route](declare_shape), added for the same\nreason. Authority-gated: the caller must have authoring authority over the map\n(`cogmap_authorable_by_profile`) — the service layer applies the gate before any\nwrite, refusing with 403. The emitter marker rides the request's resolved\nsurface, so a shape declared through the MCP relay attributes to the caller's\nown `@mcp` entity.",
+        "operationId": "declare_cogmap_shape",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cognitive map ID (the shape's home anchor)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShapeDeclareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Declared shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShapeView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No authoring authority over the home cognitive map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Cognitive map not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifact Shapes"
+      }
+    },
     "/api/cognitive-maps/{id}/teams": {
       "parameters": [
         {
@@ -3678,6 +3824,81 @@
           }
         ],
         "x-apidog-folder": "Reference/API Reference/Contexts"
+      }
+    },
+    "/api/data-artifacts/{artifact_id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Data Artifacts"
+        ],
+        "summary": "Get a single artifact by ID — the flat read.",
+        "description": "The MCP `get_data_artifact` tool takes only the artifact id (flat, visibility-gated,\nanswers folded rows); until this route the flat read had no wire door — only the\nnested [get](get) under the resource path, and the tool's declaration cannot grow a\n`resource_id` field. Visibility is gated on the artifact's actual owning resource\nvia `resources_visible_to`, exactly the nested read's posture: 404 when the artifact\ndoes not exist or is not visible to the caller, folded artifacts included.",
+        "operationId": "get_artifact_by_id",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "description": "Artifact ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The artifact with content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Data Artifacts"
       }
     },
     "/api/events/{kb_context_id}/cursor": {
