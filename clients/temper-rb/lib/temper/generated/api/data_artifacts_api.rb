@@ -176,6 +176,76 @@ module Temper::Generated
       return data, status_code, headers
     end
 
+    # Get a single artifact by ID — the flat read.
+    # The MCP `get_data_artifact` tool takes only the artifact id (flat, visibility-gated, answers folded rows); until this route the flat read had no wire door — only the nested [get](get) under the resource path, and the tool's declaration cannot grow a `resource_id` field. Visibility is gated on the artifact's actual owning resource via `resources_visible_to`, exactly the nested read's posture: 404 when the artifact does not exist or is not visible to the caller, folded artifacts included.
+    # @param artifact_id [String] Artifact ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [ArtifactView]
+    def get_artifact_by_id(artifact_id, opts = {})
+      data, _status_code, _headers = get_artifact_by_id_with_http_info(artifact_id, opts)
+      data
+    end
+
+    # Get a single artifact by ID — the flat read.
+    # The MCP &#x60;get_data_artifact&#x60; tool takes only the artifact id (flat, visibility-gated, answers folded rows); until this route the flat read had no wire door — only the nested [get](get) under the resource path, and the tool&#39;s declaration cannot grow a &#x60;resource_id&#x60; field. Visibility is gated on the artifact&#39;s actual owning resource via &#x60;resources_visible_to&#x60;, exactly the nested read&#39;s posture: 404 when the artifact does not exist or is not visible to the caller, folded artifacts included.
+    # @param artifact_id [String] Artifact ID
+    # @param [Hash] opts the optional parameters
+    # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
+    # @return [Array<(ArtifactView, Integer, Hash)>] ArtifactView data, response status code and response headers
+    def get_artifact_by_id_with_http_info(artifact_id, opts = {})
+      if @api_client.config.debugging
+        @api_client.config.logger.debug 'Calling API: DataArtifactsApi.get_artifact_by_id ...'
+      end
+      # verify the required parameter 'artifact_id' is set
+      if @api_client.config.client_side_validation && artifact_id.nil?
+        fail ArgumentError, "Missing the required parameter 'artifact_id' when calling DataArtifactsApi.get_artifact_by_id"
+      end
+      allowable_values = ["cli", "sdk"]
+      if @api_client.config.client_side_validation && opts[:'x_temper_surface'] && !allowable_values.include?(opts[:'x_temper_surface'])
+        fail ArgumentError, "invalid value for \"x_temper_surface\", must be one of #{allowable_values}"
+      end
+      # resource path
+      local_var_path = '/api/data-artifacts/{artifact_id}'.sub('{artifact_id}', CGI.escape(artifact_id.to_s))
+
+      # query parameters
+      query_params = opts[:query_params] || {}
+
+      # header parameters
+      header_params = opts[:header_params] || {}
+      # HTTP header 'Accept' (if needed)
+      header_params['Accept'] = @api_client.select_header_accept(['application/json']) unless header_params['Accept']
+      header_params[:'X-Temper-Surface'] = opts[:'x_temper_surface'] if !opts[:'x_temper_surface'].nil?
+
+      # form parameters
+      form_params = opts[:form_params] || {}
+
+      # http body (model)
+      post_body = opts[:debug_body]
+
+      # return_type
+      return_type = opts[:debug_return_type] || 'ArtifactView'
+
+      # auth_names
+      auth_names = opts[:debug_auth_names] || ['bearer_auth']
+
+      new_options = opts.merge(
+        :operation => :"DataArtifactsApi.get_artifact_by_id",
+        :header_params => header_params,
+        :query_params => query_params,
+        :form_params => form_params,
+        :body => post_body,
+        :auth_names => auth_names,
+        :return_type => return_type
+      )
+
+      data, status_code, headers = @api_client.call_api(:GET, local_var_path, new_options)
+      if @api_client.config.debugging
+        @api_client.config.logger.debug "API called: DataArtifactsApi#get_artifact_by_id\nData: #{data.inspect}\nStatus code: #{status_code}\nHeaders: #{headers}"
+      end
+      return data, status_code, headers
+    end
+
     # List artifacts for a resource, or counts with counts=true
     # Without `counts=true`: returns fully hydrated artifacts (metadata + content). With `counts=true`: returns per-family counts only, no content hydration — for surfaces that need \"3 measurements, 1 extraction\" without fetching payloads.
     # @param id [String] Resource ID

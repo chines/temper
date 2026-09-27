@@ -102,6 +102,44 @@ pub async fn get(
     Ok(Json(artifact))
 }
 
+/// Get a single artifact by ID — the flat read.
+///
+/// The MCP `get_data_artifact` tool takes only the artifact id (flat, visibility-gated,
+/// answers folded rows); until this route the flat read had no wire door — only the
+/// nested [get](get) under the resource path, and the tool's declaration cannot grow a
+/// `resource_id` field. Visibility is gated on the artifact's actual owning resource
+/// via `resources_visible_to`, exactly the nested read's posture: 404 when the artifact
+/// does not exist or is not visible to the caller, folded artifacts included.
+#[utoipa::path(
+    get,
+    operation_id = "get_artifact_by_id",
+    path = "/api/data-artifacts/{artifact_id}",
+    tag = "Data Artifacts",
+    params(
+        ("artifact_id" = Uuid, Path, description = "Artifact ID"),
+    ),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The artifact with content", body = ArtifactView),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Not found or not visible", body = ErrorBody),
+    )
+)]
+pub async fn get_by_id(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(artifact_id): Path<Uuid>,
+) -> ApiResult<Json<ArtifactView>> {
+    let artifact = temper_services::backend::substrate_read::get_artifact(
+        &state.pool,
+        ProfileId::from(auth.0.profile().id),
+        DataArtifactId::from(artifact_id),
+    )
+    .await?
+    .ok_or_else(|| ApiError::NotFound("artifact not found".to_string()))?;
+    Ok(Json(artifact))
+}
+
 /// Commit one data artifact to a resource
 ///
 /// The content payload is JSON, hashed and stored verbatim. The hash is the proof —

@@ -56,6 +56,10 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::data_artifacts::list))
         .routes(routes!(handlers::data_artifacts::get))
         .routes(routes!(handlers::data_artifacts::commit))
+        // The flat artifact read — the MCP `get_data_artifact` tool's wire twin (the tool
+        // takes only the artifact id; the nested route's REST parent is a field its
+        // declaration cannot grow). Route-first for the beat G4 door crossing.
+        .routes(routes!(handlers::data_artifacts::get_by_id))
         // `blobs::commit` and `blobs::append_segment` are NOT mounted here: they are the
         // two doors whose legal body sizes exceed axum's inherited default, so they merge
         // through [`blob_commit_routes`] / [`blob_segment_routes`] with limits sized from
@@ -74,6 +78,14 @@ fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::data_artifact_shapes::list_shapes))
         .routes(routes!(handlers::data_artifact_shapes::get_shape))
         .routes(routes!(handlers::data_artifact_shapes::declare_shape))
+        // The cogmap-home shapes pair — the MCP `list_data_artifact_shapes` /
+        // `declare_data_artifact_shape` tools admit a cogmap `home_type` and the
+        // substrate read/write are home-generic, but only the context arm had a wire
+        // door. Route-first for the beat G4 door crossing.
+        .routes(routes!(handlers::data_artifact_shapes::list_cogmap_shapes))
+        .routes(routes!(
+            handlers::data_artifact_shapes::declare_cogmap_shape
+        ))
         .routes(routes!(
             handlers::resources::provenance,
             handlers::resources::annotate

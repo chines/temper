@@ -279,3 +279,222 @@ async fn data_artifact_supersedes_folding(pool: PgPool) {
         "list with include_folded must return both the folded and live artifacts"
     );
 }
+
+// ── The flat artifact read (route-first for beat G4) ───────────────────────────
+
+/// A `TemperClient` bound to an arbitrary principal's token — the
+/// `team_invitations_test.rs` idiom, for a second identity's gates.
+fn client_for(app: &common::E2eTestApp, token: &str) -> temper_client::TemperClient {
+    use temper_client::auth::{MemoryTokenStore, Provider, StoredAuth};
+
+    let stored_auth = StoredAuth {
+        provider: Provider::Auth0 {
+            domain: "test".to_string(),
+        },
+        access_token: token.to_string().into(),
+        refresh_token: None,
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        profile_id: None,
+        device_id: Some("e2e-test-device".to_string()),
+    };
+    let store: std::sync::Arc<dyn temper_client::auth::TokenStore> =
+        std::sync::Arc::new(MemoryTokenStore::with_auth(stored_auth));
+    temper_client::config::build_client_from(
+        &app.config,
+        store,
+        temper_workflow::operations::Surface::Sdk,
+    )
+    .expect("second client builds")
+}
+
+/// The flat read answers by artifact id alone, including FOLDED artifacts, and 404s
+/// a caller who cannot see the owning resource — the direct MCP tool's posture, now
+/// carried by `GET /api/data-artifacts/{artifact_id}` (route-first for beat G4).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn flat_artifact_get_by_id_answers_folded_rows_and_gates_invisible_callers(pool: PgPool) {
+    let app = common::setup(pool).await;
+    let context = app
+        .client
+        .contexts()
+        .create("e2e-flat-get", None)
+        .await
+        .expect("context create failed");
+    let resource = app
+        .client
+        .resources()
+        .create(&ResourceCreateRequest {
+            kb_context_id: context.id.into(),
+            idempotency_key: None,
+            doc_type: "research".to_string(),
+            origin_uri: "test://e2e/flat-get".to_string(),
+            title: "Flat Get".to_string(),
+            act: Default::default(),
+        })
+        .await
+        .expect("resource create failed");
+
+    let commit = |content: serde_json::Value| {
+        ArtifactCommitRequest {
+            kind: "measurement".to_string(),
+            kind_owner: None,
+            intent: "current".to_string(),
+            precedence: 0.0,
+            content,
+            supersedes: Vec::new(),
+            act: Default::default(),
+        }
+    };
+    let first = app
+        .client
+        .data_artifacts()
+        .commit(resource.id.into(), &commit(json!({"v": 1})))
+        .await
+        .expect("first commit failed");
+    let second = app
+        .client
+        .data_artifacts()
+        .commit(
+            resource.id.into(),
+            &ArtifactCommitRequest {
+                supersedes: vec![first.artifact_id],
+                ..commit(json!({"v": 2}))
+            },
+        )
+        .await
+        .expect("superseding commit failed");
+    assert_ne!(first.artifact_id, second.artifact_id);
+
+    // The flat read answers the FOLDED artifact — the posture the nested route's
+    // REST-parent path shares but the list+filter composition cannot.
+    let folded = app
+        .client
+        .data_artifacts()
+        .get_by_id(first.artifact_id.into())
+        .await
+        .expect("flat get of the folded artifact failed");
+    assert!(folded.is_folded, "the superseded artifact reads folded");
+    assert_eq!(folded.artifact_id, first.artifact_id);
+
+    // A caller who cannot see the owning resource is refused with the uniform 404.
+    let outsider_token = common::generate_second_user_jwt();
+    let _ = app
+        .reqwest_client
+        .get(app.url("/api/profile"))
+        .bearer_auth(&outsider_token)
+        .send()
+        .await
+        .expect("provision the outsider");
+    let outsider_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
+            .bind("second@test.example.com")
+            .fetch_one(&app.pool)
+            .await
+            .expect("the outsider profile");
+    common::approve(&app.pool, outsider_id).await;
+
+    let outsider = client_for(&app, &outsider_token);
+    let refused = outsider
+        .data_artifacts()
+        .get_by_id(first.artifact_id.into())
+        .await
+        .expect_err("the outsider's flat get must refuse");
+    assert!(
+        matches!(refused, temper_client::error::ClientError::NotFound { .. }),
+        "an invisible artifact is not-found, never a leak: {refused}"
+    );
+}
+
+// ── The cogmap-home shapes pair (route-first for beat G4) ──────────────────────
+
+/// The L0 kernel cognitive map reserved id (birth migration `20260625000001`) —
+/// every approved profile READS it; nobody holds write without an explicit grant.
+const L0_COGMAP: uuid::Uuid = uuid::Uuid::from_u128(0x00000000_0000_0000_0005_000000000001);
+
+/// A shape declares on a cognitive-map home through `POST /api/cognitive-maps/{id}/shapes`,
+/// reads back through the list and the by-id get, and the authoring gate refuses a
+/// reader without an explicit write grant with 403 — the context pair's gate train,
+/// now carried by the cogmap-home twin (route-first for beat G4).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cogmap_home_shapes_declare_list_get_round_trip_and_authority_gate(pool: PgPool) {
+    use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest};
+
+    let app = common::setup(pool).await;
+
+    let owner_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
+            .bind("e2e@test.example.com")
+            .fetch_one(&app.pool)
+            .await
+            .expect("the harness profile");
+    common::grant_cogmap_write(&app.pool, L0_COGMAP, owner_id).await;
+
+    let request = ShapeDeclareRequest {
+        kind: "measurement".to_string(),
+        kind_owner: None,
+        schema: serde_json::json!({
+            "type": "object",
+            "properties": { "value": { "type": "number" } },
+            "required": ["value"]
+        }),
+        enforcement: EnforcementMode::Advisory,
+        act: Default::default(),
+    };
+
+    let declared = app
+        .client
+        .data_artifacts()
+        .declare_cogmap_shape(L0_COGMAP, &request)
+        .await
+        .expect("declare on a granted cogmap home failed");
+    assert_eq!(
+        declared.home_anchor_table, "kb_cogmaps",
+        "the shape is homed on the cognitive map, not defaulted to a context"
+    );
+
+    let listed = app
+        .client
+        .data_artifacts()
+        .list_cogmap_shapes(L0_COGMAP)
+        .await
+        .expect("cogmap-home list failed");
+    assert!(
+        listed.iter().any(|s| s.shape_id == declared.shape_id),
+        "the declared shape reads back through the cogmap-home list"
+    );
+
+    let fetched = app
+        .client
+        .data_artifacts()
+        .get_shape(declared.shape_id.uuid())
+        .await
+        .expect("shape get failed");
+    assert_eq!(fetched.shape_id, declared.shape_id);
+
+    // A reader of the map with NO write grant is refused with 403 — the same
+    // authoring-authority gate the context declare route runs.
+    let reader_token = common::generate_second_user_jwt();
+    let _ = app
+        .reqwest_client
+        .get(app.url("/api/profile"))
+        .bearer_auth(&reader_token)
+        .send()
+        .await
+        .expect("provision the reader");
+    let reader_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_profiles WHERE email = $1")
+            .bind("second@test.example.com")
+            .fetch_one(&app.pool)
+            .await
+            .expect("the reader profile");
+    common::approve(&app.pool, reader_id).await;
+
+    let refused = client_for(&app, &reader_token)
+        .data_artifacts()
+        .declare_cogmap_shape(L0_COGMAP, &request)
+        .await
+        .expect_err("a reader without a grant must not declare");
+    assert!(
+        matches!(refused, temper_client::error::ClientError::Forbidden),
+        "the authoring gate refuses with Forbidden: {refused}"
+    );
+}
