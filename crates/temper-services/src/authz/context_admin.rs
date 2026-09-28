@@ -20,9 +20,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
-
-use super::ScopedAuthority;
+use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service::CONTEXT_REFUSAL;
 use crate::services::{access_service, context_service};
@@ -62,7 +60,8 @@ impl ScopedAuthority for ContextAdminAuthority {
     /// shared to an enclosing team, explicit read-grant. A visibility-first ordering would render
     /// `404` to a system admin renaming a context they do not otherwise read — the exact actor the
     /// feature must admit.
-    async fn resolve(pool: &PgPool, caller: ProfileId, context_id: Uuid) -> ApiResult<Self> {
+    async fn resolve(pool: &PgPool, caller: Principal<'_>, context_id: Uuid) -> ApiResult<Self> {
+        let caller = caller.profile_id();
         // 1. The object-side probe, unchanged and not re-derived: profile-owned ⇒ caller *is* the
         //    owner; team-owned ⇒ `can_manage` (Owner|Maintainer) by DIRECT membership. A missing
         //    context answers `false` here, which is why the visibility probe below — not this one —
@@ -125,6 +124,7 @@ impl ScopedAuthority for ContextAdminAuthority {
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;
+    use temper_core::types::ids::ProfileId;
 
     // Two suites in one module, and the second is the load-bearing one.
     //
@@ -327,7 +327,7 @@ mod tests {
         context: Uuid,
         route: &str,
     ) {
-        let arm = ContextAdminAuthority::resolve(pool, caller, context)
+        let arm = ContextAdminAuthority::resolve(pool, Principal::Bare(caller), context)
             .await
             .unwrap();
         assert_eq!(
@@ -348,7 +348,7 @@ mod tests {
         let owner = mk_profile(&pool, "owner").await;
         let ctx = mk_personal_context(&pool, "notes", owner).await;
 
-        let arm = ContextAdminAuthority::resolve(&pool, owner, ctx)
+        let arm = ContextAdminAuthority::resolve(&pool, Principal::Bare(owner), ctx)
             .await
             .unwrap();
         assert_eq!(arm, ContextAdminAuthority::Administers);
@@ -365,13 +365,13 @@ mod tests {
         let ctx = mk_team_context(&pool, "eng-notes", team).await;
 
         assert_eq!(
-            ContextAdminAuthority::resolve(&pool, team_owner, ctx)
+            ContextAdminAuthority::resolve(&pool, Principal::Bare(team_owner), ctx)
                 .await
                 .unwrap(),
             ContextAdminAuthority::Administers
         );
         assert_eq!(
-            ContextAdminAuthority::resolve(&pool, maintainer, ctx)
+            ContextAdminAuthority::resolve(&pool, Principal::Bare(maintainer), ctx)
                 .await
                 .unwrap(),
             ContextAdminAuthority::Administers
@@ -394,7 +394,7 @@ mod tests {
             "fixture precondition: the admin must NOT be able to read this context"
         );
         assert_eq!(
-            ContextAdminAuthority::resolve(&pool, admin, ctx)
+            ContextAdminAuthority::resolve(&pool, Principal::Bare(admin), ctx)
                 .await
                 .unwrap(),
             ContextAdminAuthority::SystemAdmin
@@ -408,7 +408,7 @@ mod tests {
         let ctx = mk_personal_context(&pool, "private", owner).await;
 
         assert_eq!(
-            ContextAdminAuthority::resolve(&pool, stranger, ctx)
+            ContextAdminAuthority::resolve(&pool, Principal::Bare(stranger), ctx)
                 .await
                 .unwrap(),
             ContextAdminAuthority::Invisible
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(
             // `now_v7`, not `new_v4`: this crate's `uuid` carries the `v7` feature only, and every
             // id in the system is a v7 anyway.
-            ContextAdminAuthority::resolve(&pool, caller, Uuid::now_v7())
+            ContextAdminAuthority::resolve(&pool, Principal::Bare(caller), Uuid::now_v7())
                 .await
                 .unwrap(),
             ContextAdminAuthority::Invisible
@@ -528,7 +528,7 @@ mod tests {
         let stranger = mk_profile(&pool, "stranger").await;
         let context = mk_personal_context(&pool, "private", owner).await;
 
-        let arm = ContextAdminAuthority::resolve(&pool, stranger, context)
+        let arm = ContextAdminAuthority::resolve(&pool, Principal::Bare(stranger), context)
             .await
             .unwrap();
         assert!(
@@ -577,9 +577,14 @@ mod tests {
                 .await
                 .unwrap();
 
-        let outcome = context_service::rename(&pool, admin, context, "Renamed By Admin")
-            .await
-            .expect("a system admin may rename a context they cannot read");
+        let outcome = context_service::rename(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            context,
+            "Renamed By Admin",
+        )
+        .await
+        .expect("a system admin may rename a context they cannot read");
         assert!(outcome.renamed, "the rename actually happened");
         assert_eq!(outcome.slug, "renamed-by-admin");
 
@@ -638,9 +643,14 @@ mod tests {
         let owner = mk_actor(&pool, "owner").await;
         let context = mk_named_personal_context(&pool, "old-notes", "Old Notes", owner).await;
 
-        let outcome = context_service::rename(&pool, owner, context, "New Notes")
-            .await
-            .expect("the owner administers their own context");
+        let outcome = context_service::rename(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            context,
+            "New Notes",
+        )
+        .await
+        .expect("the owner administers their own context");
         assert!(outcome.renamed);
 
         // Every field is non-`Option` on purpose: a payload that OMITTED `from_name` would decode

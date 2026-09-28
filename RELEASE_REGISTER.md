@@ -23,6 +23,42 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **PR 1 of the single-ingress refactor: the 13 Class A+B authz ladders and read-visibility services consume `&AuthenticatedProfile` — signatures, not behavior**
+  The seven Class A `ScopedAuthority::resolve` ladder impls (authz grant, machine,
+  read_gates ×2, two_sided, context_admin, subscription) and the six Class B
+  read-visibility sites (machine-client/subscription/connection `list`,
+  context `list_retired_administered`/`get_retired_administered`, admin-ledger
+  `readable_event_types`) take the Level-1 proof at their signatures; the internal
+  probes stay, with their orderings (membership-first, self-read-first,
+  object-side-first) untouched and their asserting tests' assertions unmodified. The
+  trait carries the caller as the new crate-internal `Principal` enum
+  (`Proof(&AuthenticatedProfile)` / `Bare(ProfileId)`) — the sealed-proof boundary
+  at the service signatures, with `Bare` the db_backend seam's door (Class E, the
+  CLI path has no middleware above it) and the Class F conditional gates' spelling
+  until their own PR. Direct human-path callers (grant/revoke capability, team
+  detail, context share/unshare/reassign/rename/retire/restore, subscription
+  create/revoke/get, ledger reads, delivery reads) take the proof and handlers pass
+  `auth.0` through; MCP's `ensure_profile_from_parts` hands its tools the proof it
+  already held instead of discarding it. The two `AuditAuthority`/`AuditorJobAuthority`
+  impls migrated to the trait's new `Principal` signature to keep it compiling (their
+  only production caller is the Class E seam, still `Bare`); the test call sites were
+  mechanically adapted (proofs minted through the real Level-1 gate, `Principal::Bare`
+  at the ladder-level tests) — assertions, seeding, and expect-messages unmodified.
+  DISCLOSED RESIDUAL: besides the two Class E/F seams above, ten further
+  conditional-gate sites on HTTP-reachable paths run on `Bare` with a proof available
+  one frame upstream (connection_service get/provision/revoke/authorize_live/
+  grant_reach/revoke_reach, machine_client_service get_for_caller/revoke/
+  rotate_secret, machine_authz authorize_registration/contain_reach) — zero behavior
+  change at each (SQL byte-identical), but they are the sites a future Proof-only arm
+  would silently not reach; they ride PR 2's ledger. Every wire shape, tool
+  declaration, refusal dialect, and probe cost byte-identical; no openapi.json
+  movement. Who observes: nobody — a caller that cannot hold the proof cannot compile
+  the call, which is the point.
+pr: self
+classes: behavioral
+surfaces: internal
+status: signal-only
+
 - **Beat G4: the last mixed direct cluster crosses the network door — reblock, blobs, segmented ingest, data_artifacts(+shapes) forward as relays; the direct binding is steward-and-nothing-else**
   The twelve direct handlers (reblock 1, blobs 2, the consolidated segmented-ingest
   tool's 4 actions, data_artifacts 3, shapes 3) stop executing in-process and forward

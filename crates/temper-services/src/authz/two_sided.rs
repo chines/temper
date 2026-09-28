@@ -17,9 +17,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
-
-use super::ScopedAuthority;
+use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::{access_service, context_service, team_service};
 
@@ -116,7 +114,12 @@ impl ScopedAuthority for TwoSidedAuthority {
     /// Its third sibling, `machine_authz::contain_target_team`, deliberately has no such exclusion.
     /// All three reasons: spec §6.1 in
     /// `temper-artifacts:specs/2026-07-22-scoped-authority-policy-layer-design.md`.
-    async fn resolve(pool: &PgPool, caller: ProfileId, scope: TwoSidedScope) -> ApiResult<Self> {
+    async fn resolve(
+        pool: &PgPool,
+        caller: Principal<'_>,
+        scope: TwoSidedScope,
+    ) -> ApiResult<Self> {
+        let caller = caller.profile_id();
         if access_service::is_system_admin(pool, caller).await? {
             return Ok(TwoSidedAuthority::SystemAdmin);
         }

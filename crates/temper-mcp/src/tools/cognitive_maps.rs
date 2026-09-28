@@ -50,6 +50,7 @@ use temper_core::types::cognitive_maps::{
     BindTeamRequest, CogmapAnalyticsInput, CogmapGrantBody, CogmapRegionMetricsInput,
     CogmapRevokeBody, CogmapShapeInput, ContextAnalyticsInput, ContextShapeInput,
 };
+use temper_core::types::ids::ProfileId;
 use temper_core::types::materialize::{
     ContextMaterializeInput, MaterializeAck, MaterializeDeltaInput, MaterializeTriggerInput,
 };
@@ -675,10 +676,14 @@ async fn context_anchor(
 ) -> Result<Uuid, rmcp::ErrorData> {
     let cref = parse_context_ref(context_ref)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context ref: {e}"), None))?;
-    let profile = svc.ensure_profile_from_parts(parts).await?;
-    let context = resolve_context_ref(&svc.api_state.pool, profile.id.into(), &cref)
-        .await
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
+    let authed = svc.ensure_profile_from_parts(parts).await?;
+    let context = resolve_context_ref(
+        &svc.api_state.pool,
+        ProfileId::from(authed.profile().id),
+        &cref,
+    )
+    .await
+    .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
     Ok(*context)
 }
 

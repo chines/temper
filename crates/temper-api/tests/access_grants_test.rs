@@ -11,7 +11,6 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::cognitive_maps::{GrantCapabilityRequest, RevokeCapabilityRequest};
-use temper_core::types::ids::ProfileId;
 use temper_services::error::ApiError;
 use temper_services::services::access_service;
 
@@ -175,7 +174,7 @@ async fn admin_can_grant_and_revoke_cogmap_write(pool: PgPool) {
 
     let out = access_service::grant_capability(
         &pool,
-        ProfileId::from(admin),
+        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
         &write_grant(cogmap, grantee),
     )
     .await
@@ -188,7 +187,7 @@ async fn admin_can_grant_and_revoke_cogmap_write(pool: PgPool) {
 
     access_service::revoke_capability(
         &pool,
-        ProfileId::from(admin),
+        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
         &RevokeCapabilityRequest {
             subject_table: "kb_cogmaps".into(),
             subject_id: cogmap,
@@ -214,7 +213,7 @@ async fn non_granter_is_forbidden(pool: PgPool) {
 
     let err = access_service::grant_capability(
         &pool,
-        ProfileId::from(stranger),
+        &temper_services::test_support::authenticated_profile_for(&pool, stranger).await,
         &write_grant(cogmap, grantee),
     )
     .await
@@ -251,14 +250,18 @@ async fn a_delegate_confers_only_what_it_holds(pool: PgPool) {
     };
 
     // Admin gives `delegate` read+grant (delegated administration) but NOT write.
-    access_service::grant_capability(&pool, ProfileId::from(admin), &read_and_grant(delegate))
-        .await
-        .expect("admin delegates grant authority");
+    access_service::grant_capability(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        &read_and_grant(delegate),
+    )
+    .await
+    .expect("admin delegates grant authority");
 
     // It may NOT confer write, which it does not hold.
     let err = access_service::grant_capability(
         &pool,
-        ProfileId::from(delegate),
+        &temper_services::test_support::authenticated_profile_for(&pool, delegate).await,
         &write_grant(cogmap, grantee),
     )
     .await
@@ -274,14 +277,22 @@ async fn a_delegate_confers_only_what_it_holds(pool: PgPool) {
 
     // Delegation still WORKS — it just cannot amplify. The same delegate confers read+grant, both
     // of which it holds. (Guards against "fixing" attenuation by breaking delegation outright.)
-    access_service::grant_capability(&pool, ProfileId::from(delegate), &read_and_grant(grantee))
-        .await
-        .expect("a delegate confers the capabilities it does hold");
+    access_service::grant_capability(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, delegate).await,
+        &read_and_grant(grantee),
+    )
+    .await
+    .expect("a delegate confers the capabilities it does hold");
 
     // The admin arm stays unrestricted, so bootstrap and repair remain operable.
-    access_service::grant_capability(&pool, ProfileId::from(admin), &write_grant(cogmap, grantee))
-        .await
-        .expect("a system admin may still amplify");
+    access_service::grant_capability(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        &write_grant(cogmap, grantee),
+    )
+    .await
+    .expect("a system admin may still amplify");
     assert!(can_write_cogmap(&pool, grantee, cogmap).await);
 }
 
@@ -296,7 +307,7 @@ async fn a_delegate_cannot_escalate_itself(pool: PgPool) {
 
     access_service::grant_capability(
         &pool,
-        ProfileId::from(admin),
+        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
         &GrantCapabilityRequest {
             subject_table: "kb_cogmaps".into(),
             subject_id: cogmap,
@@ -313,7 +324,7 @@ async fn a_delegate_cannot_escalate_itself(pool: PgPool) {
 
     let err = access_service::grant_capability(
         &pool,
-        ProfileId::from(delegate),
+        &temper_services::test_support::authenticated_profile_for(&pool, delegate).await,
         &write_grant(cogmap, delegate),
     )
     .await
@@ -365,10 +376,13 @@ async fn a_can_grant_holder_cannot_administer_the_l0_kernel(pool: PgPool) {
     .unwrap_or(false);
     assert!(holds_grant, "fixture must actually confer can_grant on L0");
 
-    let err =
-        access_service::grant_capability(&pool, ProfileId::from(holder), &write_grant(l0, grantee))
-            .await
-            .expect_err("the L0 kernel must stay admin-only on the grant axis");
+    let err = access_service::grant_capability(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, holder).await,
+        &write_grant(l0, grantee),
+    )
+    .await
+    .expect_err("the L0 kernel must stay admin-only on the grant axis");
     assert!(
         matches!(err, ApiError::Forbidden),
         "expected Forbidden, got {err:?}"

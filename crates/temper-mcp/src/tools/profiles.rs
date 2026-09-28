@@ -2,15 +2,13 @@
 
 use rmcp::model::CallToolResult;
 
-use temper_core::types::Profile;
-
 use crate::service::TemperMcpService;
 
 pub async fn get_profile(
     _svc: &TemperMcpService,
-    profile: Profile,
+    authed: temper_services::auth::AuthenticatedProfile,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let text = serde_json::to_string_pretty(&profile).unwrap_or_else(|_| "{}".to_string());
+    let text = serde_json::to_string_pretty(authed.profile()).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(text),
     ]))

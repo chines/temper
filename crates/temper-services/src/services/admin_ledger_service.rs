@@ -30,7 +30,8 @@ use temper_core::types::ids::ProfileId;
 use temper_substrate::payloads::{EventRef, RefTarget};
 use uuid::Uuid;
 
-use crate::authz::ACTOR_HISTORY_REFUSAL;
+use crate::auth::AuthenticatedProfile;
+use crate::authz::{Principal, ACTOR_HISTORY_REFUSAL};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 
@@ -96,9 +97,10 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
 /// second 50 readable rows, it is whatever survived of the second 50 raw rows.
 async fn readable_event_types(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     subject: RefTarget,
 ) -> ApiResult<Vec<&'static str>> {
+    let caller = ProfileId::from(authed.profile().id);
     // Admin reads everything; one query, and the common admin path stops here.
     if access_service::is_system_admin(pool, caller).await? {
         return Ok(ADMIN_EVENT_TYPES.to_vec());
@@ -111,7 +113,7 @@ async fn readable_event_types(
     // can_grant arm doing the work.)
     // `subject` is already a typed `RefTarget`; it used to be flattened to `(&str, Uuid)` here
     // purely because the gate took strings. It no longer does.
-    if access_service::can_administer_grant(pool, caller, subject).await? {
+    if access_service::can_administer_grant(pool, Principal::Proof(authed), subject).await? {
         readable.push("grant_created");
         readable.push("grant_revoked");
     }
@@ -176,12 +178,12 @@ async fn readable_event_types(
 /// "Who was granted what on this subject, and when?"
 pub async fn list_by_subject(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     subject: RefTarget,
     limit: i64,
     offset: i64,
 ) -> ApiResult<Vec<AdminLedgerEntry>> {
-    let types = readable_event_types(pool, caller, subject).await?;
+    let types = readable_event_types(pool, authed, subject).await?;
     if types.is_empty() {
         // Reads deny with 404, not 403 — the deny-split invariant. A 403 would confirm the
         // ledger has something to hide about this subject.
@@ -214,11 +216,12 @@ pub async fn list_by_subject(
 /// reachable by ordinary usage, not just by demotion.
 pub async fn list_by_actor(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     actor: ProfileId,
     limit: i64,
     offset: i64,
 ) -> ApiResult<Vec<AdminLedgerEntry>> {
+    let caller = ProfileId::from(authed.profile().id);
     // THE ONLY GATE — not defense in depth. Both surfaces authenticate and hand `caller`
     // straight here: `handlers::admin_ledger::list` mounts on a plain `.route()` with no
     // prelude, and `tools::admin_ledger` receives the caller's gate-resolved profile and
@@ -237,7 +240,12 @@ pub async fn list_by_actor(
     // Reading someone else's history is an audit, and audits are admin-only. The `has_system_access`
     // check above is deliberately NOT folded into this one: that is a standing question, and this is
     // an authority question about the actor axis. Keeping them separate is the point.
-    crate::authz::authorize::<crate::authz::ActorHistoryAuthority>(pool, caller, actor).await?;
+    crate::authz::authorize::<crate::authz::ActorHistoryAuthority>(
+        pool,
+        Principal::Proof(authed),
+        actor,
+    )
+    .await?;
 
     // No per-subject gate: that is the decision. The full catalogue is correct here precisely
     // because the axis is the caller's own authorship (or an admin's audit).

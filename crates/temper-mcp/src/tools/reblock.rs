@@ -38,7 +38,7 @@ use serde::Deserialize;
 
 use temper_client::error::ClientError;
 use temper_core::context_ref::parse_context_ref;
-use temper_core::types::ids::ResourceId;
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::reblock::{ReblockScope, DEFAULT_REBLOCK_LIMIT};
 use temper_services::services::context_service::resolve_context_ref;
 use uuid::Uuid;
@@ -106,10 +106,14 @@ async fn context_anchor(
 ) -> Result<Uuid, rmcp::ErrorData> {
     let cref = parse_context_ref(context_ref)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context ref: {e}"), None))?;
-    let profile = svc.ensure_profile_from_parts(parts).await?;
-    let context = resolve_context_ref(&svc.api_state.pool, profile.id.into(), &cref)
-        .await
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
+    let authed = svc.ensure_profile_from_parts(parts).await?;
+    let context = resolve_context_ref(
+        &svc.api_state.pool,
+        ProfileId::from(authed.profile().id),
+        &cref,
+    )
+    .await
+    .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
     Ok(*context)
 }
 

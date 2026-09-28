@@ -13,6 +13,8 @@ use temper_core::types::machine::MachineClient;
 
 use temper_principal::{Act, ActorAuthority, Standing};
 
+use crate::auth::AuthenticatedProfile;
+use crate::authz::Principal;
 use crate::error::{ApiError, ApiResult};
 use crate::services::machine_authz;
 use crate::services::standing_service::{self, ApplyStandingParams};
@@ -107,7 +109,7 @@ pub async fn get_for_caller(
     id: Uuid,
 ) -> ApiResult<MachineClient> {
     let client = get(pool, id).await?;
-    machine_authz::authorize(pool, caller, client.team_id).await?;
+    machine_authz::authorize(pool, Principal::Bare(caller), client.team_id).await?;
     Ok(client)
 }
 
@@ -119,9 +121,10 @@ pub async fn get_for_caller(
 /// yields NULL, which falls open.
 pub async fn list(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     include_revoked: bool,
 ) -> ApiResult<Vec<MachineClient>> {
+    let caller = ProfileId::from(authed.profile().id);
     let is_admin = crate::services::access_service::is_system_admin(pool, caller).await?;
 
     let rows = sqlx::query_as!(
@@ -156,7 +159,7 @@ pub async fn list(
 pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<MachineClient> {
     // Auth before writes, keyed on the existing row's owning team (B2 D5).
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, revoker, existing.team_id).await?;
+    machine_authz::authorize(pool, Principal::Bare(revoker), existing.team_id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_machine_clients
@@ -217,7 +220,7 @@ pub async fn rotate_secret(
     // Auth before writes, keyed on the existing row's owning team (B2 D5). Ahead of the
     // transaction, so a rejected rotation never touches the row.
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, caller, existing.team_id).await?;
+    machine_authz::authorize(pool, Principal::Bare(caller), existing.team_id).await?;
 
     if !(0..=MAX_ROTATION_GRACE_SECONDS).contains(&grace_seconds) {
         return Err(ApiError::BadRequest(format!(
@@ -574,10 +577,22 @@ mod tests {
         assert!(revoked.revoked_at.is_some());
         assert_eq!(revoked.revoked_by_profile_id, Some(*admin));
 
-        let active = svc::list(&pool, admin, false).await.expect("list active");
+        let active = svc::list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            false,
+        )
+        .await
+        .expect("list active");
         assert!(active.iter().all(|c| c.client_id != "doomed"));
 
-        let all = svc::list(&pool, admin, true).await.expect("list all");
+        let all = svc::list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            true,
+        )
+        .await
+        .expect("list all");
         assert!(all.iter().any(|c| c.client_id == "doomed"));
     }
 

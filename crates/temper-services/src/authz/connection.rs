@@ -16,9 +16,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
-
-use super::ScopedAuthority;
+use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::connection_service;
 use crate::services::machine_authz::{self, MachineAuthority};
@@ -71,7 +69,7 @@ impl ScopedAuthority for ConnectionControlAuthority {
     /// The connection itself. Its owning team is derived, never supplied.
     type Subject = Uuid;
 
-    async fn resolve(pool: &PgPool, caller: ProfileId, connection_id: Uuid) -> ApiResult<Self> {
+    async fn resolve(pool: &PgPool, caller: Principal<'_>, connection_id: Uuid) -> ApiResult<Self> {
         // Read from the row, never from the caller — see `ConnectionScope`'s doc for why this
         // derivation is what gives the proof its meaning.
         let connection = connection_service::get(pool, connection_id).await?;
@@ -147,7 +145,11 @@ impl ScopedAuthority for ConnectionAuthority {
     ///
     /// Both are **called, not restated** — question 2 in particular routes through the shared
     /// `require_manage_on_team` seam expressly so it cannot drift from `contain_reach`'s team loop.
-    async fn resolve(pool: &PgPool, caller: ProfileId, scope: ConnectionScope) -> ApiResult<Self> {
+    async fn resolve(
+        pool: &PgPool,
+        caller: Principal<'_>,
+        scope: ConnectionScope,
+    ) -> ApiResult<Self> {
         // Question 1, asked through `ConnectionControlAuthority` rather than restated — that type
         // exists precisely because revocation asks this one alone, and two copies of "resolve the
         // owning team, then MachineAuthority" is exactly the drift this layer removes.
@@ -171,6 +173,7 @@ impl ScopedAuthority for ConnectionAuthority {
             // future arm cannot land here and be silently authorized.
             ConnectionControlAuthority::None => return Ok(ConnectionAuthority::None),
         };
+        let caller = caller.profile_id();
 
         // `contain_target_team` answers with `Ok`, a `Forbidden` refusal, or a `NotFound` when the
         // receiving team does not exist. Only the refusal becomes an arm: `NotFound` is a

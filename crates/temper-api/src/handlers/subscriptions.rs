@@ -13,7 +13,6 @@ use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
 use temper_core::types::subscription::{CreateSubscriptionRequest, Subscription};
 use temper_services::error::ApiResult;
 use temper_services::services::subscription_service;
@@ -35,8 +34,7 @@ pub async fn create(
     auth: AuthUser,
     Json(body): Json<CreateSubscriptionRequest>,
 ) -> ApiResult<Json<Subscription>> {
-    let caller = ProfileId::from(auth.0.profile().id);
-    let subscription = subscription_service::create(&state.pool, caller, &body).await?;
+    let subscription = subscription_service::create(&state.pool, &auth.0, &body).await?;
     Ok(Json(subscription))
 }
 
@@ -45,9 +43,9 @@ pub async fn list(
     auth: AuthUser,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<Subscription>>> {
-    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
-        subscription_service::list(&state.pool, caller, q.include_revoked, q.connection_id).await?,
+        subscription_service::list(&state.pool, &auth.0, q.include_revoked, q.connection_id)
+            .await?,
     ))
 }
 
@@ -56,9 +54,8 @@ pub async fn get(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Subscription>> {
-    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
-        subscription_service::get_for_caller(&state.pool, caller, id).await?,
+        subscription_service::get_for_caller(&state.pool, &auth.0, id).await?,
     ))
 }
 
@@ -67,8 +64,7 @@ pub async fn revoke(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Subscription>> {
-    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
-        subscription_service::revoke(&state.pool, caller, id).await?,
+        subscription_service::revoke(&state.pool, &auth.0, id).await?,
     ))
 }

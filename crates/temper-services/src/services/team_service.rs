@@ -15,6 +15,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::auth::AuthenticatedProfile;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 use temper_core::types::ids::ProfileId;
@@ -291,11 +292,20 @@ pub async fn list_teams(pool: &PgPool, caller: ProfileId) -> ApiResult<Vec<TeamR
 /// Visible to any member of the team, or to a system admin. Non-visible teams
 /// return `NotFound` (not `Forbidden`) to avoid leaking team existence to
 /// non-members — team slugs are globally unique and used in share flows.
-pub async fn team_detail(pool: &PgPool, caller: ProfileId, team_id: Uuid) -> ApiResult<TeamDetail> {
+pub async fn team_detail(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+    team_id: Uuid,
+) -> ApiResult<TeamDetail> {
     // Auth (read gate): member (any role) or system admin. The `NotFound` above is rendered by
     // `TeamReadAuthority::denial`, so the information-hiding decision lives with the policy rather
     // than being re-made at each call site.
-    crate::authz::authorize::<crate::authz::TeamReadAuthority>(pool, caller, team_id).await?;
+    crate::authz::authorize::<crate::authz::TeamReadAuthority>(
+        pool,
+        crate::authz::Principal::Proof(authed),
+        team_id,
+    )
+    .await?;
 
     let team = sqlx::query_as!(
         TeamRow,
@@ -700,9 +710,13 @@ mod lifecycle_tests {
         add(&pool, team, owner, "owner", "native").await;
         add(&pool, team, member, "member", "native").await;
 
-        let detail = team_detail(&pool, ProfileId::from(owner), team)
-            .await
-            .unwrap();
+        let detail = team_detail(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner).await,
+            team,
+        )
+        .await
+        .unwrap();
         assert_eq!(detail.slug, "acme");
         assert_eq!(detail.members.len(), 2);
         assert!(detail.members.iter().any(|m| m.handle == "member"
@@ -717,7 +731,12 @@ mod lifecycle_tests {
         let team = mk_team(&pool, "acme").await;
         add(&pool, team, owner, "owner", "native").await;
 
-        let denied = team_detail(&pool, ProfileId::from(outsider), team).await;
+        let denied = team_detail(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, outsider).await,
+            team,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::NotFound(_))));
     }
 
@@ -811,9 +830,13 @@ mod lifecycle_tests {
         remove_member(&pool, ProfileId::from(owner), team, member)
             .await
             .unwrap();
-        let detail = team_detail(&pool, ProfileId::from(owner), team)
-            .await
-            .unwrap();
+        let detail = team_detail(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner).await,
+            team,
+        )
+        .await
+        .unwrap();
         assert_eq!(detail.members.len(), 1);
     }
 
@@ -953,9 +976,13 @@ mod lifecycle_tests {
         remove_member(&pool, ProfileId::from(maintainer), team, member)
             .await
             .unwrap();
-        let detail = team_detail(&pool, ProfileId::from(owner), team)
-            .await
-            .unwrap();
+        let detail = team_detail(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner).await,
+            team,
+        )
+        .await
+        .unwrap();
         assert_eq!(detail.members.len(), 2);
     }
 
@@ -971,9 +998,13 @@ mod lifecycle_tests {
         // `acme`, so this exercises the `is_system_admin` branch of the read gate.
         crate::test_support::grant_governance(&pool, admin).await;
 
-        let detail = team_detail(&pool, ProfileId::from(admin), team)
-            .await
-            .unwrap();
+        let detail = team_detail(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin).await,
+            team,
+        )
+        .await
+        .unwrap();
         assert_eq!(detail.slug, "acme");
         assert_eq!(detail.members.len(), 1);
     }
@@ -1059,7 +1090,12 @@ mod lifecycle_tests {
         // Gone from the caller's listing and no longer showable.
         let after = list_teams(&pool, ProfileId::from(owner)).await.unwrap();
         assert!(!after.iter().any(|t| t.id == team));
-        let shown = team_detail(&pool, ProfileId::from(owner), team).await;
+        let shown = team_detail(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner).await,
+            team,
+        )
+        .await;
         assert!(matches!(shown, Err(ApiError::NotFound(_))));
     }
 

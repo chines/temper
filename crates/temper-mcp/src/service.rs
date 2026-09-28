@@ -252,7 +252,7 @@ impl TemperMcpService {
     pub async fn ensure_profile_from_parts(
         &self,
         parts: &http::request::Parts,
-    ) -> Result<Profile, rmcp::ErrorData> {
+    ) -> Result<temper_services::auth::AuthenticatedProfile, rmcp::ErrorData> {
         let (claims, token) = authed_request(parts)?;
 
         // Level 1: classify → human email ladder → resolve → deactivation gate, all in
@@ -290,7 +290,7 @@ impl TemperMcpService {
                 other => map_authz_error(other),
             })?;
 
-        Ok(authed.into_profile())
+        Ok(authed)
     }
 
     // ── Tools (consolidated: 64 → 26) ─────────────────────────────────
@@ -750,8 +750,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardDeltaInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_ingest_delta(self, profile, input).await
+        let authed = self.ensure_profile_from_parts(&parts).await?;
+        tools::steward::steward_ingest_delta(self, authed, input).await
     }
 
     #[tool(
@@ -762,8 +762,8 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardAdvanceWatermarkInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_advance_watermark(self, profile, input).await
+        let authed = self.ensure_profile_from_parts(&parts).await?;
+        tools::steward::steward_advance_watermark(self, authed, input).await
     }
 
     #[tool(

@@ -21,7 +21,8 @@ use temper_core::types::connection::{
 use temper_core::types::ids::ProfileId;
 use temper_workflow::operations::sluggify;
 
-use crate::authz::{ConnectionAuthority, ConnectionScope};
+use crate::auth::AuthenticatedProfile;
+use crate::authz::{ConnectionAuthority, ConnectionScope, Principal};
 use crate::broker::{BrokerError, CredentialBroker, MintRequest, MintSubject};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::InsertGrantParams;
@@ -116,7 +117,7 @@ pub async fn resolve_inbound(
 /// [`get`], gated on the *existing row's* owning team.
 pub async fn get_for_caller(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Connection> {
     let connection = get(pool, id).await?;
-    machine_authz::authorize(pool, caller, connection.owner_team_id).await?;
+    machine_authz::authorize(pool, Principal::Bare(caller), connection.owner_team_id).await?;
     Ok(connection)
 }
 
@@ -128,9 +129,10 @@ pub async fn get_for_caller(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiRe
 /// yields NULL, which falls open.
 pub async fn list(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     include_revoked: bool,
 ) -> ApiResult<Vec<Connection>> {
+    let caller = ProfileId::from(authed.profile().id);
     let is_admin = crate::services::access_service::is_system_admin(pool, caller).await?;
 
     let rows = sqlx::query_as!(
@@ -176,7 +178,7 @@ pub async fn provision(
     // Auth before writes: a rejected provisioning must leave the DB completely unchanged — no
     // orphaned profile, no orphaned entity, no orphaned context. Resolving before the
     // transaction opens is what makes that assertable.
-    machine_authz::authorize(pool, caller, req.owner_team_id).await?;
+    machine_authz::authorize(pool, Principal::Bare(caller), req.owner_team_id).await?;
 
     if req.provider.trim().is_empty() {
         return Err(ApiError::BadRequest("provider must not be empty".into()));
@@ -280,7 +282,7 @@ pub async fn provision(
 pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<Connection> {
     // Auth before writes, keyed on the existing row's owning team.
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, revoker, existing.owner_team_id).await?;
+    machine_authz::authorize(pool, Principal::Bare(revoker), existing.owner_team_id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_connections
@@ -301,7 +303,7 @@ pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<Co
 /// one outright rather than issuing an UPDATE that silently matches no rows and reports success.
 async fn authorize_live(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Connection> {
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, caller, existing.owner_team_id).await?;
+    machine_authz::authorize(pool, Principal::Bare(caller), existing.owner_team_id).await?;
     if existing.revoked_at.is_some() {
         return Err(ApiError::Conflict(format!(
             "connection '{}' is revoked; reactivation is a new provisioning",
@@ -545,7 +547,7 @@ pub async fn grant_reach(
     let connection = get(pool, connection_id).await?;
     let proof = crate::authz::authorize::<ConnectionAuthority>(
         pool,
-        caller,
+        Principal::Bare(caller),
         ConnectionScope::new(connection_id, team_id),
     )
     .await?;
@@ -726,7 +728,7 @@ pub async fn revoke_reach(
     // `revoke_reach_survives_losing_the_target_team_role` exists to hold in place.
     let proof = crate::authz::authorize::<crate::authz::ConnectionControlAuthority>(
         pool,
-        caller,
+        Principal::Bare(caller),
         connection_id,
     )
     .await?;
@@ -1208,9 +1210,21 @@ mod tests {
         assert!(entity_still_there, "the emitter must keep resolving");
 
         // Hidden from the default list, visible when asked for.
-        let visible = svc::list(&pool, admin, false).await.expect("list");
+        let visible = svc::list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            false,
+        )
+        .await
+        .expect("list");
         assert!(visible.is_empty());
-        let all = svc::list(&pool, admin, true).await.expect("list revoked");
+        let all = svc::list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            true,
+        )
+        .await
+        .expect("list revoked");
         assert_eq!(all.len(), 1);
     }
 
@@ -1228,11 +1242,23 @@ mod tests {
             .await
             .expect("team-owned");
 
-        let seen = svc::list(&pool, owner, false).await.expect("list");
+        let seen = svc::list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            false,
+        )
+        .await
+        .expect("list");
         assert_eq!(seen.len(), 1, "the teamless connection must not be visible");
         assert_eq!(seen[0].owner_team_id, Some(team));
 
-        let admin_sees = svc::list(&pool, admin, false).await.expect("list");
+        let admin_sees = svc::list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            false,
+        )
+        .await
+        .expect("list");
         assert_eq!(admin_sees.len(), 2, "an admin sees every row");
     }
 

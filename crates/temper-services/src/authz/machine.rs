@@ -8,10 +8,9 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
 use temper_core::types::team::TeamRole;
 
-use super::ScopedAuthority;
+use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::{access_service, machine_authz::MachineAuthority, team_service};
 
@@ -21,7 +20,8 @@ impl ScopedAuthority for MachineAuthority {
     /// module doc — not an "unknown" to be skipped over.
     type Subject = Option<Uuid>;
 
-    async fn resolve(pool: &PgPool, caller: ProfileId, team: Option<Uuid>) -> ApiResult<Self> {
+    async fn resolve(pool: &PgPool, caller: Principal<'_>, team: Option<Uuid>) -> ApiResult<Self> {
+        let caller = caller.profile_id();
         if access_service::is_system_admin(pool, caller).await? {
             return Ok(MachineAuthority::SystemAdmin);
         }

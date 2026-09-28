@@ -61,9 +61,8 @@ pub async fn list(
     auth: AuthUser,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<MachineClient>>> {
-    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
-        machine_client_service::list(&state.pool, caller, q.include_revoked).await?,
+        machine_client_service::list(&state.pool, &auth.0, q.include_revoked).await?,
     ))
 }
 

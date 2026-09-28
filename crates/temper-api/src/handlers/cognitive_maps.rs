@@ -428,9 +428,7 @@ pub async fn grant(
         can_delete: body.can_delete,
         can_grant: body.can_grant,
     };
-    let outcome =
-        access_service::grant_capability(&state.pool, ProfileId::from(auth.0.profile().id), &req)
-            .await?;
+    let outcome = access_service::grant_capability(&state.pool, &auth.0, &req).await?;
     Ok(Json(outcome))
 }
 
@@ -460,8 +458,6 @@ pub async fn revoke(
         principal_table: body.principal_table,
         principal_id: body.principal_id,
     };
-    let outcome =
-        access_service::revoke_capability(&state.pool, ProfileId::from(auth.0.profile().id), &req)
-            .await?;
+    let outcome = access_service::revoke_capability(&state.pool, &auth.0, &req).await?;
     Ok(Json(outcome))
 }

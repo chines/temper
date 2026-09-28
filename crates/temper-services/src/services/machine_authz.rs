@@ -71,7 +71,7 @@ pub(crate) enum MachineAuthority {
 /// to create, read, or operate. "No team to check" must never mean "nothing to deny".
 pub(crate) async fn authorize(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: crate::authz::Principal<'_>,
     team: Option<Uuid>,
 ) -> ApiResult<MachineAuthority> {
     // The policy itself is this enum's `ScopedAuthority` impl (`authz/machine.rs`). This wrapper
@@ -166,7 +166,7 @@ pub(crate) async fn authorize_registration<'a>(
     teams: &'a [TeamSpec],
     grants: &'a [GrantSpec],
 ) -> ApiResult<AuthorizedReach<'a>> {
-    let authority = authorize(pool, caller, team).await?;
+    let authority = authorize(pool, crate::authz::Principal::Bare(caller), team).await?;
 
     // The caller is authorized; now the payload must be well-formed. An unknown role would
     // otherwise fail the `::team_role` enum cast deep inside `apply_reach`'s transaction and
@@ -300,7 +300,7 @@ async fn contain_reach(
         // Delegated or None in practice.
         access_service::authorize_capability_grant(
             pool,
-            caller,
+            crate::authz::Principal::Bare(caller),
             temper_substrate::payloads::RefTarget {
                 kind: temper_substrate::payloads::AnchorTable::Cogmaps,
                 id: grant.cogmap_id,
@@ -387,9 +387,13 @@ mod tests {
         let team = mk_team(&pool, "authz-t").await;
         join(&pool, team, alice, "owner").await;
 
-        let authority = authorize(&pool, ProfileId::from(alice), Some(team))
-            .await
-            .expect("a team owner may register for their own team");
+        let authority = authorize(
+            &pool,
+            crate::authz::Principal::Bare(ProfileId::from(alice)),
+            Some(team),
+        )
+        .await
+        .expect("a team owner may register for their own team");
         assert_eq!(authority, MachineAuthority::TeamOwner);
     }
 
@@ -399,9 +403,13 @@ mod tests {
         for role in ["maintainer", "member", "watcher"] {
             let p = mk_profile(&pool, &format!("authz-{role}")).await;
             join(&pool, team, p, role).await;
-            let err = authorize(&pool, ProfileId::from(p), Some(team))
-                .await
-                .expect_err("only an OWNER may register");
+            let err = authorize(
+                &pool,
+                crate::authz::Principal::Bare(ProfileId::from(p)),
+                Some(team),
+            )
+            .await
+            .expect_err("only an OWNER may register");
             assert!(matches!(err, ApiError::Forbidden), "{role} got {err:?}");
         }
     }
@@ -410,9 +418,13 @@ mod tests {
     async fn non_member_is_not_authorized(pool: PgPool) {
         let stranger = mk_profile(&pool, "authz-stranger").await;
         let team = mk_team(&pool, "authz-t3").await;
-        let err = authorize(&pool, ProfileId::from(stranger), Some(team))
-            .await
-            .expect_err("a non-member may not register");
+        let err = authorize(
+            &pool,
+            crate::authz::Principal::Bare(ProfileId::from(stranger)),
+            Some(team),
+        )
+        .await
+        .expect_err("a non-member may not register");
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -423,9 +435,13 @@ mod tests {
         let team = mk_team(&pool, "authz-t4").await;
         join(&pool, team, alice, "owner").await;
 
-        let err = authorize(&pool, ProfileId::from(alice), None)
-            .await
-            .expect_err("a teamless registration is admin-only");
+        let err = authorize(
+            &pool,
+            crate::authz::Principal::Bare(ProfileId::from(alice)),
+            None,
+        )
+        .await
+        .expect_err("a teamless registration is admin-only");
         assert!(
             matches!(err, ApiError::Forbidden),
             "NULL must deny, not fall open"
@@ -436,9 +452,13 @@ mod tests {
         join(&pool, gating, admin, "owner").await;
         // D11: admin-ness IS a governance grant, not gating-team ownership (`is_system_admin`).
         crate::test_support::grant_governance(&pool, admin).await;
-        let authority = authorize(&pool, ProfileId::from(admin), None)
-            .await
-            .expect("an admin may register a teamless machine");
+        let authority = authorize(
+            &pool,
+            crate::authz::Principal::Bare(ProfileId::from(admin)),
+            None,
+        )
+        .await
+        .expect("an admin may register a teamless machine");
         assert_eq!(authority, MachineAuthority::SystemAdmin);
     }
 
@@ -874,9 +894,13 @@ mod tests {
             .unwrap();
         }
 
-        let mine = machine_client_service::list(&pool, ProfileId::from(alice), false)
-            .await
-            .unwrap();
+        let mine = machine_client_service::list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            false,
+        )
+        .await
+        .unwrap();
         let ids: Vec<&str> = mine.iter().map(|c| c.client_id.as_str()).collect();
         assert_eq!(
             ids,
@@ -884,9 +908,13 @@ mod tests {
             "a team owner sees only their team's machines"
         );
 
-        let all = machine_client_service::list(&pool, ProfileId::from(admin), false)
-            .await
-            .unwrap();
+        let all = machine_client_service::list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin).await,
+            false,
+        )
+        .await
+        .unwrap();
         assert_eq!(all.len(), 3, "an admin sees every row, including teamless");
     }
 }
