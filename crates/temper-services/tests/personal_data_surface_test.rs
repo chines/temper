@@ -25,8 +25,10 @@
 //! the test structurally could not fail on it. Binary content is personal content the moment a
 //! person uploads it, so every bytea column nominates.
 //!
-//! This test does NOT claim the surface is complete. 150 `text` columns are nominated by nothing
-//! here, and the manifest says so in its own header. Coverage is never inferred from absence.
+//! This test does NOT claim the surface is complete. The `text` columns nominated by nothing here
+//! are declared in `scripts/sensitivity-scan-surface.txt`, and `sensitivity_scan_surface_test.rs`
+//! asserts the two manifests partition every text/varchar column. That makes the remainder
+//! declared, not detected. Coverage is never inferred from absence.
 
 use std::collections::{BTreeMap, BTreeSet};
 
