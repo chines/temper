@@ -6274,7 +6274,6 @@ dependencies = [
  "serde_json",
  "sqlx",
  "temper-services",
- "temper-substrate",
  "temperkb-client",
  "temperkb-core",
  "temperkb-principal",

@@ -3,28 +3,55 @@
 //! segment; `ingest_finalize` declares the session complete; `ingest_blocks` reads the landed set
 //! back, which is how a stateless caller resumes after an interruption.
 //!
-//! Unlike the CLI, an MCP caller has no chunker and no embedder: it omits `chunks_packed` entirely
-//! and the server chunks the segment text itself, carrying the heading breadcrumb across the block
-//! boundary so `header_path` stays continuous.
+//! Execution crosses the DEPLOYED API over the wire (beat G4 — the last direct cluster):
+//! begin → `POST /api/ingest` (the segmented branch: `IngestPayload.segmented`), append →
+//! `POST /api/resources/{id}/blocks`, finalize → `POST /api/resources/{id}/finalize`, blocks
+//! → `GET /api/resources/{id}/blocks`. Each call forwards the caller's bearer via the
+//! per-request temper-client relay built from the request's `Parts`, and touches the pool
+//! nowhere.
 //!
-//! Integrity is per-segment on the way in (`content_hash`, verified server-side) plus the opaque
-//! `body_hash` echoed back at finalize. Nothing here asks the caller to compute a merkle it has no
-//! way to derive.
+//! Unlike the CLI, an MCP caller has no chunker and no embedder: it omits `chunks_packed`
+//! entirely, so the server chunks each segment itself and carries the heading breadcrumb
+//! across the block boundary so `header_path` stays continuous — the server-side path the
+//! deployed route runs on this relay's forwarded payloads.
+//!
+//! Integrity is per-segment on the way in (`content_hash`, verified server-side) plus the
+//! opaque `body_hash` echoed back at finalize. Nothing here asks the caller to compute a
+//! merkle it has no way to derive.
+//!
+//! # Declared parity deltas (the direct faces pinned by
+//! # `ingest_blobs_artifacts_parity_test.rs`, flipped here deliberately)
+//!
+//! - **Append's occupied-seq Conflict**: an occupied seq refusing on re-write answers
+//!   `Conflict::Conflict` through the direct binding's generic `api_err` mapper — no Conflict
+//!   arm existed, so it fell to `internal_error`. The wire's 409 answers typed
+//!   (`ClientError::Conflict`) and renders `invalid_params` with the server's own sentence,
+//!   the `Conflict: ` label stripped.
+//! - **Finalize's expectation-mismatch Conflict** (`expected_blocks`,
+//!   `expected_body_hash`): same shape — the direct map had no `Conflict` arm; the wire's
+//!   409 renders `invalid_params` with the server's own sentence.
+//! - **Finalize's whole-content-hash mismatch** (`expected_content_hash` — NOT reachable
+//!   from MCP today: the tool sends `None`, declared below): the wire answers 422
+//!   `CONTENT_INTEGRITY` typed (`ClientError::ContentIntegrity`) and renders
+//!   `invalid_params` with the server's sentence — the G3c closed-invocation family. Named
+//!   (the arm exists, the tool never fires it); not a reachable parity face.
+//!
+//! The surface-side checks stay MCP-local (pre-wire): begin's "requires content" arm and
+//! "content_hash does not match content" arm are the tool's own input assertions, unchanged
+//! either side of the door. The dispatch requirement arms are byte-exact.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use uuid::Uuid;
 
-use temper_core::error::TemperError;
-use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::ingest::{AppendBlockPayload, FinalizePayload, SegmentedBegin};
-use temper_services::backend::DbBackend;
-use temper_workflow::operations::{Backend, Surface};
+use temper_client::error::ClientError;
+use temper_core::types::ingest::{
+    AppendBlockPayload, FinalizePayload, IngestPayload, SegmentedBegin,
+};
 
-use temper_core::types::Profile;
-
-use crate::service::TemperMcpService;
-use crate::tools::resources::{build_create_command, CreateResourceInput};
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
+use crate::tools::resources::CreateResourceInput;
 
 /// The segment budget a caller gets when it does not name one. Matches the CLI's default so a
 /// resumed session re-derives identical boundaries. Recorded, never enforced.
@@ -36,20 +63,35 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
+/// Wire refusals to rmcp, in the G3c/G3d mapping idiom (see the module header for the
+/// declared deltas).
+fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
-        TemperError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("{action}: {msg}"), None)
+        ClientError::NotFound { message } => {
+            rmcp::ErrorData::invalid_params(format!("{action}: {message}"), None)
         }
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        ClientError::Server {
+            status: 422,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        ClientError::ContentIntegrity { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
         // A refusal that named the capability it withheld — carry the gate's own sentence. The
         // terse arm below stays exactly as it was, for the caller who may not even read the subject.
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::new(
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            format!("{action}: {msg}"),
+            format!("{action}: {message}"),
             None,
         ),
-        TemperError::Forbidden => rmcp::ErrorData::new(
+        ClientError::Forbidden => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
             format!("{action}: cannot modify this resource"),
             None,
@@ -58,11 +100,10 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
     }
 }
 
-fn parse_resource(s: &str) -> Result<ResourceId, rmcp::ErrorData> {
-    let uuid = temper_workflow::operations::parse_ref(s)
-        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad resource ref: {e}"), None))?
-        .0;
-    Ok(ResourceId::from(uuid))
+fn parse_resource(s: &str) -> Result<Uuid, rmcp::ErrorData> {
+    temper_workflow::operations::parse_ref(s)
+        .map(|p| p.uuid())
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad resource ref: {e}"), None))
 }
 
 // ── Inputs ─────────────────────────────────────────────────────────────────────
@@ -124,15 +165,66 @@ pub struct IngestBlocksInput {
     pub resource: String,
 }
 
+// ── Wire-shape builders ───────────────────────────────────────────────────────
+//
+// The wire request is built straight from the input. What stays behind the door:
+// the surface-side hash check on segment 0 (declared below, MCP-local), and the
+// `Surface::Mcp` stamp the direct command carried (now the carrier).
+
+/// The wire `IngestPayload` for a begin call: the create fields, the segment's raw
+/// text, and the segmented-begin discriminator. The MCP caller's sources grammar —
+/// `Vec<String>` of refs or URLs — resolves to the wire's typed `ProvenanceSource`s
+/// here, where the classifier lives.
+fn wire_begin(input: IngestBeginInput) -> IngestPayload {
+    let create = input.create;
+    IngestPayload {
+        title: create.title,
+        origin_uri: create
+            .origin_uri
+            .unwrap_or_else(|| format!("mcp://agent/{}", Uuid::new_v4())),
+        context_ref: create.context_ref.unwrap_or_else(|| "@me/default".into()),
+        home_cogmap_id: create
+            .cogmap
+            .as_deref()
+            .and_then(|r| temper_workflow::operations::parse_ref(r).ok())
+            .map(|p| p.uuid()),
+        doc_type_name: create.doc_type_name,
+        goal: create
+            .goal
+            .as_deref()
+            .and_then(|r| temper_workflow::operations::parse_ref(r).ok())
+            .map(|p| p.uuid()),
+        content_hash: None,
+        idempotency_key: create.idempotency_key,
+        content: create.content.unwrap_or_default(),
+        metadata: None,
+        managed_meta: create
+            .managed_meta
+            .and_then(|m| serde_json::to_value(m).ok()),
+        open_meta: create.open_meta,
+        chunks_packed: None,
+        sources: create
+            .sources
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|s| temper_workflow::operations::resolve_provenance_source(s).ok())
+            .collect(),
+        act: create.act,
+        segmented: Some(SegmentedBegin {
+            total_blocks_hint: input.total_blocks_hint,
+            block_budget: input.block_budget.unwrap_or(DEFAULT_BLOCK_BUDGET),
+            source_hash: input.source_hash,
+        }),
+    }
+}
+
 // ── Tool handlers ──────────────────────────────────────────────────────────────
 
 pub async fn ingest_begin(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &axum::http::request::Parts,
     input: IngestBeginInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile_id = ProfileId::from(profile.id);
-
     // Segment 0's integrity is checked here, on the surface: it travels as the create body, so the
     // append path's `validate_append` never sees it.
     let content = input.create.content.as_deref().unwrap_or_default();
@@ -149,30 +241,23 @@ pub async fn ingest_begin(
         ));
     }
 
-    let seg = SegmentedBegin {
-        total_blocks_hint: input.total_blocks_hint,
-        block_budget: input.block_budget.unwrap_or(DEFAULT_BLOCK_BUDGET),
-        source_hash: input.source_hash,
-    };
-    let cmd = build_create_command(svc, profile_id, input.create).await?;
-
-    let backend = DbBackend::new(svc.api_state.pool.clone(), profile_id);
-    let out = backend
-        .begin_segmented_ingest(cmd, seg)
+    let out = svc
+        .relay_client(parts)?
+        .ingest()
+        .begin_segmented(&wire_begin(input))
         .await
-        .map_err(|e| map_err(e, "ingest_begin"))?;
+        .across_auth(|e| map_err(e, "ingest_begin"))?;
 
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(to_text(&out.value)),
+        rmcp::model::ContentBlock::text(to_text(&out)),
     ]))
 }
 
 pub async fn ingest_append(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &axum::http::request::Parts,
     input: IngestAppendInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile_id = ProfileId::from(profile.id);
     let resource = parse_resource(&input.resource)?;
 
     // Classify each source (resource ref → Resource, http/https URL → Remote) with the same shared
@@ -188,11 +273,12 @@ pub async fn ingest_append(
             rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None)
         })?;
 
-    let backend = DbBackend::new(svc.api_state.pool.clone(), profile_id);
-    let out = backend
+    let out = svc
+        .relay_client(parts)?
+        .ingest()
         .append_block(
             resource,
-            AppendBlockPayload {
+            &AppendBlockPayload {
                 seq: input.seq,
                 content: input.content,
                 content_hash: input.content_hash,
@@ -200,29 +286,27 @@ pub async fn ingest_append(
                 chunks_packed: None,
                 sources,
             },
-            Surface::Mcp,
         )
         .await
-        .map_err(|e| map_err(e, "ingest_append"))?;
+        .across_auth(|e| map_err(e, "ingest_append"))?;
 
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(to_text(&out.value)),
+        rmcp::model::ContentBlock::text(to_text(&out)),
     ]))
 }
 
 pub async fn ingest_finalize(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &axum::http::request::Parts,
     input: IngestFinalizeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile_id = ProfileId::from(profile.id);
     let resource = parse_resource(&input.resource)?;
 
-    let backend = DbBackend::new(svc.api_state.pool.clone(), profile_id);
-    backend
-        .finalize_ingest(
+    svc.relay_client(parts)?
+        .ingest()
+        .finalize(
             resource,
-            FinalizePayload {
+            &FinalizePayload {
                 expected_blocks: input.expected_blocks,
                 expected_body_hash: input.expected_body_hash,
                 // MCP is honestly EXEMPT, not covered: its finalize tool never sees the whole body,
@@ -230,10 +314,9 @@ pub async fn ingest_finalize(
                 // skips the check — say so rather than imply a guarantee we don't have.
                 expected_content_hash: None,
             },
-            Surface::Mcp,
         )
         .await
-        .map_err(|e| map_err(e, "ingest_finalize"))?;
+        .across_auth(|e| map_err(e, "ingest_finalize"))?;
 
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(format!(
@@ -245,20 +328,20 @@ pub async fn ingest_finalize(
 
 pub async fn ingest_blocks(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &axum::http::request::Parts,
     input: IngestBlocksInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let profile_id = ProfileId::from(profile.id);
     let resource = parse_resource(&input.resource)?;
 
-    let backend = DbBackend::new(svc.api_state.pool.clone(), profile_id);
-    let out = backend
+    let out = svc
+        .relay_client(parts)?
+        .ingest()
         .list_blocks(resource)
         .await
-        .map_err(|e| map_err(e, "ingest_blocks"))?;
+        .across_auth(|e| map_err(e, "ingest_blocks"))?;
 
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(to_text(&out.value)),
+        rmcp::model::ContentBlock::text(to_text(&out)),
     ]))
 }
 
@@ -369,11 +452,11 @@ fn begin_input_from(input: SegmentedIngestInput) -> Result<IngestBeginInput, rmc
 /// Dispatch the consolidated segmented-ingest tool.
 pub async fn segmented_ingest(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &axum::http::request::Parts,
     input: SegmentedIngestInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     match input.action {
-        IngestAction::Begin => ingest_begin(svc, profile, begin_input_from(input)?).await,
+        IngestAction::Begin => ingest_begin(svc, parts, begin_input_from(input)?).await,
         IngestAction::Append => {
             let resource = input.resource.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("append requires `resource`".to_string(), None)
@@ -389,7 +472,7 @@ pub async fn segmented_ingest(
             })?;
             ingest_append(
                 svc,
-                profile,
+                parts,
                 IngestAppendInput {
                     resource,
                     seq,
@@ -418,7 +501,7 @@ pub async fn segmented_ingest(
             })?;
             ingest_finalize(
                 svc,
-                profile,
+                parts,
                 IngestFinalizeInput {
                     resource,
                     expected_blocks,
@@ -431,10 +514,12 @@ pub async fn segmented_ingest(
             let resource = input.resource.ok_or_else(|| {
                 rmcp::ErrorData::invalid_params("blocks requires `resource`".to_string(), None)
             })?;
-            ingest_blocks(svc, profile, IngestBlocksInput { resource }).await
+            ingest_blocks(svc, parts, IngestBlocksInput { resource }).await
         }
     }
 }
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -444,8 +529,8 @@ mod tests {
     /// `create.content` — `#[serde(flatten)] Option<CreateResourceInput>` collects the
     /// leftovers, but the outer `content` field (append's) shares the JSON key, so
     /// raw serde binds it outer and `create.content` arrives None (the defect the
-    /// parity suite probed red). The dispatcher's reshape honors the outer slot as
-    /// begin's segment text — this pins the repair.
+    /// parity suite probed red at author time). The dispatcher's reshape honors the
+    /// outer slot as begin's segment text — this pins the repair.
     #[test]
     fn the_consolidated_begin_input_routes_content_into_create() {
         let input: SegmentedIngestInput = serde_json::from_value(serde_json::json!({
@@ -457,8 +542,6 @@ mod tests {
             "content_hash": "deadbeef"
         }))
         .expect("begin input deserializes");
-        // The raw wire parse binds the outer slot (serde precedence) — named, not
-        // pretended flattened.
         assert!(
             input
                 .create

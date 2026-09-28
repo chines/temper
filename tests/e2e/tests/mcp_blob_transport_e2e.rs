@@ -42,6 +42,7 @@ use temper_services::state::{AppState, JwksKeyStore};
 async fn spawn_mcp_server(
     pool: sqlx::PgPool,
     blob_config: Option<temper_services::config::BlobConfig>,
+    api_base_url: &str,
 ) -> std::net::SocketAddr {
     let decoding_key =
         jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
@@ -63,7 +64,7 @@ async fn spawn_mcp_server(
         enable_swagger: false,
         internal_reconcile_secret: None,
         embed_dispatch_secret: None,
-        mcp_service_secret: None,
+        mcp_service_secret: Some(common::TEST_MCP_SERVICE_SECRET.to_string()),
         vercel_connect: None,
         slack_link: None,
         slack_mint_secret: None,
@@ -79,11 +80,13 @@ async fn spawn_mcp_server(
         ));
     }
 
+    // The network door: tool calls forward to the app's real listener on the caller's
+    // bearer + the relay carrier; the local store stays resident for the advertisement.
     let mcp_config = McpConfig {
         mcp_base_url: "http://mcp.test".to_string(),
         mcp_client_id: None,
-        api_base_url: None,
-        mcp_service_secret: None,
+        api_base_url: Some(api_base_url.to_string()),
+        mcp_service_secret: Some(common::TEST_MCP_SERVICE_SECRET.to_string()),
         oauth: OAuthStaticConfig {
             redirect_uris: vec![],
             allow_localhost: true,
@@ -177,7 +180,7 @@ async fn blob_tools_survive_the_real_transport_byte_for_byte(pool: sqlx::PgPool)
 
     // The MCP router as its own deployment, blob flow live.
     let blob_config = app_blob_config();
-    let mcp_addr = spawn_mcp_server(app.pool.clone(), Some(blob_config)).await;
+    let mcp_addr = spawn_mcp_server(app.pool.clone(), Some(blob_config), &app.base_url()).await;
 
     // A conformant client, over real HTTP, with the harness token as the bearer. The client
     // is rmcp's OWN reqwest (aliased `reqwest13` — the version its `StreamableHttpClient`
@@ -357,7 +360,10 @@ async fn blob_tools_survive_the_real_transport_byte_for_byte(pool: sqlx::PgPool)
 /// invalid-params naming the threshold in force and the segmented path beyond it.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_mcp_commit_door_refuses_over_threshold_bytes(pool: sqlx::PgPool) {
-    let app = common::setup_with_blob_store(pool).await;
+    // The refusal's threshold rides the app's config: the API's own single-request
+    // limit, which is the one the commit route enforces. Its own fixture (1024) is
+    // what the refusal must name — the closed-door's threshold posture.
+    let app = common::setup_with_blob_store_with_ceiling(pool, 1024).await;
     let ctx = app
         .client
         .contexts()
@@ -366,9 +372,11 @@ async fn the_mcp_commit_door_refuses_over_threshold_bytes(pool: sqlx::PgPool) {
         .expect("context create failed");
 
     // One MCP server with a deliberately tiny threshold — the refusal must name it.
-    let mut blob_config = app_blob_config();
-    blob_config.single_request_max_bytes = 1024;
-    let mcp_addr = spawn_mcp_server(app.pool.clone(), Some(blob_config)).await;
+    // The threshold the refusal names is the APP's: this test pins the door's own
+    // config (via setup_with_blob_store_with_ceiling) — the MCP harness's config is the
+    // advertisement driver, not the refusal source.
+    let mcp_addr =
+        spawn_mcp_server(app.pool.clone(), Some(app_blob_config()), &app.base_url()).await;
     let (service, peer) = connect_client(mcp_addr, &app.token).await;
 
     let over_threshold = vec![9u8; 4096]; // 4× the threshold
@@ -415,8 +423,9 @@ async fn a_closed_door_hides_the_blob_pair_from_the_wire(pool: sqlx::PgPool) {
     // Same router, two postures: the open server supplies the advertisement baseline, so
     // the closed server's list is compared against the LIVE tool set, not a hand-copied
     // one (under-hiding — a new blob tool omitted from the hide list — goes red here too).
-    let open_addr = spawn_mcp_server(app.pool.clone(), Some(app_blob_config())).await;
-    let closed_addr = spawn_mcp_server(app.pool.clone(), None).await;
+    let open_addr =
+        spawn_mcp_server(app.pool.clone(), Some(app_blob_config()), &app.base_url()).await;
+    let closed_addr = spawn_mcp_server(app.pool.clone(), None, &app.base_url()).await;
     let (open_service, open_peer) = connect_client(open_addr, &app.token).await;
     let (closed_service, closed_peer) = connect_client(closed_addr, &app.token).await;
 

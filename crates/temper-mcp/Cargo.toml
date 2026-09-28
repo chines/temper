@@ -28,7 +28,6 @@ temper-services = { path = "../temper-services" }
 
 temperkb-principal.workspace = true
 temperkb-core = { workspace = true, features = ["web-api", "mcp"] }
-temper-substrate = { path = "../temper-substrate" }
 temperkb-workflow = { workspace = true, features = ["web-api", "mcp"] }
 temperkb-telemetry.workspace = true
 

@@ -27,23 +27,20 @@ use sqlx::PgPool;
 use temper_mcp::service::TemperMcpService;
 use uuid::Uuid;
 
-/// The witness harness: the relay-ready app; the MCP service (direct-bound until
-/// the G4 swap); the harness principal's DIRECT parts (the pre-swap bearer vehicle
-/// the gate resolves a profile from) for the commit; and the harness principal's
-/// RELAY parts for the trail read through the already-door `element_trail`.
+/// The witness harness, once per test: the relay-ready app, the MCP service, and
+/// the harness principal's relay parts — the same vehicle for every leg (a single
+/// door; direct parts are gone from this family).
 async fn harness(
     pool: PgPool,
 ) -> (
     common::E2eTestApp,
     TemperMcpService,
-    axum::http::request::Parts, // direct (the commit)
-    axum::http::request::Parts, // relay  (the trail)
+    axum::http::request::Parts,
 ) {
     let app = common::setup_relay(pool).await;
     let svc = app.mcp_relay_service(app.pool.clone()).await;
-    let direct = app.direct_parts();
-    let relay = app.relay_parts();
-    (app, svc, direct, relay)
+    let parts = app.relay_parts();
+    (app, svc, parts)
 }
 
 /// Seed a resource through the app client (the production-true path) and commit one
@@ -52,7 +49,7 @@ async fn harness(
 async fn commit_an_authored_act(
     app: &common::E2eTestApp,
     svc: &TemperMcpService,
-    direct_parts: &axum::http::request::Parts,
+    parts: &axum::http::request::Parts,
 ) -> Uuid {
     let ctx_id: Uuid = sqlx::query_scalar(
         "SELECT c.id FROM kb_contexts c JOIN kb_profiles p ON p.id = c.owner_id \
@@ -76,13 +73,9 @@ async fn commit_an_authored_act(
         .await
         .expect("resource seed through the API");
 
-    let profile = svc
-        .ensure_profile_from_parts(direct_parts)
-        .await
-        .expect("the gate resolves the harness principal");
     let res = temper_mcp::tools::data_artifacts::commit_artifact(
         svc,
-        profile,
+        parts,
         serde_json::from_value(json!({
             "resource_id": resource.id.to_string(),
             "kind": "measurement",
@@ -111,12 +104,12 @@ async fn commit_an_authored_act(
 /// `actor_name` names the MCP surface — the write the swap carries unchanged.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_commit_artifact_through_the_tool_lands_at_mcp_in_the_ledger(pool: PgPool) {
-    let (app, svc, direct_parts, relay_parts) = harness(pool).await;
-    let resource = commit_an_authored_act(&app, &svc, &direct_parts).await;
+    let (app, svc, parts) = harness(pool).await;
+    let resource = commit_an_authored_act(&app, &svc, &parts).await;
 
     let trail = temper_mcp::tools::trail::element_trail(
         &svc,
-        &relay_parts,
+        &parts,
         serde_json::from_value(json!({
             "kind": "node",
             "element": resource.to_string(),

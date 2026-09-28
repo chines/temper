@@ -28,9 +28,6 @@ use temper_core::types::data_artifact::{
     ArtifactCommitRequest, ArtifactListParams, KindOwnerInput,
 };
 use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest};
-use temper_services::auth_config::{AuthConfig, AuthMode};
-use temper_services::config::ApiConfig;
-use temper_services::state::{AppState, JwksKeyStore};
 use temper_workflow::types::resource::ResourceCreateRequest;
 
 /// A minimal enforcing-able schema: an object with a required string `value`.
@@ -55,69 +52,17 @@ fn text_of(result: rmcp::model::CallToolResult) -> String {
     }
 }
 
-/// Build an MCP service over the test pool and resolve the direct families'
-/// caller through its one gate — the same `ensure_profile_from_parts` path
-/// production dispatch runs — for the `e2e-test-user` sub. Returns the pair so
-/// every tool call is handed the profile it acts under.
-async fn mcp_service(
-    pool: &sqlx::PgPool,
+/// The beat-G4 relay: a service pointed at the app's real listener plus the
+/// caller's relay parts. Every declare call forwards to the door — the direct
+/// binding's pair (`mcp_service`) is retired.
+async fn relay_service_and_parts(
+    app: &common::E2eTestApp,
 ) -> (
     temper_mcp::service::TemperMcpService,
-    temper_core::types::Profile,
+    axum::http::request::Parts,
 ) {
-    let decoding_key =
-        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
-            .expect("decoding key");
-    let jwks_store = JwksKeyStore::with_static_key(decoding_key, jsonwebtoken::Algorithm::RS256);
-    let api_config = ApiConfig {
-        database_url: "unused".to_string(),
-        auth: AuthConfig {
-            issuer: "test-issuer".to_string(),
-            jwks_url: "unused".to_string(),
-            audience: common::TEST_AUDIENCE.to_string(),
-            mcp_audience: common::TEST_AUDIENCE.to_string(),
-            mode: AuthMode::ExternalIdp,
-        },
-        auth_provider_name: "test-provider".to_string(),
-        cors_origins: vec![],
-        port: 0,
-        enable_swagger: false,
-        internal_reconcile_secret: None,
-        embed_dispatch_secret: None,
-        mcp_service_secret: None,
-        vercel_connect: None,
-        slack_link: None,
-        slack_mint_secret: None,
-        rate_limit: None,
-        blob: None,
-        blob_disabled_by_policy: false,
-    };
-    let state = AppState::new(pool.clone(), jwks_store, api_config);
-    let svc = temper_mcp::service::TemperMcpService::new(
-        state,
-        temper_mcp::service::relay_off_config(),
-        temper_mcp::service::shared_relay_pool(),
-    );
-
-    let req = axum::http::Request::builder()
-        .extension(temper_mcp::middleware::BearerToken("synthetic".to_string()))
-        .extension(temper_services::auth::RawJwtClaims {
-            sub: "e2e-test-user".to_string(),
-            email: None,
-            email_verified: None,
-            azp: None,
-            gty: None,
-            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
-            iat: 0,
-        })
-        .body(())
-        .expect("build request");
-    let (req_parts, ()) = req.into_parts();
-    let profile = svc
-        .ensure_profile_from_parts(&req_parts)
-        .await
-        .expect("resolve the caller profile through the gate");
-    (svc, profile)
+    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    (svc, app.relay_parts())
 }
 
 /// A context holding one resource — the minimal world where the defaulting arm resolves.
@@ -185,7 +130,7 @@ async fn explicit_kind_owner_declares_on_an_empty_context_over_http(pool: PgPool
 /// dropped between the tool input and the SQL wrapper.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn explicit_kind_owner_declares_on_an_empty_context_over_mcp(pool: PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     let profile = app.client.profile().get().await.expect("profile").id;
     let context = app
         .client
@@ -193,11 +138,11 @@ async fn explicit_kind_owner_declares_on_an_empty_context_over_mcp(pool: PgPool)
         .create("e2e-refusal-empty-mcp", None)
         .await
         .expect("context create failed");
-    let (svc, caller) = mcp_service(&pool).await;
+    let (svc, parts) = relay_service_and_parts(&app).await;
 
     let result = temper_mcp::tools::data_artifact_shapes::declare_shape(
         &svc,
-        caller,
+        &parts,
         temper_mcp::tools::data_artifact_shapes::DeclareShapeInput {
             home_type: "context".to_string(),
             home_id: context.id.to_string(),
@@ -270,7 +215,7 @@ async fn sql_refusal_carries_its_vocabulary_over_http(pool: PgPool) {
 /// not an internal-error envelope around them.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn sql_refusal_carries_its_vocabulary_over_mcp(pool: PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     app.client
         .profile()
         .get()
@@ -282,11 +227,11 @@ async fn sql_refusal_carries_its_vocabulary_over_mcp(pool: PgPool) {
         .create("e2e-refusal-vocab-mcp", None)
         .await
         .expect("context create failed");
-    let (svc, caller) = mcp_service(&pool).await;
+    let (svc, parts) = relay_service_and_parts(&app).await;
 
     let err = temper_mcp::tools::data_artifact_shapes::declare_shape(
         &svc,
-        caller,
+        &parts,
         temper_mcp::tools::data_artifact_shapes::DeclareShapeInput {
             home_type: "context".to_string(),
             home_id: context.id.to_string(),
@@ -402,7 +347,7 @@ async fn enforcing_refusal_names_the_violations_over_http(pool: PgPool) {
 /// in an internal-error envelope either.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn enforcing_refusal_names_the_violations_over_mcp(pool: PgPool) {
-    let app = common::setup(pool.clone()).await;
+    let app = common::setup_relay(pool.clone()).await;
     let (context_id, resource_id) = context_with_resource(&app, "e2e-enforce-mcp").await;
 
     app.client
@@ -419,11 +364,11 @@ async fn enforcing_refusal_names_the_violations_over_mcp(pool: PgPool) {
         )
         .await
         .expect("declaring an enforcing shape in a context with a resource must succeed");
-    let (svc, caller) = mcp_service(&pool).await;
+    let (svc, parts) = relay_service_and_parts(&app).await;
 
     let err = temper_mcp::tools::data_artifacts::commit_artifact(
         &svc,
-        caller,
+        &parts,
         temper_mcp::tools::data_artifacts::CommitArtifactInput {
             resource_id: resource_id.to_string(),
             kind: "measurement".to_string(),

@@ -1,25 +1,43 @@
 //! Data-artifact shape registry tools — visibility-gated reads and
 //! authority-gated declares over `kb_data_artifact_shapes`.
+//!
+//! Execution crosses the DEPLOYED API over the wire (beat G4 — the last direct
+//! cluster): `list` / `declare` cross by home — a context home rides
+//! `GET|POST /api/contexts/{id}/shapes`, a cogmap home rides
+//! `GET|POST /api/cognitive-maps/{id}/shapes` (the route-first pair, PR #968 —
+//! until it the cogmap arm had no wire door); `get` rides `GET /api/shapes/{shape_id}`
+//! on either home. Each call forwards the caller's bearer via the per-request
+//! temper-client relay built from the request's `Parts`, and touches the pool nowhere.
+//!
+//! The emitter the direct binding passed explicitly (`resolve_emitter(…, "mcp")`)
+//! is the request's resolved surface now: both declare routes read `RequestSurface`,
+//! so a declare through this door attributes the caller's own `@mcp`.
+//!
+//! # Declared parity deltas (the direct faces pinned by
+//! # `ingest_blobs_artifacts_parity_test.rs`, flipped here deliberately)
+//!
+//! - **`get` on an absent or invisible shape**: the direct read answered 200-text
+//!   ("Shape not found or not visible to you."). The route 404s: the door renders
+//!   `invalid_params` with the server's own sentence ("shape not found").
+//!
+//! Every other arm maps arm-for-arm: the direct map's bare NotFound/BadRequest
+//! (the `invalid_params` arms carried no prefix) and the declare authority gate's
+//! tool-voiced sentence ("Not authorized to declare shapes in this home: authoring
+//! authority required.") keep their shapes through the door.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_client::error::ClientError;
+use temper_core::types::authorship::ActInput;
 use temper_core::types::data_artifact::KindOwnerInput;
-use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeView};
+use temper_core::types::data_artifact_shape::{EnforcementMode, ShapeDeclareRequest};
 use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{CogmapId, ContextId, ProfileId, ShapeId};
-use temper_services::backend::substrate_read;
-use temper_services::error::ApiError;
-use temper_services::services::shape_service::{self, DeclareShapeServiceParams};
-use temper_substrate::payloads::{
-    AnchorRef, EnforcementMode as SubstrateEnforcementMode, KindOwner,
-};
+use temper_core::types::ids::{CogmapId, ContextId, ShapeId};
 
-use temper_core::types::Profile;
-
-use crate::service::TemperMcpService;
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListShapesInput {
@@ -35,18 +53,21 @@ pub struct GetShapeInput {
     pub shape_id: String,
 }
 
+// ── Tool handlers ──────────────────────────────────────────────────────────────
+
 pub async fn list_shapes(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &axum::http::request::Parts,
     input: ListShapesInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let pool = &svc.api_state.pool;
-
     let anchor = parse_home_anchor(&input.home_type, &input.home_id)?;
 
-    let shapes = substrate_read::list_shapes(pool, ProfileId::from(profile.id), anchor)
+    let shapes = svc
+        .relay_client(parts)?
+        .data_artifacts()
+        .list_for(anchor)
         .await
-        .map_err(map_api_err)?;
+        .across_auth(|e| map_err(e, "list_data_artifact_shapes"))?;
 
     let json = serde_json::to_string_pretty(&shapes).unwrap_or_else(|_| "[]".to_string());
     Ok(CallToolResult::success(vec![
@@ -56,28 +77,28 @@ pub async fn list_shapes(
 
 pub async fn get_shape(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &axum::http::request::Parts,
     input: GetShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let pool = &svc.api_state.pool;
-
     let shape_id = parse_shape_ref(&input.shape_id)?;
 
-    let shape = substrate_read::get_shape(pool, ProfileId::from(profile.id), shape_id)
+    let shape = svc
+        .relay_client(parts)?
+        .data_artifacts()
+        .get_shape(shape_id.uuid())
         .await
-        .map_err(map_api_err)?;
+        .across_auth(|e| match e {
+            // The route 404s an absent or invisible shape — the direct read's 200-text
+            // posture flips to an error carrying the server's sentence (declared in the
+            // module header).
+            ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+            other => map_err(other, "get_data_artifact_shape"),
+        })?;
 
-    match shape {
-        Some(s) => {
-            let json = serde_json::to_string_pretty(&s).unwrap_or_else(|_| "{}".to_string());
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text(json),
-            ]))
-        }
-        None => Ok(CallToolResult::success(vec![
-            rmcp::model::ContentBlock::text("Shape not found or not visible to you.".to_string()),
-        ])),
-    }
+    let json = serde_json::to_string_pretty(&shape).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![
+        rmcp::model::ContentBlock::text(json),
+    ]))
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -120,69 +141,75 @@ pub struct DeclareShapeInput {
 
 pub async fn declare_shape(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &axum::http::request::Parts,
     input: DeclareShapeInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
     let anchor = parse_home_anchor(&input.home_type, &input.home_id)?;
-    let home = match anchor {
-        HomeAnchor::Context(id) => AnchorRef::context(id),
-        HomeAnchor::Cogmap(id) => AnchorRef::cogmap(id),
+
+    // The act envelope assembles into the wire's typed act — never defaulted, never
+    // dropped (the G3c act-ride discipline; the wire accepts the envelope today and
+    // its drop is the separately-filed defect task 01a0e2f0-5bdc-7b00-94d2-0fbf9d141df0).
+    let confidence = match input.confidence.as_deref() {
+        Some("tentative") => Some(temper_core::types::authorship::ConfidenceBand::Tentative),
+        Some("probable") => Some(temper_core::types::authorship::ConfidenceBand::Probable),
+        Some("confident") => Some(temper_core::types::authorship::ConfidenceBand::Confident),
+        Some(other) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!("unrecognized confidence '{other}'; expected tentative|probable|confident"),
+                None,
+            ))
+        }
+        None => None,
     };
 
-    let kind_owner = input.kind_owner.map(|ko| match ko {
-        KindOwnerInput::Profile(id) => KindOwner::Profile(id),
-        KindOwnerInput::Team(id) => KindOwner::Team(id),
-    });
-
-    let enforcement = match input.enforcement {
-        EnforcementMode::Advisory => SubstrateEnforcementMode::Advisory,
-        EnforcementMode::Enforcing => SubstrateEnforcementMode::Enforcing,
-    };
-
-    let emitter = temper_substrate::writes::resolve_emitter(pool, profile_id, "mcp")
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("failed to resolve emitter: {e}"), None)
-        })?;
-
-    let shape_id = shape_service::declare_shape(
-        pool,
-        DeclareShapeServiceParams {
-            home,
-            kind: &input.kind,
-            kind_owner,
-            schema: &input.schema,
-            enforcement,
-            principal: profile_id,
-            emitter,
+    let request = ShapeDeclareRequest {
+        kind: input.kind,
+        kind_owner: input.kind_owner,
+        schema: input.schema,
+        enforcement: input.enforcement,
+        act: ActInput {
+            invocation_id: input
+                .invocation_id
+                .as_deref()
+                .map(|s| {
+                    temper_core::refs::parse_ref(s)
+                        .map(|id| temper_core::types::ids::InvocationId::from(id.0))
+                })
+                .transpose()
+                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?,
+            correlation_id: input
+                .correlation_id
+                .as_deref()
+                .map(|s| {
+                    temper_core::refs::parse_ref(s)
+                        .map(|id| temper_core::types::ids::CorrelationId::from(id.0))
+                })
+                .transpose()
+                .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?,
+            confidence,
+            reasoning: input.reasoning,
+            rationale: input.rationale,
+            persona: input.persona,
+            model: input.model,
         },
-    )
-    .await
-    .map_err(|e| match e {
-        ApiError::Forbidden => rmcp::ErrorData::invalid_params(
-            "Not authorized to declare shapes in this home: authoring authority required."
-                .to_string(),
-            None,
-        ),
-        ApiError::NotFound(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        ApiError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        // A typed refusal travels as a caller error carrying its own words — never wrapped
-        // in the internal-error envelope, which would splice the raw database text into an
-        // internal error and read as a server fault.
-        ApiError::DataArtifactRefusal(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        other => rmcp::ErrorData::internal_error(format!("Failed to declare shape: {other}"), None),
-    })?;
+    };
 
-    let shape: Option<ShapeView> = substrate_read::get_shape(pool, profile_id, shape_id)
+    let shape = svc
+        .relay_client(parts)?
+        .data_artifacts()
+        .declare_for(anchor, &request)
         .await
-        .map_err(map_api_err)?;
-
-    let shape = shape.ok_or_else(|| {
-        rmcp::ErrorData::internal_error("shape declared but not retrievable".to_string(), None)
-    })?;
+        .across_auth(|e| match e {
+            // The authority gate ("a caller who cannot author the home is refused with
+            // 403") keeps the tool's own requirement sentence — the G3c disclosure
+            // dialect: a principal with read standing reads back what they would need.
+            ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+                "Not authorized to declare shapes in this home: authoring authority required."
+                    .to_string(),
+                None,
+            ),
+            other => map_err(other, "declare_data_artifact_shape"),
+        })?;
 
     let json = serde_json::to_string_pretty(&shape).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![
@@ -190,6 +217,11 @@ pub async fn declare_shape(
     ]))
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+/// Resolve a home anchor from the input's two fields (`home_type` vocabulary
+/// guard at the parse callsite). The result feeds the client's keyed dispatch
+/// (`data_artifacts().list_for/declare_for` below).
 fn parse_home_anchor(home_type: &str, home_id: &str) -> Result<HomeAnchor, rmcp::ErrorData> {
     let id = parse_uuid_ref(home_id)?;
     match home_type {
@@ -207,7 +239,7 @@ fn parse_uuid_ref(s: &str) -> Result<Uuid, rmcp::ErrorData> {
     if let Ok(id) = Uuid::parse_str(s) {
         return Ok(id);
     }
-    let parts: Vec<&str> = s.split('-').collect();
+    let parts = s.split('-').collect::<Vec<_>>();
     if parts.len() >= 5 {
         let tail = parts[parts.len() - 5..].join("-");
         if let Ok(id) = Uuid::parse_str(&tail) {
@@ -224,6 +256,22 @@ fn parse_shape_ref(s: &str) -> Result<ShapeId, rmcp::ErrorData> {
     Ok(ShapeId::from(parse_uuid_ref(s)?))
 }
 
-fn map_api_err(e: ApiError) -> rmcp::ErrorData {
-    rmcp::ErrorData::internal_error(e.to_string(), None)
+fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
+    match e {
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
+        }
+        // The dedicated wire refusal: the SQL wrapper's own vocabulary or the
+        // enforcing-shape verdict's detail — the caller sees the refusal, not an
+        // internal error.
+        ClientError::DataArtifactRefusal { message } => {
+            rmcp::ErrorData::invalid_params(message, None)
+        }
+        other => rmcp::ErrorData::internal_error(format!("{action}: {other}"), None),
+    }
 }

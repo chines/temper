@@ -17,19 +17,12 @@ use uuid::Uuid;
 
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
-use temper_core::context_ref::parse_context_ref;
-// Still direct ONLY inside `build_create_command`, whose remaining caller is the ingest
-// family's `ingest_begin` (not this beat's scope). The resources handlers below never
-// touch it — their execution crosses the door.
 use temper_core::types::authorship::ActInput;
-use temper_core::types::home::HomeAnchor;
-use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::ids::ResourceId;
 use temper_core::types::provenance::ProvenanceSource;
 use temper_core::types::resource_view::{ResourceSection, ResourceView, SectionSet};
 #[cfg(test)]
 use temper_core::types::workflow_job::EmbeddingStatus;
-use temper_services::services::context_service::resolve_context_ref;
-use temper_workflow::operations::{BodyUpdate, CreateResource, Surface};
 use temper_workflow::types::managed_meta::ManagedMeta;
 
 use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
@@ -474,56 +467,6 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Build the command's `BodyUpdate` from optional content + optional resource-id sources,
-/// mapping each source id to `ProvenanceSource::Resource` (list position → accretion seq
-/// downstream). Shared by create and update. Guards the parse-don't-validate invariant:
-/// sources without a body block have nothing to attribute, so that combination is an
-/// `invalid_params` error rather than a silent drop.
-///
-/// Direct-binding remnant: its only remaining caller is `build_create_command` (the
-/// ingest family). The migrated resources handlers use [`resolve_sources`] instead —
-/// the door carries content and sources as separate flat fields.
-fn provenance_body(
-    content: Option<String>,
-    sources: Option<Vec<String>>,
-    content_block: Option<Uuid>,
-) -> Result<Option<BodyUpdate>, rmcp::ErrorData> {
-    match content {
-        Some(content) if !content.is_empty() => {
-            let mut body = BodyUpdate::new(content);
-            // Classify each source (http/https URL → Remote, else ref → Resource) with the same shared
-            // resolver the CLI uses; an unparseable value is a hard error, never a silent drop.
-            body.sources = sources
-                .unwrap_or_default()
-                .iter()
-                .map(|s| temper_workflow::operations::resolve_provenance_source(s))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None)
-                })?;
-            body.content_block = content_block;
-            Ok(Some(body))
-        }
-        _ => {
-            if sources.is_some_and(|s| !s.is_empty()) {
-                return Err(rmcp::ErrorData::invalid_params(
-                    "sources supplied without content — there is no body block to attribute"
-                        .to_owned(),
-                    None,
-                ));
-            }
-            if content_block.is_some() {
-                return Err(rmcp::ErrorData::invalid_params(
-                    "content_block supplied without content — there is no body revise to address"
-                        .to_owned(),
-                    None,
-                ));
-            }
-            Ok(None)
-        }
-    }
-}
-
 /// Classify each wire source (http/https URL → Remote, else ref → Resource) with the
 /// shared resolver the CLI uses; an unparseable value is a hard error, never a silent
 /// drop. The migrated handlers' version of `provenance_body`'s classification loop.
@@ -583,141 +526,6 @@ fn provenance_parts(
 }
 
 // ── Tool handlers ──────────────────────────────────────────────────
-
-/// Build the shared `CreateResource` command from an MCP create input: validate the owner format,
-/// resolve the home anchor (running the cogmap producer gate before any write), derive the slug from
-/// the title, default `origin_uri`, assemble the act context, and resolve the optional goal ref.
-///
-/// Sole caller since beat G3a: `tools::ingest::ingest_begin` (the ingest family) — a
-/// segmented begin creates a resource by exactly the same rules `create_resource` used
-/// to. `create_resource` itself now crosses the ingest door and builds its payload
-/// separately; when the ingest family migrates, this helper and its duplicate shaping
-/// die together.
-pub(crate) async fn build_create_command(
-    svc: &TemperMcpService,
-    profile_id: ProfileId,
-    input: CreateResourceInput,
-) -> Result<CreateResource, rmcp::ErrorData> {
-    let pool = &svc.api_state.pool;
-
-    // Validate owner format if provided (stub for R11)
-    if let Some(ref owner) = input.owner {
-        if !owner.starts_with('@') && !owner.starts_with('+') {
-            return Err(rmcp::ErrorData::invalid_params(
-                "owner must start with @ (profile) or + (team)".to_string(),
-                None,
-            ));
-        }
-    }
-
-    // Resolve the home anchor — exactly one of a cognitive map or a context.
-    // Symmetric with the HTTP ingest handler: the cogmap branch runs the
-    // producer write gate (auth before writes) before homing in the map.
-    let home = match (input.cogmap.as_deref(), input.context_ref.as_deref()) {
-        (Some(_), Some(_)) => {
-            return Err(rmcp::ErrorData::invalid_params(
-                "context_ref and cogmap are mutually exclusive; supply exactly one home"
-                    .to_string(),
-                None,
-            ));
-        }
-        (None, None) => {
-            return Err(rmcp::ErrorData::invalid_params(
-                "no home specified — supply exactly one of context_ref or cogmap".to_string(),
-                None,
-            ));
-        }
-        (Some(cogmap_ref), None) => {
-            // Trailing-UUID-only resolution (no server lookup).
-            let map = temper_workflow::operations::parse_ref(cogmap_ref)
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
-                })?
-                .0;
-            // Auth before writes is unchanged and still runs — it lives one layer down, in
-            // `DbBackend::create_resource`'s F1 gate (`check_cogmap_authorable`), which is the
-            // ENFORCING copy on the shared write path and denies before any row is written.
-            //
-            // What used to be here was a second, redundant `cogmap_service::authorable_by_profile`
-            // pre-check whose only job was to fail fast — and which, because it held a bare `bool`,
-            // could only render *"not authorized to author in this cognitive map"*. That string
-            // shadowed the gate: the create path is the most-used way into a map, and it answered in
-            // the opaque voice this change exists to retire, no matter what the gate below decided.
-            // A pre-check cannot be taught the disclosure rule without re-deriving the read probe
-            // beside it — two copies of one policy, which is the drift this file's own conventions
-            // forbid. So the fast-fail goes and the gate speaks.
-            HomeAnchor::Cogmap(temper_core::types::ids::CogmapId::from(map))
-        }
-        (None, Some(context_ref)) => {
-            // Parse + resolve the context ref (UUID or @owner/slug). Bare names are rejected.
-            let cref = parse_context_ref(context_ref).map_err(|e| {
-                rmcp::ErrorData::invalid_params(format!("invalid context_ref: {e}"), None)
-            })?;
-            let context = resolve_context_ref(pool, profile_id, &cref)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None)
-                })?;
-            HomeAnchor::Context(context)
-        }
-    };
-
-    // Slug is §7-dissolved (never stored; addressing is trailing-UUID-only), so it is NOT a
-    // caller input — always derived from the title via the one canonical slugifier, whose
-    // output is validate_slug-conformant (ASCII, runs collapsed). (issue #307 Bug 2)
-    let slug = temper_workflow::operations::sluggify(&input.title);
-
-    let origin_uri = input
-        .origin_uri
-        .unwrap_or_else(|| format!("mcp://agent/{}", Uuid::new_v4()));
-
-    let content = input.content.unwrap_or_default();
-
-    // Identity travels first-class on the cmd (title/slug below); managed_meta is
-    // Property-only. The caller-supplied managed_meta passes through untouched —
-    // the DbBackend validation pipeline injects identity into the validation
-    // document from the typed title/slug.
-    let managed_meta = input.managed_meta.unwrap_or_default();
-
-    // Create always writes a single new body block; per-block addressing is an update-only concern.
-    let body = provenance_body(Some(content), input.sources, None)?;
-
-    // Assemble the per-act correlation + authorship from the flattened discrete fields. The
-    // shared assembler enforces "confidence required iff authorship supplied"; map its
-    // BadRequest to invalid_params.
-    let act = input
-        .act
-        .into_act_context()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-
-    // Resolve the optional goal ref client-side (trailing-UUID-only, like `edge assert`); the
-    // backend projects the live `advances`→goal edge after create.
-    let goal = input
-        .goal
-        .as_deref()
-        .map(temper_workflow::operations::parse_ref)
-        .transpose()
-        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-
-    let cmd = CreateResource {
-        idempotency_key: input.idempotency_key,
-        slug,
-        doctype: input.doc_type_name,
-        home,
-        title: input.title,
-        body,
-        managed_meta,
-        open_meta: input.open_meta,
-        goal,
-        origin_uri: Some(origin_uri),
-        chunks_packed: None,
-        content_hash: None,
-        act,
-        origin: Surface::Mcp,
-    };
-
-    Ok(cmd)
-}
 
 pub async fn create_resource(
     svc: &TemperMcpService,
@@ -1758,6 +1566,7 @@ mod tests {
 #[cfg(test)]
 mod enriched_resource_tests {
     use super::*;
+    use temper_core::types::ids::ProfileId;
 
     /// A view as the read paths hand one over: `with_derived_refs` has run, so `ref` and
     /// `context_ref` are filled from the columns beside them rather than by this fixture.

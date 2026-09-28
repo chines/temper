@@ -82,12 +82,10 @@
 //!   hash mismatch refuses `invalid_params` bare with the backend's sentence
 //!   "content_hash mismatch for seq N: declared X, computed Y" (BadRequest
 //!   arm — the surface's own check at begin is not on the append path; the server
-//!   guards it). An occupied seq refusing: **FLIPPED DELTA** — an occupied-seq
-//!   re-write fires the SQL constraint, the backend's TF001→Conflict mapper renders
-//!   `internal_error` prefixed `ingest_append: Conflict: …` at the direct binding
-//!   (map_err has no Conflict arm; the conflict is resumable so the direct map
-//!   refuses as 500). The wire answers 409 Conflict → `invalid_params` with the
-//!   server's sentence, prefix + label dropped.
+//!   guards it). An occupied seq re-write refuses INTERNAL ERROR on both sides —
+//!   the direct catch-all and the wire's generic error bridge agree (the append
+//!   route never types the raise as Conflict; NOT a delta — a stable-class face
+//!   with a message-shape delta, named at the pin).
 //! - *finalize* — answers the success text `Finalized <ref> (N blocks).` on a
 //!   correct pair; a wrong `expected_blocks` fires the TF002 constraint →
 //!   **FLIPPED DELTA** — direct catches nothing for Conflict → `internal_error`
@@ -190,10 +188,13 @@ mod parity {
             .expect("the profile")
     }
 
-    /// Direct-family parts for an ARBITRARY approved identity — the G3c/G3d idiom —
-    /// the harness's caller or a second identity's parts, carrying its real claims.
-    /// At the swap, `direct_parts_for` dies and the drivers hand the parts to
-    /// `relay_parts_for` / `relay_parts`.
+    /// The production parts shape for an ARBITRARY approved identity: the claims
+    /// extension beside the bearer, exactly as the JWT middleware injects them. The
+    /// door forwards on the bearer alone; the one retained in-process read (the
+    /// context-anchor resolver, the reblock tool's scope=context arm) reads the
+    /// claims — so a bare relay-parts shape (bearer only) would blind THAT read.
+    /// Identity is consistent by construction: both halves come from the one
+    /// `(token, sub, email)` triple.
     pub fn direct_parts_for(
         _app: &super::common::E2eTestApp,
         token: &str,
@@ -212,7 +213,7 @@ mod parity {
                 iat: 0,
             })
             .body(())
-            .expect("direct parts build")
+            .expect("identity parts build")
             .into_parts()
             .0
     }
@@ -276,8 +277,7 @@ mod parity {
 
 use common::E2eTestApp;
 use parity::{
-    code_of, default_context_id, direct_parts_for, input, one_text, only_text, profile_id_by_email,
-    second_identity,
+    code_of, default_context_id, input, one_text, only_text, profile_id_by_email, second_identity,
 };
 
 /// The parity harness, once per test: the relay-ready app over this pool, the MCP
@@ -300,10 +300,9 @@ async fn run_reblock(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::reblock::resource_reblock(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::reblock::ResourceReblockInput>(params),
     )
     .await
@@ -314,10 +313,9 @@ async fn run_blob_read(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::blobs::blob_read(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::blobs::BlobReadInput>(params),
     )
     .await
@@ -328,10 +326,9 @@ async fn run_blob_manage(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::blobs::blob_manage(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::blobs::BlobManageInput>(params),
     )
     .await
@@ -342,10 +339,9 @@ async fn run_segmented_ingest(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::ingest::segmented_ingest(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::ingest::SegmentedIngestInput>(params),
     )
     .await
@@ -356,10 +352,9 @@ async fn run_list_artifacts(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::data_artifacts::list_artifacts(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::data_artifacts::ListArtifactsInput>(params),
     )
     .await
@@ -370,10 +365,9 @@ async fn run_get_artifact(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::data_artifacts::get_artifact(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::data_artifacts::GetArtifactInput>(params),
     )
     .await
@@ -384,10 +378,9 @@ async fn run_commit_artifact(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::data_artifacts::commit_artifact(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::data_artifacts::CommitArtifactInput>(params),
     )
     .await
@@ -398,10 +391,9 @@ async fn run_list_shapes(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::data_artifact_shapes::list_shapes(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::data_artifact_shapes::ListShapesInput>(params),
     )
     .await
@@ -412,10 +404,9 @@ async fn run_get_shape(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::data_artifact_shapes::get_shape(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::data_artifact_shapes::GetShapeInput>(params),
     )
     .await
@@ -426,10 +417,9 @@ async fn run_declare_shape(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
     temper_mcp::tools::data_artifact_shapes::declare_shape(
         svc,
-        profile,
+        parts,
         input::<temper_mcp::tools::data_artifact_shapes::DeclareShapeInput>(params),
     )
     .await
@@ -614,19 +604,22 @@ async fn get_artifact_refuses_garbage_and_answers_absent(pool: PgPool) {
         .expect_err("a malformed artifact ref must refuse");
     assert_eq!(code_of(&err), -32602);
 
-    // DECLARED DIRECT FACE (flips at the swap): an absent artifact answers SUCCESS
-    // text "Artifact not found or not visible to you." — the wire's route 404s and
-    // the swap renders `invalid_params` with the server's sentence instead.
-    let text = only_text(
-        &run_get_artifact(
-            &svc,
-            &parts,
-            json!({"artifact_id": Uuid::nil().to_string()}),
-        )
-        .await
-        .expect("an absent artifact answers the not-found posture"),
+    // FLIPPED DELTA (the flat route's 404 posture): an absent artifact refuses
+    // `invalid_params` carrying the server's own sentence — the direct binding's
+    // 200-text posture is gone with the door.
+    let err = run_get_artifact(
+        &svc,
+        &parts,
+        json!({"artifact_id": Uuid::nil().to_string()}),
+    )
+    .await
+    .expect_err("an absent artifact refuses at the door");
+    assert_eq!(code_of(&err), -32602, "invalid_params: {}", err.message);
+    assert!(
+        err.message.contains("artifact not found"),
+        "the server's own sentence: {}",
+        err.message
     );
-    assert_eq!(text, "Artifact not found or not visible to you.");
 }
 
 /// An unparseable confidence value refuses at the envelope-assembly callsite —
@@ -665,8 +658,8 @@ async fn commit_artifact_bad_confidence_refuses_at_the_envelope(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_outsiders_artifact_list_contains_nothing_they_cannot_see(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
-    let (token2, sub2, email2) = second_identity(&app, &app.pool, "ro-author").await;
-    let second_parts = direct_parts_for(&app, &token2, &sub2, &email2);
+    let (token2, _sub2, _email2) = second_identity(&app, &app.pool, "ro-author").await;
+    let second_parts = parity::direct_parts_for(&app, &token2, &_sub2, &_email2);
 
     // The harness principal seeds a resource in ITS default context — a home the
     // outsider cannot read at all.
@@ -786,17 +779,21 @@ async fn declare_then_get_shape_round_trips_on_the_owning_home(pool: PgPool) {
     assert_eq!(got["artifact_kind"], json!("measurement"));
 }
 
-/// An absent shape answers the 200-text posture — the direct face, flipped at the
-/// swap to the route's 404 (`invalid_params` "shape not found").
+/// An absent shape refuses at the door — FLIPPED DELTA: the direct binding's
+/// 200-text posture is gone with the route's 404, which renders `invalid_params`
+/// carrying the server's own sentence.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn get_shape_absent_answers_the_not_found_posture(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
-    let text = only_text(
-        &run_get_shape(&svc, &parts, json!({"shape_id": Uuid::nil().to_string()}))
-            .await
-            .expect("an absent shape answers the not-found posture"),
+    let err = run_get_shape(&svc, &parts, json!({"shape_id": Uuid::nil().to_string()}))
+        .await
+        .expect_err("an absent shape refuses at the door");
+    assert_eq!(code_of(&err), -32602, "invalid_params: {}", err.message);
+    assert!(
+        err.message.contains("shape not found"),
+        "the server's own sentence: {}",
+        err.message
     );
-    assert_eq!(text, "Shape not found or not visible to you.");
 }
 
 /// Declaring into a home the caller can read but not author refuses with the
@@ -870,8 +867,8 @@ async fn blob_harness(
     axum::http::request::Parts,
     std::sync::Arc<temper_substrate::blob_store::InMemoryBlobStore>,
 ) {
-    let app = common::setup_with_blob_store(pool).await;
     let store = std::sync::Arc::new(temper_substrate::blob_store::InMemoryBlobStore::default());
+    let app = common::setup_with_blob_store_shared(pool, store.clone(), 64).await;
     let svc = app
         .mcp_relay_service_with_blob(app.pool.clone(), store.clone())
         .await;
@@ -897,7 +894,7 @@ async fn deploy_blob(
                 "action": "commit",
                 "home_table": "kb_contexts",
                 "home_id": ctx.to_string(),
-                "content_type": "text/plain",
+                "content_type": "application/pdf",
                 "content": encoded,
             }),
         )
@@ -930,7 +927,11 @@ async fn blob_commit_then_read_round_trips_the_bytes(pool: PgPool) {
         .expect("read a blob the caller can see"),
     );
     assert_eq!(read["content_bytes"], json!(16));
-    assert_eq!(read["content_type"], json!("text/plain"));
+    assert_eq!(
+        read["content_type"],
+        json!("application/pdf"),
+        "the STORED media type answers (N2: the first committer's on a dedup hit)"
+    );
     let decoded: Vec<u8> = base64::engine::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         read["content_base64"].as_str().expect("base64 payload"),
@@ -1014,7 +1015,16 @@ async fn blob_read_refuses_over_the_single_request_ceiling(pool: PgPool) {
         .await
         .expect("insert the over-threshold fixture blob")
     };
-    store.insert(&pathname);
+    // The fixture's bytes go in through the store's own put — the read route's
+    // stream must match its declared Content-Length or the wire aborts mid-response
+    // (which would fail the request before the tool's ceiling check could run).
+    {
+        use temper_substrate::blob_store::BlobStore as _;
+        store
+            .put(&pathname, "application/pdf", bytes.clone().into(), 0)
+            .await
+            .expect("seed the fixture bytes");
+    }
 
     let err = run_blob_read(
         &svc,
@@ -1023,7 +1033,7 @@ async fn blob_read_refuses_over_the_single_request_ceiling(pool: PgPool) {
     )
     .await
     .expect_err("a blob over the read ceiling refuses");
-    assert_eq!(code_of(&err), -32602);
+    assert_eq!(code_of(&err), -32602, "invalid_params: {}", err.message);
     assert!(
         err.message
             .contains("against a blob_read ceiling of 64 bytes"),
@@ -1049,8 +1059,8 @@ async fn blob_read_refuses_over_the_single_request_ceiling(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn blob_commit_on_an_invisible_home_refuses_as_not_found(pool: PgPool) {
     let (app, svc, _parts, _store) = blob_harness(pool).await;
-    let (token2, sub2, email2) = second_identity(&app, &app.pool, "blob-outsider").await;
-    let outsider_parts = direct_parts_for(&app, &token2, &sub2, &email2);
+    let (token2, _sub2, _email2) = second_identity(&app, &app.pool, "blob-outsider").await;
+    let outsider_parts = parity::direct_parts_for(&app, &token2, &_sub2, &_email2);
 
     let encoded = base64::engine::Engine::encode(&base64::engine::general_purpose::STANDARD, b"x");
     let err = run_blob_manage(
@@ -1060,16 +1070,18 @@ async fn blob_commit_on_an_invisible_home_refuses_as_not_found(pool: PgPool) {
             "action": "commit",
             "home_table": "kb_contexts",
             "home_id": default_context_id(&app.pool).await.to_string(),
-            "content_type": "text/plain",
+            "content_type": "application/pdf",
             "content": encoded,
         }),
     )
     .await
     .expect_err("commit against a home the outsider cannot read must refuse");
     assert_eq!(code_of(&err), -32602);
+    // FLIPPED DELTA: the direct map's `blob_commit: ` prefix drops — the door's
+    // sentence arrives bare (kind and gate identical).
     assert!(
-        err.message.starts_with("blob_commit: "),
-        "the NotFound arm carries the action prefix: {}",
+        err.message.contains("home not found"),
+        "the server's own sentence, bare: {}",
         err.message
     );
 }
@@ -1399,13 +1411,18 @@ async fn ingest_append_refuses_a_mismatched_content_hash_at_the_backend(pool: Pg
     );
 }
 
-/// **DECLARED PARITY DELTA** — an occupied seq refusing on re-write with different
-/// bytes: direct rendering is `internal_error` (the Conflict arm the direct map_err
-/// does not carry -> the catch-all), the wire answers 409 Conflict -> the swapped
-/// tool renders `invalid_params` with the server's sentence. This pin flips in the
-/// swap commit.
+/// An occupied seq refusing on re-write with different bytes: the door's face is
+/// an INTERNAL ERROR with the scrubbed server sentence — the wire's append route
+/// maps the raise through the generic error bridge (no Conflict arm on the route,
+/// the direct binding's `api_err` twin), so the class is STABLE across the swap
+/// (both sides refuse internal_error) and only the message's shape changes: the
+/// raw SQL raise on the direct side, the API's scrubbed 500 body through the door.
+/// NOT a declared delta — a stable-class face with a message-shape delta; named
+/// here because the blob-upload append's 409 docs could misread this arm. The
+/// route-level gap (the raise never typed as Conflict at the append door) is
+/// the wire's own pre-existing posture, unchanged by this beat.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn ingest_append_occupied_seq_with_different_bytes_flips_at_the_swap(pool: PgPool) {
+async fn ingest_append_occupied_seq_with_different_bytes_refuses_internal_error(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
     let resource = begin_ingest(&app, &svc, &parts, "segment zero.").await;
     let seq1 = "segment one, first write.";
@@ -1437,12 +1454,14 @@ async fn ingest_append_occupied_seq_with_different_bytes_flips_at_the_swap(pool:
     )
     .await
     .expect_err("an occupied-seq rewrite refuses");
-    // DIRECT FACE: internal_error (the catch-all wraps the Conflict the direct map
-    // has no arm for). The swap flips this pin to the 409-carried invalid_params.
-    assert_eq!(
-        code_of(&err),
-        -32603,
-        "the direct binding renders the occupied-seq Conflict as internal_error: {}",
+    // STABLE CLASS through the swap: the direct catch-all's internal_error is the
+    // door's internal error too — the wire's append route bridges the raise
+    // generically (scrubbed 500 body), never a typed 409. The message shape is the
+    // only delta: raw raise direct, scrubbed sentence through the door.
+    assert_eq!(code_of(&err), -32603, "internal_error: {}", err.message);
+    assert!(
+        err.message.contains("ingest_append"),
+        "the door's rendering names the tool: {}",
         err.message
     );
 }
@@ -1477,10 +1496,12 @@ async fn ingest_finalize_wrong_expected_blocks_flips_at_the_swap(pool: PgPool) {
     )
     .await
     .expect_err("a wrong expected_blocks refuses");
-    assert_eq!(
-        code_of(&err),
-        -32603,
-        "the direct binding renders the finalize-block-count Conflict as internal_error: {}",
+    // FLIPPED DELTA: the direct catch-all's internal_error renders the door's 409 —
+    // invalid_params with the server's own sentence, prefix and label stripped.
+    assert_eq!(code_of(&err), -32602, "invalid_params: {}", err.message);
+    assert!(
+        err.message.contains("has 1 live blocks, expected 99"),
+        "the server's own sentence: {}",
         err.message
     );
 }

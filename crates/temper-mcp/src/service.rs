@@ -435,8 +435,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::reblock::ResourceReblockInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::reblock::resource_reblock(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::reblock::resource_reblock(self, &parts, input).await
     }
 
     // ── Search & Query (unchanged) ─────────────────────────────────────
@@ -492,8 +493,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::blobs::BlobReadInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::blobs::blob_read(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::blobs::blob_read(self, &parts, input).await
     }
 
     #[tool(
@@ -504,8 +506,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::blobs::BlobManageInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::blobs::blob_manage(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::blobs::blob_manage(self, &parts, input).await
     }
 
     // ── Relationship (consolidated 4→1 write) ──────────────────────────
@@ -732,8 +735,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::ingest::SegmentedIngestInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::ingest::segmented_ingest(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::ingest::segmented_ingest(self, &parts, input).await
     }
 
     // ── Steward (unchanged, scoped descriptions) ───────────────────────
@@ -770,8 +774,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifacts::ListArtifactsInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifacts::list_artifacts(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::data_artifacts::list_artifacts(self, &parts, input).await
     }
 
     #[tool(
@@ -782,8 +787,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifacts::GetArtifactInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifacts::get_artifact(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::data_artifacts::get_artifact(self, &parts, input).await
     }
 
     #[tool(
@@ -794,8 +800,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifacts::CommitArtifactInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifacts::commit_artifact(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::data_artifacts::commit_artifact(self, &parts, input).await
     }
 
     #[tool(
@@ -806,8 +813,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::ListShapesInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifact_shapes::list_shapes(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::data_artifact_shapes::list_shapes(self, &parts, input).await
     }
 
     #[tool(
@@ -818,8 +826,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::GetShapeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifact_shapes::get_shape(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::data_artifact_shapes::get_shape(self, &parts, input).await
     }
 
     #[tool(
@@ -830,8 +839,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<tools::data_artifact_shapes::DeclareShapeInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let profile = self.ensure_profile_from_parts(&parts).await?;
-        tools::data_artifact_shapes::declare_shape(self, profile, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::data_artifact_shapes::declare_shape(self, &parts, input).await
     }
 }
 

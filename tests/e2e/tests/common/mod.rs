@@ -917,6 +917,64 @@ pub async fn setup_with_blob_store(pool: PgPool) -> E2eTestApp {
     setup_with_recorder_and_blob(pool, None, Some((blob_config, store)), None).await
 }
 
+/// Like [setup_with_blob_store], but the caller SUPPLIES the store — the parity
+/// suite's shared-store fixture: the app's blob routes and the test's store handle
+/// must be the SAME bytes for a seeded row to be readable through the door. The
+/// caller's `single_request_max_bytes` rides the app's own config (the door's
+/// threshold face reads it there).
+pub async fn setup_with_blob_store_shared(
+    pool: PgPool,
+    store: std::sync::Arc<temper_substrate::blob_store::InMemoryBlobStore>,
+    single_request_max_bytes: usize,
+) -> E2eTestApp {
+    let blob_config = temper_services::config::BlobConfig {
+        store_id: "test-blob-store".to_string(),
+        read_write_token: None,
+        credential_mode: temper_services::config::BlobCredentialMode::Token,
+        oidc_token_source: std::sync::Arc::new(|| None),
+        max_bytes: 100 * 1024 * 1024,
+        allowlist: vec![
+            "image/png".into(),
+            "image/jpeg".into(),
+            "image/webp".into(),
+            "image/svg+xml".into(),
+            "image/gif".into(),
+            "application/pdf".into(),
+        ],
+        single_request_max_bytes,
+    };
+    setup_with_recorder_and_blob(pool, None, Some((blob_config, store)), None).await
+}
+
+/// Like [setup_with_blob_store], but with the caller's own single-request ceiling —
+/// a test that pins the threshold refusal needs the number in ITS fixture, not the
+/// operator default (the door's commit-threshold refusal names the app's config).
+pub async fn setup_with_blob_store_with_ceiling(
+    pool: PgPool,
+    single_request_max_bytes: usize,
+) -> E2eTestApp {
+    let mut blob_config = temper_services::config::BlobConfig {
+        store_id: "test-blob-store".to_string(),
+        read_write_token: None,
+        credential_mode: temper_services::config::BlobCredentialMode::Token,
+        oidc_token_source: std::sync::Arc::new(|| None),
+        max_bytes: 100 * 1024 * 1024,
+        allowlist: vec![
+            "image/png".into(),
+            "image/jpeg".into(),
+            "image/webp".into(),
+            "image/svg+xml".into(),
+            "image/gif".into(),
+            "application/pdf".into(),
+        ],
+        single_request_max_bytes: 4 * 1024 * 1024,
+    };
+    blob_config.single_request_max_bytes = single_request_max_bytes;
+    let store: std::sync::Arc<dyn temper_substrate::blob_store::BlobStore> =
+        std::sync::Arc::new(temper_substrate::blob_store::InMemoryBlobStore::default());
+    setup_with_recorder_and_blob(pool, None, Some((blob_config, store)), None).await
+}
+
 async fn setup_with_recorder_and_blob(
     pool: PgPool,
     recorder: Option<RequestLog>,
