@@ -404,7 +404,16 @@ pub async fn require_system_admin(
     pool: &PgPool,
     authed: &AuthenticatedProfile,
 ) -> ApiResult<SystemAdmin> {
-    let actor = ProfileId::from(authed.profile.id);
+    require_system_admin_by_id(pool, ProfileId::from(authed.profile.id)).await
+}
+
+/// The bare-id spelling of [`require_system_admin`] — the gate DEFINITION, with the surface gate
+/// and the db_backend seam its two callers. The seam (`backend/db_backend.rs`) sits below the
+/// middleware chain — the CLI/backend path has no HTTP layer above it, so there is no
+/// `AuthenticatedProfile` to hand it (Class E of the 2026-09-28 single-ingress inventory) — but it
+/// must ask the same question through the same predicate, or the two spellings drift. Probing
+/// `is_system_admin` here IS the shared spelling: both callers read the one SQL function.
+pub async fn require_system_admin_by_id(pool: &PgPool, actor: ProfileId) -> ApiResult<SystemAdmin> {
     if crate::services::access_service::is_system_admin(pool, actor).await? {
         Ok(SystemAdmin(actor))
     } else {

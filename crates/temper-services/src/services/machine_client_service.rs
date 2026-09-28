@@ -105,11 +105,11 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<MachineClient> {
 /// would break them.
 pub async fn get_for_caller(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     id: Uuid,
 ) -> ApiResult<MachineClient> {
     let client = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Bare(caller), client.team_id).await?;
+    machine_authz::authorize(pool, Principal::Proof(authed), client.team_id).await?;
     Ok(client)
 }
 
@@ -156,10 +156,15 @@ pub async fn list(
 /// Mark a client dead. Idempotent in effect but not in record: a second revoke of an
 /// already-revoked row is a no-op that returns the existing row (the first revoker and
 /// first timestamp are the truth). Grants and memberships are deliberately untouched (D11).
-pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<MachineClient> {
+pub async fn revoke(
+    pool: &PgPool,
+    id: Uuid,
+    authed: &AuthenticatedProfile,
+) -> ApiResult<MachineClient> {
+    let revoker = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's owning team (B2 D5).
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Bare(revoker), existing.team_id).await?;
+    machine_authz::authorize(pool, Principal::Proof(authed), existing.team_id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_machine_clients
@@ -213,14 +218,14 @@ const MAX_ROTATION_GRACE_SECONDS: i64 = 7 * 24 * 3_600;
 /// window outside `[0, MAX_ROTATION_GRACE_SECONDS]`.
 pub async fn rotate_secret(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     id: Uuid,
     grace_seconds: i64,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
     // Auth before writes, keyed on the existing row's owning team (B2 D5). Ahead of the
     // transaction, so a rejected rotation never touches the row.
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Bare(caller), existing.team_id).await?;
+    machine_authz::authorize(pool, Principal::Proof(authed), existing.team_id).await?;
 
     if !(0..=MAX_ROTATION_GRACE_SECONDS).contains(&grace_seconds) {
         return Err(ApiError::BadRequest(format!(
@@ -493,9 +498,14 @@ mod tests {
         let admin = seed_admin(&pool, "rot-admin").await;
         let id = seed_temper_issued(&pool, "tmpr_rot", "old-secret").await;
 
-        let cred = svc::rotate_secret(&pool, admin, id, 3600)
-            .await
-            .expect("rotate");
+        let cred = svc::rotate_secret(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            id,
+            3600,
+        )
+        .await
+        .expect("rotate");
 
         // A fresh plaintext is returned and its hash is the new current.
         let row = sqlx::query!(
@@ -535,18 +545,28 @@ mod tests {
         let id = seed_temper_issued(&pool, "tmpr_grace", "s").await;
         assert!(
             matches!(
-                svc::rotate_secret(&pool, admin, id, -1)
-                    .await
-                    .expect_err("negative grace"),
+                svc::rotate_secret(
+                    &pool,
+                    &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                    id,
+                    -1
+                )
+                .await
+                .expect_err("negative grace"),
                 crate::error::ApiError::BadRequest(_)
             ),
             "a negative grace is rejected"
         );
         assert!(
             matches!(
-                svc::rotate_secret(&pool, admin, id, 999_999_999)
-                    .await
-                    .expect_err("excessive grace"),
+                svc::rotate_secret(
+                    &pool,
+                    &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                    id,
+                    999_999_999
+                )
+                .await
+                .expect_err("excessive grace"),
                 crate::error::ApiError::BadRequest(_)
             ),
             "a grace past the 7-day cap is rejected (keeps an old secret alive too long)"
@@ -559,9 +579,14 @@ mod tests {
         // A plain auth0-m2m registration (issuer default), no secret.
         let id = seed_registered(&pool, "auth0-client").await;
 
-        let err = svc::rotate_secret(&pool, admin, id, 3600)
-            .await
-            .expect_err("must reject");
+        let err = svc::rotate_secret(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            id,
+            3600,
+        )
+        .await
+        .expect_err("must reject");
         assert!(
             matches!(err, crate::error::ApiError::BadRequest(_)),
             "auth0-m2m secrets are managed by the IdP, not temper; got {err:?}"
@@ -573,7 +598,13 @@ mod tests {
         let id = seed_registered(&pool, "doomed").await;
         let admin = seed_admin(&pool, "admin-actor").await;
 
-        let revoked = svc::revoke(&pool, id, admin).await.expect("revoke");
+        let revoked = svc::revoke(
+            &pool,
+            id,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+        )
+        .await
+        .expect("revoke");
         assert!(revoked.revoked_at.is_some());
         assert_eq!(revoked.revoked_by_profile_id, Some(*admin));
 
@@ -682,7 +713,13 @@ mod tests {
             "fixture must have reach to preserve"
         );
 
-        svc::revoke(&pool, f.machine_id, f.admin).await.unwrap();
+        svc::revoke(
+            &pool,
+            f.machine_id,
+            &crate::test_support::authenticated_profile_for(&pool, f.admin.uuid()).await,
+        )
+        .await
+        .unwrap();
 
         let state: String = sqlx::query_scalar!(
             "SELECT state FROM kb_principal_standing WHERE profile_id = $1",
@@ -726,9 +763,13 @@ mod tests {
         // in exactly this cell, so the credential revocation the operator asked for never fails.
         let f = seed_machine_with_reach(&pool).await; // born Denied under D11, never approved
 
-        svc::revoke(&pool, f.machine_id, f.admin)
-            .await
-            .expect("credential revocation must succeed even with nothing to revoke on standing");
+        svc::revoke(
+            &pool,
+            f.machine_id,
+            &crate::test_support::authenticated_profile_for(&pool, f.admin.uuid()).await,
+        )
+        .await
+        .expect("credential revocation must succeed even with nothing to revoke on standing");
 
         // The load-first guard fired nothing (this machine was never `Approved`), so no `revoked`
         // row was written — the credential revocation the operator asked for still succeeded.

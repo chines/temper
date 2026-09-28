@@ -13,7 +13,6 @@ use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{
     IssueMachineRequest, IssuedMachineCredential, MachineClient, ProvisionMachineRequest,
     RebindMachineRequest, RotateSecretRequest,
@@ -36,8 +35,7 @@ pub async fn provision(
     auth: AuthUser,
     Json(body): Json<ProvisionMachineRequest>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = ProfileId::from(auth.0.profile().id);
-    let client = machine_registration_service::provision(&state.pool, caller, &body).await?;
+    let client = machine_registration_service::provision(&state.pool, &auth.0, &body).await?;
     Ok(Json(client))
 }
 
@@ -71,9 +69,8 @@ pub async fn get(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
-        machine_client_service::get_for_caller(&state.pool, caller, id).await?,
+        machine_client_service::get_for_caller(&state.pool, &auth.0, id).await?,
     ))
 }
 
@@ -82,9 +79,8 @@ pub async fn revoke(
     auth: AuthUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<MachineClient>> {
-    let caller = ProfileId::from(auth.0.profile().id);
     Ok(Json(
-        machine_client_service::revoke(&state.pool, id, caller).await?,
+        machine_client_service::revoke(&state.pool, id, &auth.0).await?,
     ))
 }
 
@@ -93,8 +89,7 @@ pub async fn issue(
     auth: AuthUser,
     Json(body): Json<IssueMachineRequest>,
 ) -> ApiResult<Json<IssuedMachineCredential>> {
-    let caller = ProfileId::from(auth.0.profile().id);
-    let cred = machine_registration_service::issue(&state.pool, caller, &body).await?;
+    let cred = machine_registration_service::issue(&state.pool, &auth.0, &body).await?;
     Ok(Json(cred))
 }
 
@@ -104,8 +99,7 @@ pub async fn rotate_secret(
     Path(id): Path<Uuid>,
     Json(body): Json<RotateSecretRequest>,
 ) -> ApiResult<Json<IssuedMachineCredential>> {
-    let caller = ProfileId::from(auth.0.profile().id);
     let cred =
-        machine_client_service::rotate_secret(&state.pool, caller, id, body.grace_seconds).await?;
+        machine_client_service::rotate_secret(&state.pool, &auth.0, id, body.grace_seconds).await?;
     Ok(Json(cred))
 }

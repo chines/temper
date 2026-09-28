@@ -131,16 +131,26 @@ pub async fn seed_connection(
         reach_granularity: None,
         reach_covers: None,
     };
-    let conn = crate::services::connection_service::provision(pool, caller, &req)
-        .await
-        .expect("seed connection");
+    let conn = crate::services::connection_service::provision(
+        pool,
+        &crate::test_support::authenticated_profile_for(pool, caller.uuid()).await,
+        &req,
+    )
+    .await
+    .expect("seed connection");
     conn.id
 }
 
 pub async fn grant_reach(pool: &PgPool, caller: ProfileId, connection_id: Uuid, team_id: Uuid) {
-    crate::services::connection_service::grant_reach(pool, caller, connection_id, team_id, None)
-        .await
-        .expect("grant reach");
+    crate::services::connection_service::grant_reach(
+        pool,
+        &crate::test_support::authenticated_profile_for(pool, caller.uuid()).await,
+        connection_id,
+        team_id,
+        None,
+    )
+    .await
+    .expect("grant reach");
 }
 
 pub async fn create_subscription(

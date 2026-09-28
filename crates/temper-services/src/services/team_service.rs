@@ -137,9 +137,10 @@ pub(crate) async fn require_team_exists(pool: &PgPool, team_id: Uuid) -> ApiResu
 /// `ON CONFLICT DO NOTHING`).
 pub async fn create_team(
     pool: &PgPool,
-    creator: ProfileId,
+    authed: &AuthenticatedProfile,
     req: &TeamCreateRequest,
 ) -> ApiResult<TeamRow> {
+    let creator = ProfileId::from(authed.profile().id);
     // --- Auth before writes ---
 
     // Child team: resolve the parent and require owner/maintainer on it.

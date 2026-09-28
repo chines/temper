@@ -718,6 +718,10 @@ struct ReconcileCtx {
 }
 
 impl DbBackend {
+    /// `profile_id` MUST be middleware-resolved (the HTTP handlers pass the authenticated
+    /// caller's own id) or the CLI operator's — the type carries no proof of that, which is
+    /// the Class E residue this seam accepts: the bare id is the caller's own identity, and
+    /// the gates below re-probe it. A future PR may let proof-holding callers pass the proof.
     pub fn new(pool: PgPool, profile_id: ProfileId) -> Self {
         Self { pool, profile_id }
     }
@@ -3226,6 +3230,13 @@ impl Backend for DbBackend {
         // chosen (e.g. reserved L0/system) id. Explicit-id genesis stays operator work. Resolving the
         // identity HERE (not deferring to the firing arm's `unwrap_or_else`) lets the existence
         // pre-check key on the realized id and lets the outcome echo a stable id even on the mint path.
+        //
+        // The admin question is asked through the SAME predicate `require_system_admin` runs
+        // (`access_service::is_system_admin`) — parity by shared owner, not by copy. This site needs
+        // the BOOL (a non-admin genesis is legal; only the id-honoring arm narrows), so the refusal
+        // wrapper would swallow a DB error into "not an admin" — exactly the failure the
+        // `require_system_admin_by_id` doc warns of. The seam (Class E) has no proof to pass; the
+        // bare-id probe stays HERE, at the seam.
         let caller_is_admin =
             crate::services::access_service::is_system_admin(&self.pool, self.profile_id)
                 .await
@@ -3743,8 +3754,9 @@ impl Backend for DbBackend {
         use crate::services::{auditor_service, workflow_job_service};
         use temper_core::types::workflow_job::{clamp_auditor_cap, DEFAULT_AUDITOR_LEASE_SECONDS};
 
-        // 0. AUTH BEFORE ANY WRITE. `reap` below mutates rows, so the gate precedes it.
-        require_machine_principal(&self.pool, self.profile_id).await?;
+        // 0. AUTH BEFORE ANY WRITE. `reap` below mutates rows, so the gate precedes it. `Bare` is the
+        // seam's door — no proof exists above this frame (Class E); the gate's DB probe stays here.
+        require_machine_principal(&self.pool, Principal::Bare(self.profile_id)).await?;
 
         // 1. Reap stale leases (crashed runs → retry/dead) before claiming. Shared with the steward
         //    tick — the reaper is persona-agnostic, exactly as the queue is.
@@ -4026,14 +4038,11 @@ impl Backend for DbBackend {
             ));
         }
 
-        // The SystemAdmin gate for the deployment-wide arm, at the shared seam.
+        // The SystemAdmin gate for the deployment-wide arm, at the shared seam. `require_system_admin`
+        // cannot be called directly — no middleware above the seam means no `AuthenticatedProfile` —
+        // so this is its bare-id spelling, the one gate definition's second caller (Class E).
         if matches!(cmd.scope, ReblockScope::All) {
-            let admin =
-                crate::services::access_service::is_system_admin(&self.pool, self.profile_id)
-                    .await?;
-            if !admin {
-                return Err(TemperError::Forbidden);
-            }
+            crate::auth::require_system_admin_by_id(&self.pool, self.profile_id).await?;
         }
 
         // The invoking operator is the emitter of every act this batch fires. Resolved once —

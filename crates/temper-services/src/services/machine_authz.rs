@@ -27,6 +27,7 @@ use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{GrantSpec, TeamSpec};
 use temper_core::types::team::TeamRole;
 
+use crate::auth::AuthenticatedProfile;
 use crate::error::{ApiError, ApiResult};
 use crate::services::{access_service, team_service};
 
@@ -161,12 +162,12 @@ impl<'a> AuthorizedReach<'a> {
 /// call site instead of being implicit in the absence of a check.
 pub(crate) async fn authorize_registration<'a>(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     team: Option<Uuid>,
     teams: &'a [TeamSpec],
     grants: &'a [GrantSpec],
 ) -> ApiResult<AuthorizedReach<'a>> {
-    let authority = authorize(pool, crate::authz::Principal::Bare(caller), team).await?;
+    let authority = authorize(pool, crate::authz::Principal::Proof(authed), team).await?;
 
     // The caller is authorized; now the payload must be well-formed. An unknown role would
     // otherwise fail the `::team_role` enum cast deep inside `apply_reach`'s transaction and
@@ -207,7 +208,7 @@ pub(crate) async fn authorize_registration<'a>(
             grants: AuthorizedReach::seal(grants),
         }),
         MachineAuthority::TeamOwner => {
-            contain_reach(pool, caller, teams, grants).await?;
+            contain_reach(pool, authed, teams, grants).await?;
             Ok(AuthorizedReach {
                 teams,
                 grants: AuthorizedReach::seal(grants),
@@ -273,10 +274,11 @@ pub(crate) async fn contain_target_team(
 /// The non-admin containment bar. Every check calls an existing human-surface predicate.
 async fn contain_reach(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     teams: &[TeamSpec],
     grants: &[GrantSpec],
 ) -> ApiResult<()> {
+    let caller = ProfileId::from(authed.profile().id);
     // The D4b role ceiling is NOT here: it asks a question about the role itself, not about
     // containment, so it runs for BOTH arms in `authorize_registration`. Do not restore a copy —
     // a second copy is what would let the two arms drift apart again.
@@ -300,7 +302,7 @@ async fn contain_reach(
         // Delegated or None in practice.
         access_service::authorize_capability_grant(
             pool,
-            crate::authz::Principal::Bare(caller),
+            crate::authz::Principal::Proof(authed),
             temper_substrate::payloads::RefTarget {
                 kind: temper_substrate::payloads::AnchorTable::Cogmaps,
                 id: grant.cogmap_id,
@@ -474,9 +476,15 @@ mod tests {
             team_id: managed,
             role: "member".to_string(),
         }];
-        let reach = authorize_registration(&pool, ProfileId::from(alice), Some(owned), &teams, &[])
-            .await
-            .expect("can_manage on the target team permits reach into it");
+        let reach = authorize_registration(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            Some(owned),
+            &teams,
+            &[],
+        )
+        .await
+        .expect("can_manage on the target team permits reach into it");
         assert_eq!(reach.teams().len(), 1);
     }
 
@@ -492,9 +500,15 @@ mod tests {
             team_id: foreign,
             role: "member".to_string(),
         }];
-        let err = authorize_registration(&pool, ProfileId::from(alice), Some(owned), &teams, &[])
-            .await
-            .expect_err("a mere member may not grant a machine reach into that team");
+        let err = authorize_registration(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            Some(owned),
+            &teams,
+            &[],
+        )
+        .await
+        .expect_err("a mere member may not grant a machine reach into that team");
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -527,10 +541,15 @@ mod tests {
                 team_id: gating,
                 role: role.to_string(),
             }];
-            let err =
-                authorize_registration(&pool, ProfileId::from(alice), Some(owned), &teams, &[])
-                    .await
-                    .expect_err("minting a governing machine on the gating team is an escalation");
+            let err = authorize_registration(
+                &pool,
+                &crate::test_support::authenticated_profile_for(&pool, alice).await,
+                Some(owned),
+                &teams,
+                &[],
+            )
+            .await
+            .expect_err("minting a governing machine on the gating team is an escalation");
             assert!(matches!(err, ApiError::Forbidden), "{role} got {err:?}");
         }
     }
@@ -549,10 +568,15 @@ mod tests {
                 team_id: owned,
                 role: role.to_string(),
             }];
-            let err =
-                authorize_registration(&pool, ProfileId::from(alice), Some(owned), &teams, &[])
-                    .await
-                    .expect_err("a non-admin may never mint a machine at a governing role");
+            let err = authorize_registration(
+                &pool,
+                &crate::test_support::authenticated_profile_for(&pool, alice).await,
+                Some(owned),
+                &teams,
+                &[],
+            )
+            .await
+            .expect_err("a non-admin may never mint a machine at a governing role");
             assert!(matches!(err, ApiError::Forbidden), "{role} got {err:?}");
         }
     }
@@ -588,9 +612,15 @@ mod tests {
                     team_id: target,
                     role: role.to_string(),
                 }];
-                let err = authorize_registration(&pool, ProfileId::from(admin), None, &teams, &[])
-                    .await
-                    .expect_err("the ceiling has no admin exemption");
+                let err = authorize_registration(
+                    &pool,
+                    &crate::test_support::authenticated_profile_for(&pool, admin).await,
+                    None,
+                    &teams,
+                    &[],
+                )
+                .await
+                .expect_err("the ceiling has no admin exemption");
                 assert!(matches!(err, ApiError::Forbidden), "{role} got {err:?}");
             }
         }
@@ -617,15 +647,26 @@ mod tests {
                 role: role.to_string(),
             }];
 
-            let reach =
-                authorize_registration(&pool, ProfileId::from(alice), Some(owned), &teams, &[])
-                    .await
-                    .unwrap_or_else(|e| panic!("team owner must still confer {role}: {e:?}"));
+            let reach = authorize_registration(
+                &pool,
+                &crate::test_support::authenticated_profile_for(&pool, alice).await,
+                Some(owned),
+                &teams,
+                &[],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("team owner must still confer {role}: {e:?}"));
             assert_eq!(reach.teams().len(), 1);
 
-            let reach = authorize_registration(&pool, ProfileId::from(admin), None, &teams, &[])
-                .await
-                .unwrap_or_else(|e| panic!("admin must still confer {role}: {e:?}"));
+            let reach = authorize_registration(
+                &pool,
+                &crate::test_support::authenticated_profile_for(&pool, admin).await,
+                None,
+                &teams,
+                &[],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("admin must still confer {role}: {e:?}"));
             assert_eq!(reach.teams().len(), 1);
         }
     }
@@ -643,9 +684,15 @@ mod tests {
             can_write: true,
         }];
 
-        let err = authorize_registration(&pool, ProfileId::from(alice), Some(owned), &[], &grants)
-            .await
-            .expect_err("cannot grant a machine write on a cogmap you cannot administer");
+        let err = authorize_registration(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            Some(owned),
+            &[],
+            &grants,
+        )
+        .await
+        .expect_err("cannot grant a machine write on a cogmap you cannot administer");
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -718,9 +765,15 @@ mod tests {
             cogmap_id: cogmap,
             can_write: true,
         }];
-        let err = authorize_registration(&pool, ProfileId::from(alice), Some(owned), &[], &grants)
-            .await
-            .expect_err("a caller without write must not confer write to a machine");
+        let err = authorize_registration(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            Some(owned),
+            &[],
+            &grants,
+        )
+        .await
+        .expect_err("a caller without write must not confer write to a machine");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
     }
 
@@ -738,10 +791,15 @@ mod tests {
             cogmap_id: cogmap,
             can_write: true,
         }];
-        let reach =
-            authorize_registration(&pool, ProfileId::from(alice), Some(owned), &[], &grants)
-                .await
-                .expect("a holder of write may delegate write to a machine");
+        let reach = authorize_registration(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            Some(owned),
+            &[],
+            &grants,
+        )
+        .await
+        .expect("a holder of write may delegate write to a machine");
         assert_eq!(reach.grants().len(), 1);
     }
 
@@ -775,9 +833,15 @@ mod tests {
             cogmap_id: l0,
             can_write: true,
         }];
-        let err = authorize_registration(&pool, ProfileId::from(alice), Some(owned), &[], &grants)
-            .await
-            .expect_err("the L0 kernel stays admin-only on the grant axis, machines included");
+        let err = authorize_registration(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            Some(owned),
+            &[],
+            &grants,
+        )
+        .await
+        .expect_err("the L0 kernel stays admin-only on the grant axis, machines included");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
     }
 
@@ -809,9 +873,15 @@ mod tests {
             can_write: true,
         }];
 
-        let reach = authorize_registration(&pool, ProfileId::from(admin), None, &teams, &grants)
-            .await
-            .expect("a system admin may grant any reach (Phase A D5)");
+        let reach = authorize_registration(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin).await,
+            None,
+            &teams,
+            &grants,
+        )
+        .await
+        .expect("a system admin may grant any reach (Phase A D5)");
         assert_eq!(reach.teams().len(), 1);
         assert_eq!(reach.grants().len(), 1);
     }
@@ -828,9 +898,15 @@ mod tests {
             team_id: owned,
             role: "membr".to_string(), // typo — not a real role
         }];
-        let err = authorize_registration(&pool, ProfileId::from(alice), Some(owned), &teams, &[])
-            .await
-            .expect_err("an unknown role must not reach the enum cast");
+        let err = authorize_registration(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice).await,
+            Some(owned),
+            &teams,
+            &[],
+        )
+        .await
+        .expect_err("an unknown role must not reach the enum cast");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
     }
 
@@ -849,9 +925,15 @@ mod tests {
             team_id: target,
             role: "MEMBER".to_string(), // wrong case — the enum is snake_case
         }];
-        let err = authorize_registration(&pool, ProfileId::from(admin), None, &teams, &[])
-            .await
-            .expect_err("an admin's unknown role is still a 400");
+        let err = authorize_registration(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin).await,
+            None,
+            &teams,
+            &[],
+        )
+        .await
+        .expect_err("an admin's unknown role is still a 400");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
     }
 

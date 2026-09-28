@@ -1426,9 +1426,16 @@ async fn the_connection_grant_reach_bypass_is_also_on_the_ledger(pool: PgPool) {
     .await
     .expect("seed connection");
 
-    connection_service::grant_reach(&pool, f.admin_profile, connection_id, f.team_id, None)
-        .await
-        .expect("grant_reach");
+    connection_service::grant_reach(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
+        connection_id,
+        f.team_id,
+        None,
+    )
+    .await
+    .expect("grant_reach");
 
     let entries = admin_ledger_service::list_by_subject(
         &pool,

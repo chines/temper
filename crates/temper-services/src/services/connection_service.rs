@@ -115,9 +115,13 @@ pub async fn resolve_inbound(
 }
 
 /// [`get`], gated on the *existing row's* owning team.
-pub async fn get_for_caller(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Connection> {
+pub async fn get_for_caller(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+    id: Uuid,
+) -> ApiResult<Connection> {
     let connection = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Bare(caller), connection.owner_team_id).await?;
+    machine_authz::authorize(pool, Principal::Proof(authed), connection.owner_team_id).await?;
     Ok(connection)
 }
 
@@ -172,13 +176,14 @@ pub async fn list(
 /// it never silently pretends to be more than it is.
 pub async fn provision(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     req: &ProvisionConnectionRequest,
 ) -> ApiResult<Connection> {
+    let caller = ProfileId::from(authed.profile().id);
     // Auth before writes: a rejected provisioning must leave the DB completely unchanged — no
     // orphaned profile, no orphaned entity, no orphaned context. Resolving before the
     // transaction opens is what makes that assertable.
-    machine_authz::authorize(pool, Principal::Bare(caller), req.owner_team_id).await?;
+    machine_authz::authorize(pool, Principal::Proof(authed), req.owner_team_id).await?;
 
     if req.provider.trim().is_empty() {
         return Err(ApiError::BadRequest("provider must not be empty".into()));
@@ -279,10 +284,15 @@ pub async fn provision(
 /// for it again." Callers surfacing revocation must say so rather than imply an instantaneous cutoff
 /// (invariant 6: absence of a capability — here, immediate remote revocation — must never be
 /// silently assumed present).
-pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<Connection> {
+pub async fn revoke(
+    pool: &PgPool,
+    id: Uuid,
+    authed: &AuthenticatedProfile,
+) -> ApiResult<Connection> {
+    let revoker = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's owning team.
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Bare(revoker), existing.owner_team_id).await?;
+    machine_authz::authorize(pool, Principal::Proof(authed), existing.owner_team_id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_connections
@@ -301,9 +311,13 @@ pub async fn revoke(pool: &PgPool, id: Uuid, revoker: ProfileId) -> ApiResult<Co
 /// The machine gate keyed on the row's own owning team, plus the revoked check. A revoked
 /// connection is dead — reactivation is a new provisioning, never an UPDATE — so a mutator refuses
 /// one outright rather than issuing an UPDATE that silently matches no rows and reports success.
-async fn authorize_live(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Connection> {
+async fn authorize_live(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+    id: Uuid,
+) -> ApiResult<Connection> {
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Bare(caller), existing.owner_team_id).await?;
+    machine_authz::authorize(pool, Principal::Proof(authed), existing.owner_team_id).await?;
     if existing.revoked_at.is_some() {
         return Err(ApiError::Conflict(format!(
             "connection '{}' is revoked; reactivation is a new provisioning",
@@ -336,11 +350,11 @@ async fn authorize_live(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult
 pub async fn attach_credential(
     pool: &PgPool,
     broker: &dyn CredentialBroker,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     id: Uuid,
     credential: &ConnectionCredential,
 ) -> ApiResult<AttachCredentialResponse> {
-    authorize_live(pool, caller, id).await?;
+    authorize_live(pool, authed, id).await?;
 
     if credential.broker.trim().is_empty() {
         return Err(ApiError::BadRequest("broker must not be empty".into()));
@@ -433,11 +447,11 @@ async fn verify_by_minting(
 /// claim but do not have is exactly the silence invariant 6 forbids.
 pub async fn set_webhook_events(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     id: Uuid,
     events: &[String],
 ) -> ApiResult<Connection> {
-    authorize_live(pool, caller, id).await?;
+    authorize_live(pool, authed, id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_connections
@@ -460,11 +474,11 @@ pub async fn set_webhook_events(
 /// `Connection::is_reach_capable` reads.
 pub async fn set_tool_manifest(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     id: Uuid,
     tools: &[String],
 ) -> ApiResult<Connection> {
-    authorize_live(pool, caller, id).await?;
+    authorize_live(pool, authed, id).await?;
 
     let value = serde_json::to_value(tools)
         .map_err(|e| ApiError::Internal(format!("failed to serialize tool manifest: {e}")))?;
@@ -539,15 +553,16 @@ pub async fn set_tool_manifest(
 /// Auth stays FIRST — affirmation never bypasses authorization.
 pub async fn grant_reach(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     connection_id: Uuid,
     team_id: Uuid,
     affirm_reach: Option<String>,
 ) -> ApiResult<Connection> {
+    let caller = ProfileId::from(authed.profile().id);
     let connection = get(pool, connection_id).await?;
     let proof = crate::authz::authorize::<ConnectionAuthority>(
         pool,
-        Principal::Bare(caller),
+        Principal::Proof(authed),
         ConnectionScope::new(connection_id, team_id),
     )
     .await?;
@@ -717,10 +732,11 @@ fn reach_grant_params(team_id: Uuid, granted_by: ProfileId) -> InsertGrantParams
 /// already exists (granted before this gate shipped), this is precisely the path that cleans it up.
 pub async fn revoke_reach(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     connection_id: Uuid,
     team_id: Uuid,
 ) -> ApiResult<Connection> {
+    let caller = ProfileId::from(authed.profile().id);
     let connection = get(pool, connection_id).await?;
     // `ConnectionControlAuthority`, NOT `ConnectionAuthority` — the whole asymmetry in one line.
     // This asks only "may you act on this connection?"; it deliberately does not ask whether the
@@ -728,7 +744,7 @@ pub async fn revoke_reach(
     // `revoke_reach_survives_losing_the_target_team_role` exists to hold in place.
     let proof = crate::authz::authorize::<crate::authz::ConnectionControlAuthority>(
         pool,
-        Principal::Bare(caller),
+        Principal::Proof(authed),
         connection_id,
     )
     .await?;
@@ -955,9 +971,13 @@ mod tests {
     async fn provision_creates_profile_entity_context_and_row(pool: PgPool) {
         let admin = seed_admin(&pool).await;
 
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
         assert_eq!(c.provider, "github");
         assert_eq!(c.slug, "acme-github");
@@ -1001,9 +1021,13 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn reach_affirmation_is_born_null_and_round_trips(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
         assert!(c.reach_affirmed_by.is_none(), "unaffirmed by default");
         assert!(c.reach_affirmed_at.is_none(), "unaffirmed by default");
@@ -1023,17 +1047,25 @@ mod tests {
     async fn declares_reach_reflects_the_declared_fidelity(pool: PgPool) {
         let admin = seed_admin(&pool).await;
 
-        let with_reach = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision with reach");
+        let with_reach = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision with reach");
         assert!(
             with_reach.declares_reach(),
             "a connection provisioned with reach_granularity/reach_covers declares reach"
         );
 
-        let no_reach = svc::provision(&pool, admin, &req_no_reach("Bare GitHub", None))
-            .await
-            .expect("provision without reach");
+        let no_reach = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req_no_reach("Bare GitHub", None),
+        )
+        .await
+        .expect("provision without reach");
         assert!(
             !no_reach.declares_reach(),
             "a connection provisioned with no reach fidelity declares no reach"
@@ -1047,9 +1079,13 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_connection_has_no_auth_link_and_no_machine_client_row(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
         let auth_links = sqlx::query_scalar!(
             "SELECT count(*) FROM kb_profile_auth_links WHERE profile_id = $1",
@@ -1078,9 +1114,13 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn the_connection_profile_gets_only_the_webhook_emitter(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
         let names: Vec<String> = sqlx::query_scalar!(
             "SELECT name FROM kb_entities WHERE profile_id = $1 ORDER BY name",
@@ -1098,9 +1138,13 @@ mod tests {
     async fn a_team_owner_may_provision_for_their_own_team(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "conn-owner", "acme", TeamRole::Owner).await;
 
-        let c = svc::provision(&pool, owner, &req("Acme Linear", Some(team)))
-            .await
-            .expect("a team owner runs their own connections");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme Linear", Some(team)),
+        )
+        .await
+        .expect("a team owner runs their own connections");
         assert_eq!(c.owner_team_id, Some(team));
 
         // The home context is owned by the TEAM, so read authz inherits for free.
@@ -1120,9 +1164,13 @@ mod tests {
         let (maintainer, team) =
             seed_team_member(&pool, "conn-maintainer", "acme", TeamRole::Maintainer).await;
 
-        let err = svc::provision(&pool, maintainer, &req("Acme Linear", Some(team)))
-            .await
-            .expect_err("a maintainer is not an owner");
+        let err = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, maintainer.uuid()).await,
+            &req("Acme Linear", Some(team)),
+        )
+        .await
+        .expect_err("a maintainer is not an owner");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
     }
 
@@ -1132,9 +1180,13 @@ mod tests {
         let (outsider, _team) =
             seed_team_member(&pool, "conn-outsider", "acme", TeamRole::Owner).await;
 
-        let err = svc::provision(&pool, outsider, &req("Rogue GitHub", None))
-            .await
-            .expect_err("teamless is admin-only");
+        let err = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            &req("Rogue GitHub", None),
+        )
+        .await
+        .expect_err("teamless is admin-only");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
     }
 
@@ -1152,9 +1204,13 @@ mod tests {
             .expect("count")
             .unwrap_or(0);
 
-        svc::provision(&pool, outsider, &req("Rogue GitHub", None))
-            .await
-            .expect_err("denied");
+        svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            &req("Rogue GitHub", None),
+        )
+        .await
+        .expect_err("denied");
 
         let after = sqlx::query_scalar!("SELECT count(*) FROM kb_profiles")
             .fetch_one(&pool)
@@ -1176,12 +1232,20 @@ mod tests {
     async fn a_slug_collision_suffixes(pool: PgPool) {
         let admin = seed_admin(&pool).await;
 
-        let a = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("first");
-        let b = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("second");
+        let a = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("first");
+        let b = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("second");
 
         assert_eq!(a.slug, "acme-github");
         assert_eq!(b.slug, "acme-github-2");
@@ -1192,11 +1256,21 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn revoke_marks_dead_but_keeps_the_emitter_resolvable(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
-        let revoked = svc::revoke(&pool, c.id, admin).await.expect("revoke");
+        let revoked = svc::revoke(
+            &pool,
+            c.id,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+        )
+        .await
+        .expect("revoke");
         assert!(revoked.revoked_at.is_some());
         assert_eq!(revoked.revoked_by_profile_id, Some(*admin));
 
@@ -1235,12 +1309,20 @@ mod tests {
         let admin = seed_admin(&pool).await;
         let (owner, team) = seed_team_member(&pool, "conn-owner", "acme", TeamRole::Owner).await;
 
-        svc::provision(&pool, admin, &req("Teamless GitHub", None))
-            .await
-            .expect("teamless");
-        svc::provision(&pool, owner, &req("Acme Linear", Some(team)))
-            .await
-            .expect("team-owned");
+        svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Teamless GitHub", None),
+        )
+        .await
+        .expect("teamless");
+        svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme Linear", Some(team)),
+        )
+        .await
+        .expect("team-owned");
 
         let seen = svc::list(
             &pool,
@@ -1282,16 +1364,25 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn attaching_a_credential_flips_needs_credential_and_round_trips(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
         assert!(c.needs_credential(), "born needs_credential");
 
-        let attached =
-            svc::attach_credential(&pool, &granting_broker(), admin, c.id, &credential())
-                .await
-                .expect("attach")
-                .connection;
+        let attached = svc::attach_credential(
+            &pool,
+            &granting_broker(),
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c.id,
+            &credential(),
+        )
+        .await
+        .expect("attach")
+        .connection;
 
         // It flips off because the COLUMN is non-NULL — there is no status to set.
         assert!(!attached.needs_credential());
@@ -1314,13 +1405,23 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_granting_broker_records_the_observed_reach(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
-        let out = svc::attach_credential(&pool, &granting_broker(), admin, c.id, &credential())
-            .await
-            .expect("attach");
+        let out = svc::attach_credential(
+            &pool,
+            &granting_broker(),
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c.id,
+            &credential(),
+        )
+        .await
+        .expect("attach");
 
         assert!(out.verification.verified, "a successful mint is verified");
         assert_eq!(
@@ -1340,15 +1441,25 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_rejecting_broker_blocks_the_attach_and_writes_nothing(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
         let broker = crate::broker::FakeBroker::rejecting();
         assert!(
-            svc::attach_credential(&pool, &broker, admin, c.id, &credential())
-                .await
-                .is_err(),
+            svc::attach_credential(
+                &pool,
+                &broker,
+                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                c.id,
+                &credential()
+            )
+            .await
+            .is_err(),
             "a proven-bad credential must be rejected"
         );
 
@@ -1366,13 +1477,23 @@ mod tests {
         let admin = seed_admin(&pool).await;
 
         // needs-consent: persisted, flagged.
-        let c1 = svc::provision(&pool, admin, &req("Consent Pending", None))
-            .await
-            .expect("provision");
+        let c1 = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Consent Pending", None),
+        )
+        .await
+        .expect("provision");
         let consent = crate::broker::FakeBroker::needs_consent();
-        let out = svc::attach_credential(&pool, &consent, admin, c1.id, &credential())
-            .await
-            .expect("attach still succeeds");
+        let out = svc::attach_credential(
+            &pool,
+            &consent,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c1.id,
+            &credential(),
+        )
+        .await
+        .expect("attach still succeeds");
         assert!(
             !out.connection.needs_credential(),
             "the credential is recorded"
@@ -1384,13 +1505,17 @@ mod tests {
         );
 
         // no broker configured: same shape.
-        let c2 = svc::provision(&pool, admin, &req("No Broker", None))
-            .await
-            .expect("provision");
+        let c2 = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("No Broker", None),
+        )
+        .await
+        .expect("provision");
         let out2 = svc::attach_credential(
             &pool,
             &crate::broker::NullBroker,
-            admin,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
             c2.id,
             &credential(),
         )
@@ -1405,14 +1530,23 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn the_two_capability_tiers_are_independently_settable(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
         let events = vec!["pull_request".to_string(), "push".to_string()];
-        let ledger_only = svc::set_webhook_events(&pool, admin, c.id, &events)
-            .await
-            .expect("set webhooks");
+        let ledger_only = svc::set_webhook_events(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c.id,
+            &events,
+        )
+        .await
+        .expect("set webhooks");
         assert!(ledger_only.is_ledger_capable(), "events land");
         assert!(
             !ledger_only.is_reach_capable(),
@@ -1422,9 +1556,14 @@ mod tests {
         assert_eq!(ledger_only.webhook_events, events);
 
         let tools = vec!["get_pull_request".to_string()];
-        let both = svc::set_tool_manifest(&pool, admin, c.id, &tools)
-            .await
-            .expect("set tools");
+        let both = svc::set_tool_manifest(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c.id,
+            &tools,
+        )
+        .await
+        .expect("set tools");
         assert!(both.is_reach_capable(), "judgment becomes possible");
         assert!(both.is_ledger_capable(), "and the webhook set survives");
         assert_eq!(
@@ -1440,16 +1579,30 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn setting_webhook_events_replaces_rather_than_merges(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
-        svc::set_webhook_events(&pool, admin, c.id, &["push".to_string()])
-            .await
-            .expect("first");
-        let second = svc::set_webhook_events(&pool, admin, c.id, &["pull_request".to_string()])
-            .await
-            .expect("second");
+        svc::set_webhook_events(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c.id,
+            &["push".to_string()],
+        )
+        .await
+        .expect("first");
+        let second = svc::set_webhook_events(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c.id,
+            &["pull_request".to_string()],
+        )
+        .await
+        .expect("second");
 
         assert_eq!(
             second.webhook_events,
@@ -1463,21 +1616,50 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_revoked_connection_refuses_every_mutation(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
-        svc::revoke(&pool, c.id, admin).await.expect("revoke");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
+        svc::revoke(
+            &pool,
+            c.id,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+        )
+        .await
+        .expect("revoke");
 
         assert!(matches!(
-            svc::attach_credential(&pool, &granting_broker(), admin, c.id, &credential()).await,
+            svc::attach_credential(
+                &pool,
+                &granting_broker(),
+                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                c.id,
+                &credential()
+            )
+            .await,
             Err(ApiError::Conflict(_))
         ));
         assert!(matches!(
-            svc::set_webhook_events(&pool, admin, c.id, &["push".to_string()]).await,
+            svc::set_webhook_events(
+                &pool,
+                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                c.id,
+                &["push".to_string()]
+            )
+            .await,
             Err(ApiError::Conflict(_))
         ));
         assert!(matches!(
-            svc::set_tool_manifest(&pool, admin, c.id, &["t".to_string()]).await,
+            svc::set_tool_manifest(
+                &pool,
+                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                c.id,
+                &["t".to_string()]
+            )
+            .await,
             Err(ApiError::Conflict(_))
         ));
 
@@ -1496,13 +1678,23 @@ mod tests {
         let (maintainer, team) =
             seed_team_member(&pool, "conn-maint", "acme", TeamRole::Maintainer).await;
 
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
 
         assert!(matches!(
-            svc::attach_credential(&pool, &granting_broker(), maintainer, c.id, &credential())
-                .await,
+            svc::attach_credential(
+                &pool,
+                &granting_broker(),
+                &crate::test_support::authenticated_profile_for(&pool, maintainer.uuid()).await,
+                c.id,
+                &credential()
+            )
+            .await,
             Err(ApiError::Forbidden)
         ));
         assert!(
@@ -1516,16 +1708,27 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn an_empty_broker_or_connector_is_rejected(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
         let no_broker = ConnectionCredential {
             broker: "  ".to_string(),
             ..credential()
         };
         assert!(matches!(
-            svc::attach_credential(&pool, &granting_broker(), admin, c.id, &no_broker).await,
+            svc::attach_credential(
+                &pool,
+                &granting_broker(),
+                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                c.id,
+                &no_broker
+            )
+            .await,
             Err(ApiError::BadRequest(_))
         ));
 
@@ -1534,7 +1737,14 @@ mod tests {
             ..credential()
         };
         assert!(matches!(
-            svc::attach_credential(&pool, &granting_broker(), admin, c.id, &no_connector).await,
+            svc::attach_credential(
+                &pool,
+                &granting_broker(),
+                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+                c.id,
+                &no_connector
+            )
+            .await,
             Err(ApiError::BadRequest(_))
         ));
 
@@ -1605,14 +1815,18 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_team_owner_may_grant_reach(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
         svc::grant_reach(
             &pool,
-            owner,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reviews acme CI".into()),
@@ -1632,9 +1846,13 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_system_admin_may_grant_reach(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Teamless GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Teamless GitHub", None),
+        )
+        .await
+        .expect("provision");
         let beta = seed_team(&pool, "beta").await;
         assert!(
             crate::services::team_service::role_on_team(&pool, beta, admin)
@@ -1646,7 +1864,7 @@ mod tests {
 
         svc::grant_reach(
             &pool,
-            admin,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
             c.id,
             beta,
             Some("admin binds teamless reach".into()),
@@ -1661,15 +1879,25 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_non_owner_non_admin_cannot_grant_reach(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         let (outsider, _other) =
             seed_team_member(&pool, "reach-outsider", "other", TeamRole::Owner).await;
 
-        let err = svc::grant_reach(&pool, outsider, c.id, team, None)
-            .await
-            .expect_err("an owner of a different team is not authorized here");
+        let err = svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            c.id,
+            team,
+            None,
+        )
+        .await
+        .expect_err("an owner of a different team is not authorized here");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
         assert!(
             !reach_grant_exists(&pool, c.id, team).await,
@@ -1683,15 +1911,19 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn granting_reach_to_an_unmanaged_team_is_denied(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         // A real team the owner has no relationship with whatsoever.
         let stranger_team = seed_team(&pool, "stranger").await;
 
         let err = svc::grant_reach(
             &pool,
-            owner,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
             c.id,
             stranger_team,
             Some("reaching somewhere I do not manage".into()),
@@ -1716,9 +1948,13 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn granting_reach_to_a_team_you_merely_belong_to_is_denied(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         let beta = seed_team(&pool, "beta").await;
         sqlx::query!(
             "INSERT INTO kb_team_members (team_id, profile_id, role) \
@@ -1732,7 +1968,7 @@ mod tests {
 
         let err = svc::grant_reach(
             &pool,
-            owner,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("I am merely a member".into()),
@@ -1761,9 +1997,13 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn reach_to_the_gating_team_is_allowed_for_a_non_admin(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
 
         // The target IS the gating team, and the caller manages it — the exact principal the two
         // sibling gates refuse.
@@ -1794,7 +2034,7 @@ mod tests {
 
         svc::grant_reach(
             &pool,
-            owner,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
             c.id,
             gating,
             Some("the root team reviews acme CI".into()),
@@ -1814,14 +2054,24 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn granting_reach_to_a_nonexistent_team_writes_no_dangling_row(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
         let ghost = Uuid::now_v7(); // no kb_teams row will ever carry this
 
-        let err = svc::grant_reach(&pool, admin, c.id, ghost, Some("typo".into()))
-            .await
-            .expect_err("a team that does not exist cannot receive reach");
+        let err = svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c.id,
+            ghost,
+            Some("typo".into()),
+        )
+        .await
+        .expect_err("a team that does not exist cannot receive reach");
         assert!(matches!(err, ApiError::NotFound(_)), "got {err:?}");
 
         assert!(
@@ -1834,16 +2084,26 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_teamless_connection_grant_reach_fails_closed(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Teamless GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Teamless GitHub", None),
+        )
+        .await
+        .expect("provision");
         let (outsider, _other) =
             seed_team_member(&pool, "reach-outsider", "other", TeamRole::Owner).await;
         let beta = seed_team(&pool, "beta").await;
 
-        let err = svc::grant_reach(&pool, outsider, c.id, beta, None)
-            .await
-            .expect_err("teamless is admin-only");
+        let err = svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            c.id,
+            beta,
+            None,
+        )
+        .await
+        .expect_err("teamless is admin-only");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
     }
 
@@ -1851,14 +2111,18 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn revoke_reach_removes_a_previously_granted_row(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
         svc::grant_reach(
             &pool,
-            owner,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reviews acme CI".into()),
@@ -1867,9 +2131,14 @@ mod tests {
         .expect("grant");
         assert!(reach_grant_exists(&pool, c.id, beta).await, "granted");
 
-        svc::revoke_reach(&pool, owner, c.id, beta)
-            .await
-            .expect("revoke");
+        svc::revoke_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            beta,
+        )
+        .await
+        .expect("revoke");
         assert!(
             !reach_grant_exists(&pool, c.id, beta).await,
             "the grant must be gone after revoke"
@@ -1886,14 +2155,18 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn revoke_reach_survives_losing_the_target_team_role(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
         svc::grant_reach(
             &pool,
-            owner,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reviews acme CI".into()),
@@ -1912,15 +2185,26 @@ mod tests {
         .await
         .expect("drop the target-team role");
         assert!(
-            svc::grant_reach(&pool, owner, c.id, beta, Some("again".into()))
-                .await
-                .is_err(),
+            svc::grant_reach(
+                &pool,
+                &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+                c.id,
+                beta,
+                Some("again".into())
+            )
+            .await
+            .is_err(),
             "precondition: re-GRANTING is now denied — the role really is gone"
         );
 
-        svc::revoke_reach(&pool, owner, c.id, beta)
-            .await
-            .expect("revoke must not require the target-team role grant demands");
+        svc::revoke_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            beta,
+        )
+        .await
+        .expect("revoke must not require the target-team role grant demands");
         assert!(
             !reach_grant_exists(&pool, c.id, beta).await,
             "the stranded grant must be withdrawable by the connection's owner"
@@ -1940,15 +2224,25 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn grant_on_a_reach_declaring_connection_without_affirmation_is_refused(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         assert!(c.declares_reach(), "req declares reach");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
-        let err = svc::grant_reach(&pool, owner, c.id, beta, None)
-            .await
-            .expect_err("a reach-declaring grant must be affirmed");
+        let err = svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            beta,
+            None,
+        )
+        .await
+        .expect_err("a reach-declaring grant must be affirmed");
         assert!(matches!(err, ApiError::Conflict(_)), "got {err:?}");
 
         assert!(
@@ -1969,14 +2263,18 @@ mod tests {
         pool: PgPool,
     ) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
         let out = svc::grant_reach(
             &pool,
-            owner,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reviews acme CI".into()),
@@ -2011,15 +2309,25 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_connection_that_declares_no_reach_grants_without_affirmation(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req_no_reach("Bare GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req_no_reach("Bare GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         assert!(!c.declares_reach(), "req_no_reach declares no reach");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
-        svc::grant_reach(&pool, owner, c.id, beta, None)
-            .await
-            .expect("a connection with no declared reach grants freely");
+        svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            beta,
+            None,
+        )
+        .await
+        .expect("a connection with no declared reach grants freely");
 
         assert!(
             reach_grant_exists(&pool, c.id, beta).await,
@@ -2037,14 +2345,24 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn affirming_a_connection_that_declares_no_reach_is_refused(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req_no_reach("Bare GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req_no_reach("Bare GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
-        let err = svc::grant_reach(&pool, owner, c.id, beta, Some("but I insist".into()))
-            .await
-            .expect_err("--affirm-reach is inapplicable when no reach is declared");
+        let err = svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            beta,
+            Some("but I insist".into()),
+        )
+        .await
+        .expect_err("--affirm-reach is inapplicable when no reach is declared");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
 
         assert!(
@@ -2058,16 +2376,26 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn authorization_precedes_affirmation(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         let (outsider, _other) =
             seed_team_member(&pool, "reach-outsider", "other", TeamRole::Owner).await;
         let beta = seed_team(&pool, "beta").await;
 
-        let err = svc::grant_reach(&pool, outsider, c.id, beta, Some("I insist".into()))
-            .await
-            .expect_err("auth runs before affirmation");
+        let err = svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            c.id,
+            beta,
+            Some("I insist".into()),
+        )
+        .await
+        .expect_err("auth runs before affirmation");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
 
         assert!(
@@ -2086,18 +2414,34 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn re_affirming_overwrites_the_prior_affirmation(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         let beta = seed_managed_team(&pool, "beta", owner).await;
         let gamma = seed_managed_team(&pool, "gamma", owner).await;
 
-        svc::grant_reach(&pool, owner, c.id, beta, Some("first reason".into()))
-            .await
-            .expect("first affirmation");
-        let second = svc::grant_reach(&pool, owner, c.id, gamma, Some("second reason".into()))
-            .await
-            .expect("second affirmation");
+        svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            beta,
+            Some("first reason".into()),
+        )
+        .await
+        .expect("first affirmation");
+        let second = svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            gamma,
+            Some("second reason".into()),
+        )
+        .await
+        .expect("second affirmation");
 
         assert_eq!(
             second.reach_affirmation.as_deref(),
@@ -2132,17 +2476,27 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn attach_persists_observed_reach_onto_the_connection_row(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
         assert!(
             c.observed_reach.is_none(),
             "born with no observed reach — the credential has not been minted"
         );
 
-        let out = svc::attach_credential(&pool, &granting_broker(), admin, c.id, &credential())
-            .await
-            .expect("attach");
+        let out = svc::attach_credential(
+            &pool,
+            &granting_broker(),
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c.id,
+            &credential(),
+        )
+        .await
+        .expect("attach");
 
         // The response carries the observed reach (B4, unchanged)…
         assert_eq!(
@@ -2172,14 +2526,24 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn an_unverified_attach_persists_null_observed_reach(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let c = svc::provision(&pool, admin, &req("Acme GitHub", None))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", None),
+        )
+        .await
+        .expect("provision");
 
         let null_broker = crate::broker::NullBroker;
-        let out = svc::attach_credential(&pool, &null_broker, admin, c.id, &credential())
-            .await
-            .expect("an unverified attach still persists the credential");
+        let out = svc::attach_credential(
+            &pool,
+            &null_broker,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            c.id,
+            &credential(),
+        )
+        .await
+        .expect("an unverified attach still persists the credential");
         assert!(!out.verification.verified, "no broker ⇒ not verified");
         assert!(
             out.verification.observed_reach.is_none(),
@@ -2200,18 +2564,34 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn observed_reach_broader_than_declared_still_requires_affirmation(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         // Attach with the default granting broker (repository_selection: "all").
-        svc::attach_credential(&pool, &granting_broker(), owner, c.id, &credential())
-            .await
-            .expect("attach");
+        svc::attach_credential(
+            &pool,
+            &granting_broker(),
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            &credential(),
+        )
+        .await
+        .expect("attach");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
-        let err = svc::grant_reach(&pool, owner, c.id, beta, None)
-            .await
-            .expect_err("observed all-vs-declared-specific gap must be affirmed");
+        let err = svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            beta,
+            None,
+        )
+        .await
+        .expect_err("observed all-vs-declared-specific gap must be affirmed");
         assert!(matches!(err, ApiError::Conflict(_)), "got {err:?}");
         assert!(
             !reach_grant_exists(&pool, c.id, beta).await,
@@ -2224,17 +2604,27 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn affirming_the_observed_gap_records_and_grants(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
-        svc::attach_credential(&pool, &granting_broker(), owner, c.id, &credential())
-            .await
-            .expect("attach (observed all)");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
+        svc::attach_credential(
+            &pool,
+            &granting_broker(),
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            &credential(),
+        )
+        .await
+        .expect("attach (observed all)");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
         let out = svc::grant_reach(
             &pool,
-            owner,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
             c.id,
             beta,
             Some("beta reads the whole org deliberately".into()),
@@ -2259,13 +2649,23 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn observed_reach_agreeing_with_declared_grants_without_affirmation(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
         // Attach with the NARROW broker (repository_selection: "selected").
-        svc::attach_credential(&pool, &narrow_granting_broker(), owner, c.id, &credential())
-            .await
-            .expect("attach (observed selected)");
+        svc::attach_credential(
+            &pool,
+            &narrow_granting_broker(),
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            &credential(),
+        )
+        .await
+        .expect("attach (observed selected)");
 
         let reloaded = svc::get(&pool, c.id).await.expect("get");
         assert_eq!(
@@ -2280,9 +2680,15 @@ mod tests {
 
         let beta = seed_managed_team(&pool, "beta", owner).await;
         // No affirmation: the grant proceeds because the mint witnessed no gap.
-        svc::grant_reach(&pool, owner, c.id, beta, None)
-            .await
-            .expect("a witnessed, agreeing reach grants without affirmation");
+        svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            beta,
+            None,
+        )
+        .await
+        .expect("a witnessed, agreeing reach grants without affirmation");
         assert!(
             reach_grant_exists(&pool, c.id, beta).await,
             "the grant lands"
@@ -2302,17 +2708,33 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn affirming_when_observed_reach_agrees_with_declared_is_refused(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(&pool, owner, &req("Acme GitHub", Some(team)))
-            .await
-            .expect("provision");
-        svc::attach_credential(&pool, &narrow_granting_broker(), owner, c.id, &credential())
-            .await
-            .expect("attach (observed selected)");
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
+        svc::attach_credential(
+            &pool,
+            &narrow_granting_broker(),
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            &credential(),
+        )
+        .await
+        .expect("attach (observed selected)");
         let beta = seed_managed_team(&pool, "beta", owner).await;
 
-        let err = svc::grant_reach(&pool, owner, c.id, beta, Some("but I insist".into()))
-            .await
-            .expect_err("affirming a no-gap reach is inapplicable");
+        let err = svc::grant_reach(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            c.id,
+            beta,
+            Some("but I insist".into()),
+        )
+        .await
+        .expect_err("affirming a no-gap reach is inapplicable");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
         assert!(
             !reach_grant_exists(&pool, c.id, beta).await,
