@@ -520,7 +520,7 @@ Usage: temper resource meta [OPTIONS] <COMMAND>
 
 Commands:
   get   Read a resource's frontmatter — both tiers, body untouched
-  set   Replace a resource's frontmatter — PUT semantics, BOTH tiers stated in full
+  set   Replace a resource's frontmatter — the metadata-only PUT, both tiers named at once
   help  Print this message or the help of the given subcommand(s)
 
 Options:
@@ -573,9 +573,9 @@ Options:
 #### `temper resource meta set`
 
 ```text
-Replace a resource's frontmatter — PUT semantics, BOTH tiers stated in full.
+Replace a resource's frontmatter — the metadata-only PUT, both tiers named at once.
 
-A tier is replaced wholesale: keys you omit from `--managed`/`--open` are cleared, not merged (the additive channel is `resource update --open-meta-add`). No body revise, no re-chunk, no re-embed. 403 when the resource is readable but not modifiable; 404 when absent or unreadable.
+Merge semantics (observed at the backend, not inherited from the route's comment): every key you name is overwritten, every key you omit is preserved — a named open-tier key set to null reads back as absent. No body revise, no re-chunk, no re-embed. 403 when the resource is readable but not modifiable; 404 when absent or unreadable.
 
 Usage: temper resource meta set [OPTIONS] --managed <MANAGED> --open <OPEN> <REF>
 
@@ -585,7 +585,7 @@ Arguments:
 
 Options:
       --managed <MANAGED>
-          Managed (temper-*) frontmatter as a JSON object string — the closed vocabulary only; an unknown temper-* key is refused client-side, there is no catch-all. Stated in full: omitted keys are cleared
+          Managed (temper-) frontmatter as a JSON object string — the closed vocabulary only; an unknown temper-* key is refused client-side, there is no catch-all. Named keys overwrite; omitted keys are preserved
 
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -594,7 +594,7 @@ Options:
           Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
 
       --open <OPEN>
-          Open (caller-defined) frontmatter as a JSON object string. Stated in full: omitted keys are cleared — pass '{"tags":[]}' to keep tags empty deliberately, not by omission
+          Open (caller-defined) frontmatter as a JSON object string. Named keys overwrite; omitted keys are preserved (the additive channel is `resource update --open-meta-add`)
 
       --embed-threads <N>
           ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
