@@ -13,10 +13,10 @@ use temper_substrate::ids::EntityId;
 use temper_substrate::payloads::RefTarget;
 use uuid::Uuid;
 
-use crate::auth::SystemAdmin;
+use crate::auth::{AuthenticatedProfile, SystemAdmin};
 // In scope so `GrantAuthority::resolve` — the grant-administration gate, which lives as this
 // enum's `ScopedAuthority` impl in `authz/grant.rs` — is callable here.
-use crate::authz::ScopedAuthority;
+use crate::authz::{Principal, ScopedAuthority};
 use crate::services::standing_service::{self, ApplyStandingParams};
 use temper_principal::{Act, ActorAuthority};
 
@@ -85,7 +85,7 @@ pub(crate) enum GrantAuthority {
 /// the act", not which arm allowed it.
 pub(crate) async fn can_administer_grant(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: Principal<'_>,
     subject: RefTarget,
 ) -> ApiResult<bool> {
     Ok(GrantAuthority::resolve(pool, caller, subject).await? != GrantAuthority::None)
@@ -195,7 +195,7 @@ impl From<&GrantCapabilityRequest> for RequestedCapabilities {
 /// that only need the decision (`machine_authz::contain_reach`) discard it.
 pub(crate) async fn authorize_capability_grant(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: Principal<'_>,
     subject: RefTarget,
     caps: RequestedCapabilities,
 ) -> ApiResult<crate::authz::Authorized<GrantAuthority>> {
@@ -221,7 +221,14 @@ pub(crate) async fn authorize_capability_grant(
                 (caps.grant, AccessAction::Grant),
             ] {
                 if requested
-                    && !profile_can(pool, caller, action, subject.kind.as_str(), subject.id).await?
+                    && !profile_can(
+                        pool,
+                        caller.profile_id(),
+                        action,
+                        subject.kind.as_str(),
+                        subject.id,
+                    )
+                    .await?
                 {
                     return Err(ApiError::Forbidden);
                 }
@@ -358,16 +365,18 @@ pub(crate) async fn delete_grant(
 /// the row already existed and was updated in place.
 pub async fn grant_capability(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     req: &GrantCapabilityRequest,
 ) -> ApiResult<GrantOutcome> {
+    let caller = ProfileId::from(authed.profile().id);
     // Auth before writes. The one shared decision — authority arm + attenuation — also called by
     // the machine path (`machine_authz::contain_reach`), so the two sinks cannot drift. Revocation
     // is deliberately NOT attenuated: de-escalation must never be harder than escalation, or a
     // grant becomes unwithdrawable.
     let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
         .ok_or(ApiError::Forbidden)?;
-    let proof = authorize_capability_grant(pool, caller, subject, req.into()).await?;
+    let proof =
+        authorize_capability_grant(pool, Principal::Proof(authed), subject, req.into()).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -397,16 +406,18 @@ pub async fn grant_capability(
 /// (idempotent, mirrors `bind_team`/`unbind_team`).
 pub async fn revoke_capability(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     req: &RevokeCapabilityRequest,
 ) -> ApiResult<RevokeOutcome> {
+    let caller = ProfileId::from(authed.profile().id);
     let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
         .ok_or(ApiError::Forbidden)?;
     // The proof, where this used to take the `can_administer_grant` bool. Same decision — that
     // function IS a bool projection of this resolve — but revocation needs the proof itself to mint
     // its warrant. Deliberately NOT `authorize_capability_grant`: that adds attenuation, and
     // attenuating a revocation is what would make a grant unwithdrawable.
-    let proof = crate::authz::authorize::<GrantAuthority>(pool, caller, subject).await?;
+    let proof =
+        crate::authz::authorize::<GrantAuthority>(pool, Principal::Proof(authed), subject).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;

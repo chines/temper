@@ -57,6 +57,10 @@ test-db = ["temper-services/test-db"]
 test-embed = []
 
 [dev-dependencies]
+# The tests' JWKS harness builds `JwksKeyStore::with_static_key`, which is cfg-gated to
+# temper-services' NARROW `test-harness` feature (the `temper-mcp` dev-dep precedent); a
+# regular dependency does not enable it, so the dev-dep re-declares it with the feature on.
+temper-services = { path = "../temper-services", features = ["test-harness"] }
 # `test-support` gives the flush-ordering test an in-memory exporter to assert against, so the
 # layer ordering in `apply_transport_layers` is verified against the real router.
 temperkb-telemetry = { workspace = true, features = ["test-support"] }

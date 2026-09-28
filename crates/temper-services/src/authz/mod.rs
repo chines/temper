@@ -67,8 +67,43 @@ use std::fmt::Debug;
 
 use temper_core::types::ids::ProfileId;
 
+use crate::auth::AuthenticatedProfile;
 use crate::error::{ApiError, ApiResult};
 
+/// The caller identity a scoped-authority probe runs for — the Level-1 boundary made a type.
+///
+/// Two arms, and the split is the refactor's whole point:
+///
+/// * [`Principal::Proof`] — an `&AuthenticatedProfile` minted by the seam. Every service that
+///   sits on a visibility ladder or widens a result set by admin-ness (Classes A and B of the
+///   2026-09-28 single-ingress inventory) takes the proof in its signature, so a caller that
+///   cannot hold one cannot compile the call. This is the enforcement the signature buys.
+/// * [`Principal::Bare`] — a bare `ProfileId`, with no provenance behind it. This is the
+///   db_backend seam's door (the CLI/backend path has no HTTP middleware above it, so there is
+///   no proof to pass — Class E of the inventory) and, until its own PR migrates them, the
+///   conditional write-gates inside services (Class F). It is spelled `Bare` rather than
+///   `Backend` because it must not read as approval: a `Bare` caller is one whose Level-1
+///   passage this layer cannot see, and the arms that admit it are exactly the arms that
+///   admitted the bare id before the refactor. Nothing new admits under it.
+///
+/// The ladders' probe orderings (membership-first, self-read-first, object-side-first) are
+/// invariants and read the id through [`Principal::profile_id`] — the enum never reorders,
+/// never widens, and never replaces a probe.
+#[derive(Clone, Copy)]
+pub(crate) enum Principal<'a> {
+    Proof(&'a AuthenticatedProfile),
+    Bare(ProfileId),
+}
+
+impl Principal<'_> {
+    /// The principal id every SQL predicate below binds. Free — no query, no reorder.
+    pub(crate) fn profile_id(&self) -> ProfileId {
+        match self {
+            Principal::Proof(authed) => ProfileId::from(authed.profile().id),
+            Principal::Bare(id) => *id,
+        }
+    }
+}
 /// A domain's answer to "what authority does this caller hold over this subject?"
 ///
 /// Implemented by each domain's own authority enum. The arms stay domain-specific on purpose:
@@ -89,7 +124,11 @@ pub(crate) trait ScopedAuthority: Sized + Copy + Debug {
     /// Sequenced probes, short-circuiting: return the strongest arm as soon as it is established,
     /// so the common path does not pay for the branches below it. SQL predicates are authoritative
     /// here — call them, do not restate them.
-    async fn resolve(pool: &PgPool, caller: ProfileId, subject: Self::Subject) -> ApiResult<Self>;
+    async fn resolve(
+        pool: &PgPool,
+        caller: Principal<'_>,
+        subject: Self::Subject,
+    ) -> ApiResult<Self>;
 
     /// Is this arm a denial?
     ///
@@ -177,7 +216,7 @@ impl<A: ScopedAuthority> Authorized<A> {
 /// can construct one, so the gate that mints the proof lives beside the type that carries it.
 pub(crate) async fn authorize<A: ScopedAuthority>(
     pool: &PgPool,
-    caller: ProfileId,
+    caller: Principal<'_>,
     subject: A::Subject,
 ) -> ApiResult<Authorized<A>> {
     let authority = A::resolve(pool, caller, subject).await?;

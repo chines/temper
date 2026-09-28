@@ -223,14 +223,14 @@ claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 2 require_manage_on_team,can_manage
-gate audit_gate f7a794bde240
-gate connection 815137c3936d
-gate context_admin 14529ac51ace
-gate grant 3cfec3045c9a
-gate machine 9257313b8605
-gate read_gates f619f1101959
-gate subscription b5f813e35ccc
-gate two_sided a44fcf6881bf
+gate audit_gate dddd04dd4e94
+gate connection 1281bf5040ff
+gate context_admin 6bd5aa70ab69
+gate grant f1de797e6695
+gate machine 18570f26a292
+gate read_gates 5b394645d054
+gate subscription efe0d95990a8
+gate two_sided 4fb1fb73d559
 gate require_cogmap_write_admin ac8abe5dae96
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d

@@ -162,12 +162,13 @@ async fn active_approved_allowed_on_both_surfaces(pool: sqlx::PgPool) {
         .expect("profile id parse");
 
     let svc = build_mcp_service(&pool).await;
-    let profile = svc
+    let authed = svc
         .ensure_profile_from_parts(&mcp_parts("e2e-test-user"))
         .await
         .expect("MCP must admit an active, approved profile");
     assert_eq!(
-        profile.id, api_profile_id,
+        authed.profile().id,
+        api_profile_id,
         "both surfaces must resolve the SAME profile for the same identity"
     );
 }

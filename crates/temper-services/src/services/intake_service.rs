@@ -637,9 +637,13 @@ mod tests {
             create_subscription(&pool, admin, "kb_teams", team, team, conn, selector).await;
 
         // Revoke the subscription.
-        crate::services::subscription_service::revoke(&pool, admin, sub_id)
-            .await
-            .expect("revoke");
+        crate::services::subscription_service::revoke(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            sub_id,
+        )
+        .await
+        .expect("revoke");
 
         let id = receive_webhook(
             &pool,

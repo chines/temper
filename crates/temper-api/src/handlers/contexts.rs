@@ -49,7 +49,7 @@ pub async fn list(
 ) -> ApiResult<Json<Vec<ContextRowWithCounts>>> {
     let profile_id = ProfileId::from(auth.0.profile().id);
     if q.retired == Some(true) {
-        context_service::list_retired_administered(&state.pool, profile_id)
+        context_service::list_retired_administered(&state.pool, &auth.0)
             .await
             .map(Json)
     } else {
@@ -111,7 +111,7 @@ pub async fn get(
     // administrator who cannot read a context they just retired can still ask for it here.
     match context_service::get_visible(&state.pool, profile_id, ctx_id).await {
         Err(ApiError::NotFound(_)) => {
-            context_service::get_retired_administered(&state.pool, profile_id, ctx_id)
+            context_service::get_retired_administered(&state.pool, &auth.0, ctx_id)
                 .await
                 .map(Json)
         }
@@ -138,12 +138,7 @@ pub async fn delete(
     auth: AuthUser,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<RetireContextOutcome>> {
-    let outcome = context_service::retire(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        context_id,
-    )
-    .await?;
+    let outcome = context_service::retire(&state.pool, &auth.0, context_id).await?;
     Ok(Json(outcome))
 }
 
@@ -167,13 +162,9 @@ pub async fn restore(
     auth: AuthUser,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<RestoreContextOutcome>> {
-    context_service::restore(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        context_id,
-    )
-    .await
-    .map(Json)
+    context_service::restore(&state.pool, &auth.0, context_id)
+        .await
+        .map(Json)
 }
 
 /// Share a context with a team
@@ -195,13 +186,7 @@ pub async fn share_team(
     Path(context_id): Path<Uuid>,
     Json(body): Json<ShareContextRequest>,
 ) -> ApiResult<Json<ShareContextOutcome>> {
-    let outcome = context_service::share(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        context_id,
-        &body,
-    )
-    .await?;
+    let outcome = context_service::share(&state.pool, &auth.0, context_id, &body).await?;
     Ok(Json(outcome))
 }
 
@@ -225,13 +210,7 @@ pub async fn unshare_team(
     auth: AuthUser,
     Path((context_id, team_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<UnshareContextOutcome>> {
-    let outcome = context_service::unshare(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        context_id,
-        team_id,
-    )
-    .await?;
+    let outcome = context_service::unshare(&state.pool, &auth.0, context_id, team_id).await?;
     Ok(Json(outcome))
 }
 
@@ -256,13 +235,8 @@ pub async fn reassign(
     Path(context_id): Path<Uuid>,
     Json(body): Json<ReassignContextRequest>,
 ) -> ApiResult<Json<ReassignContextOutcome>> {
-    let outcome = context_service::reassign(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        context_id,
-        body.to_team_id,
-    )
-    .await?;
+    let outcome =
+        context_service::reassign(&state.pool, &auth.0, context_id, body.to_team_id).await?;
     Ok(Json(outcome))
 }
 
@@ -288,13 +262,7 @@ pub async fn rename(
     Path(context_id): Path<Uuid>,
     Json(body): Json<RenameContextRequest>,
 ) -> ApiResult<Json<RenameContextOutcome>> {
-    let outcome = context_service::rename(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        context_id,
-        &body.name,
-    )
-    .await?;
+    let outcome = context_service::rename(&state.pool, &auth.0, context_id, &body.name).await?;
     Ok(Json(outcome))
 }
 

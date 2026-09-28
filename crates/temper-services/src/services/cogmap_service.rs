@@ -19,7 +19,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::authz::{TwoSidedAuthority, TwoSidedScope};
+use crate::authz::{Principal, TwoSidedAuthority, TwoSidedScope};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::cognitive_maps::{
     BindTeamOutcome, BindTeamRequest, CogmapDetail, CogmapFoundationRow, CogmapRow,
@@ -123,9 +123,11 @@ pub async fn bind_team(
     req: &BindTeamRequest,
 ) -> ApiResult<BindTeamOutcome> {
     // Auth before writes: system-admin, OR a team manager who administers the map (non-root team).
+    // Class F survivor: the conditional write-gate keeps its bare-id signature until its own PR;
+    // the gate receives the principal as `Bare` — exactly what it received before, unchanged.
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        caller,
+        Principal::Bare(caller),
         TwoSidedScope::cogmap(cogmap_id, req.team_id),
     )
     .await?;
@@ -174,9 +176,10 @@ pub async fn unbind_team(
     // Auth before writes: symmetric with bind — a principal who could bind may unbind. That
     // symmetry is exactly why the shared gate excludes the gating team (see `TwoSidedAuthority`):
     // it is unbinding a gating-team-joined map, not binding one, that would be an escalation.
+    // Class F survivor: `Bare` until this gate's own PR — unchanged from before.
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        caller,
+        Principal::Bare(caller),
         TwoSidedScope::cogmap(cogmap_id, team_id),
     )
     .await?;

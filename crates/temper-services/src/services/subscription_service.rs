@@ -33,7 +33,8 @@ use temper_core::types::subscription::{
     CreateSubscriptionRequest, Subscription, SubscriptionSelector,
 };
 
-use crate::authz::{authorize, SubscriptionAuthority};
+use crate::auth::AuthenticatedProfile;
+use crate::authz::{authorize, Principal, SubscriptionAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::connection_service;
 
@@ -59,9 +60,14 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Subscription> {
 }
 
 /// [`get`], gated on the authoring team: the caller manages it, or is a system admin.
-pub async fn get_for_caller(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Subscription> {
+pub async fn get_for_caller(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+    id: Uuid,
+) -> ApiResult<Subscription> {
     let sub = get(pool, id).await?;
-    authorize::<SubscriptionAuthority>(pool, caller, sub.authoring_team_id).await?;
+    authorize::<SubscriptionAuthority>(pool, Principal::Proof(authed), sub.authoring_team_id)
+        .await?;
     Ok(sub)
 }
 
@@ -76,10 +82,11 @@ pub async fn get_for_caller(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiRe
 /// they agree by being the same disjunction, not by sharing a call.
 pub async fn list(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     include_revoked: bool,
     connection_id: Option<Uuid>,
 ) -> ApiResult<Vec<Subscription>> {
+    let caller = ProfileId::from(authed.profile().id);
     let is_admin = crate::services::access_service::is_system_admin(pool, caller).await?;
 
     sqlx::query_as!(
@@ -117,9 +124,10 @@ pub async fn list(
 /// storage, the enum is the shape.
 pub async fn create(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     req: &CreateSubscriptionRequest,
 ) -> ApiResult<Subscription> {
+    let caller = ProfileId::from(authed.profile().id);
     // Validate the subscriber_table against the admissible set before anything else — a bad
     // table name is a 400, not a 403 (which is what the authz gate would return).
     if !SUBSCRIBER_TABLES.contains(&req.subscriber_table.as_str()) {
@@ -141,7 +149,8 @@ pub async fn create(
     // resolves to the denial arm (role_on_team returns None for a team_id no row carries), so a
     // bogus UUID is refused here and never reaches the INSERT.
     let authorized =
-        authorize::<SubscriptionAuthority>(pool, caller, req.authoring_team_id).await?;
+        authorize::<SubscriptionAuthority>(pool, Principal::Proof(authed), req.authoring_team_id)
+            .await?;
     let authoring_team = authorized.subject();
 
     // Leg 2: the authoring team holds a read-reach grant on the connection. This is the
@@ -258,10 +267,16 @@ fn refuse_inert_declaration(
 /// `kb_connections`. A revoked subscription stops matching (chunk B's query filters
 /// `revoked_at IS NULL`); the history stays, so a subscription that existed at intake is
 /// resolvable at disposition time (the delivery row's research-corpus property).
-pub async fn revoke(pool: &PgPool, caller: ProfileId, id: Uuid) -> ApiResult<Subscription> {
+pub async fn revoke(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+    id: Uuid,
+) -> ApiResult<Subscription> {
+    let caller = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's authoring team.
     let existing = get(pool, id).await?;
-    authorize::<SubscriptionAuthority>(pool, caller, existing.authoring_team_id).await?;
+    authorize::<SubscriptionAuthority>(pool, Principal::Proof(authed), existing.authoring_team_id)
+        .await?;
 
     sqlx::query!(
         r#"UPDATE kb_subscriptions
@@ -663,9 +678,13 @@ mod tests {
 
         // A team subscribes for itself: subscriber_table = kb_teams, subscriber_id = team,
         // authoring_team_id = team.
-        let created = create(&pool, admin, &req("kb_teams", team, team, conn))
-            .await
-            .expect("create subscription");
+        let created = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect("create subscription");
 
         assert_eq!(created.subscriber_table, "kb_teams");
         assert_eq!(created.subscriber_id, team);
@@ -674,7 +693,13 @@ mod tests {
         assert!(created.revoked_at.is_none());
 
         // Revoke.
-        let revoked = revoke(&pool, admin, created.id).await.expect("revoke");
+        let revoked = revoke(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            created.id,
+        )
+        .await
+        .expect("revoke");
         assert!(revoked.revoked_at.is_some());
         assert_eq!(revoked.revoked_by_profile_id, Some(*admin));
     }
@@ -686,9 +711,13 @@ mod tests {
         let conn = seed_connection(&pool, Some(team), admin).await;
         // NOTE: no grant_reach — the team does NOT hold a reach grant on the connection.
 
-        let err = create(&pool, admin, &req("kb_teams", team, team, conn))
-            .await
-            .expect_err("should be forbidden");
+        let err = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect_err("should be forbidden");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
     }
 
@@ -702,9 +731,13 @@ mod tests {
         // A stranger with no role on the team.
         let stranger = seed_plain_profile(&pool, "stranger").await;
 
-        let err = create(&pool, stranger, &req("kb_teams", team, team, conn))
-            .await
-            .expect_err("should be forbidden");
+        let err = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect_err("should be forbidden");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
     }
 
@@ -734,16 +767,28 @@ mod tests {
              distinguish the admin leg from the manage leg"
         );
 
-        let created = create(&pool, admin, &req("kb_teams", team, team, conn))
-            .await
-            .expect("admin creates on a team it does not manage");
-        let read = get_for_caller(&pool, admin, created.id)
-            .await
-            .expect("admin reads on a team it does not manage");
+        let created = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect("admin creates on a team it does not manage");
+        let read = get_for_caller(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            created.id,
+        )
+        .await
+        .expect("admin reads on a team it does not manage");
         assert_eq!(read.id, created.id);
-        let revoked = revoke(&pool, admin, created.id)
-            .await
-            .expect("admin revokes on a team it does not manage");
+        let revoked = revoke(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            created.id,
+        )
+        .await
+        .expect("admin revokes on a team it does not manage");
         assert!(revoked.revoked_at.is_some());
         assert_eq!(revoked.revoked_by_profile_id, Some(*admin));
     }
@@ -771,9 +816,13 @@ mod tests {
              manager and this test would not be exercising the admin leg"
         );
 
-        let err = create(&pool, admin, &req("kb_teams", team, team, conn))
-            .await
-            .expect_err("an admin still needs the team to hold reach");
+        let err = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect_err("an admin still needs the team to hold reach");
         assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
     }
 
@@ -790,24 +839,40 @@ mod tests {
         let stranger = seed_plain_profile(&pool, "stranger").await;
 
         // create
-        let err = create(&pool, stranger, &req("kb_teams", team, team, conn))
-            .await
-            .expect_err("stranger must not create");
+        let err = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect_err("stranger must not create");
         assert!(matches!(err, ApiError::Forbidden), "create: got {err:?}");
 
         // A real row to aim get/revoke at, authored by someone who may.
-        let created = create(&pool, outsider, &req("kb_teams", team, team, conn))
-            .await
-            .expect("the team owner may create");
+        let created = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect("the team owner may create");
 
-        let err = get_for_caller(&pool, stranger, created.id)
-            .await
-            .expect_err("stranger must not read");
+        let err = get_for_caller(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            created.id,
+        )
+        .await
+        .expect_err("stranger must not read");
         assert!(matches!(err, ApiError::Forbidden), "get: got {err:?}");
 
-        let err = revoke(&pool, stranger, created.id)
-            .await
-            .expect_err("stranger must not revoke");
+        let err = revoke(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            created.id,
+        )
+        .await
+        .expect_err("stranger must not revoke");
         assert!(matches!(err, ApiError::Forbidden), "revoke: got {err:?}");
 
         // And the refusal was real, not a silent no-op: the row is still live.
@@ -834,7 +899,7 @@ mod tests {
         // A maintainer of the subscriber team creates the subscription.
         let created = create(
             &pool,
-            admin,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
             &req("kb_teams", subscriber_team, subscriber_team, conn),
         )
         .await
@@ -854,9 +919,13 @@ mod tests {
         let conn = seed_connection(&pool, Some(team), admin).await;
         grant_reach(&pool, admin, conn, team).await;
 
-        let created = create(&pool, admin, &req("kb_teams", team, team, conn))
-            .await
-            .expect("ledger-only subscription should be legal");
+        let created = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect("ledger-only subscription should be legal");
 
         assert_eq!(created.connection_id, conn);
         assert!(created.revoked_at.is_none());
@@ -869,11 +938,21 @@ mod tests {
         let conn = seed_connection(&pool, Some(team), admin).await;
         grant_reach(&pool, admin, conn, team).await;
 
-        let created = create(&pool, admin, &req("kb_teams", team, team, conn))
-            .await
-            .expect("create");
+        let created = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect("create");
 
-        let revoked = revoke(&pool, admin, created.id).await.expect("revoke");
+        let revoked = revoke(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            created.id,
+        )
+        .await
+        .expect("revoke");
         assert!(revoked.revoked_at.is_some());
 
         // The row is still there — never deleted.
@@ -884,9 +963,13 @@ mod tests {
         assert!(still_there.revoked_at.is_some());
 
         // Double revoke is a no-op returning the existing row (first revoker is the truth).
-        let double = revoke(&pool, admin, created.id)
-            .await
-            .expect("double revoke");
+        let double = revoke(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            created.id,
+        )
+        .await
+        .expect("double revoke");
         assert_eq!(double.revoked_by_profile_id, revoked.revoked_by_profile_id);
     }
 
@@ -897,13 +980,21 @@ mod tests {
         let conn = seed_connection(&pool, Some(team), admin).await;
         grant_reach(&pool, admin, conn, team).await;
 
-        let _first = create(&pool, admin, &req("kb_teams", team, team, conn))
-            .await
-            .expect("first create");
+        let _first = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect("first create");
 
-        let err = create(&pool, admin, &req("kb_teams", team, team, conn))
-            .await
-            .expect_err("duplicate should conflict");
+        let err = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect_err("duplicate should conflict");
         assert!(matches!(err, ApiError::Conflict(_)), "got {err:?}");
     }
 
@@ -914,9 +1005,13 @@ mod tests {
         let conn = seed_connection(&pool, Some(team), admin).await;
         grant_reach(&pool, admin, conn, team).await;
 
-        let first = create(&pool, admin, &req("kb_teams", team, team, conn))
-            .await
-            .expect("first create");
+        let first = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team, team, conn),
+        )
+        .await
+        .expect("first create");
 
         // Same connection, same team, different selector (different repo).
         let second_req = CreateSubscriptionRequest {
@@ -929,9 +1024,13 @@ mod tests {
                 event_types: vec![],
             },
         };
-        let second = create(&pool, admin, &second_req)
-            .await
-            .expect("second create with different selector");
+        let second = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &second_req,
+        )
+        .await
+        .expect("second create with different selector");
 
         assert_ne!(first.id, second.id);
         assert_eq!(first.connection_id, second.connection_id);
@@ -946,9 +1045,13 @@ mod tests {
         grant_reach(&pool, admin, conn, team_b).await;
 
         // Try to subscribe as team_b but with authoring_team_id = team_a — should be a 400.
-        let err = create(&pool, admin, &req("kb_teams", team_b, team_a, conn))
-            .await
-            .expect_err("authoring_team != subscriber for kb_teams should be 400");
+        let err = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team_b, team_a, conn),
+        )
+        .await
+        .expect_err("authoring_team != subscriber for kb_teams should be 400");
         assert!(matches!(err, ApiError::BadRequest(_)), "got {err:?}");
     }
 
@@ -961,9 +1064,13 @@ mod tests {
 
         let context_id = seed_context_owned_by_team(&pool, team).await;
 
-        let created = create(&pool, admin, &req("kb_contexts", context_id, team, conn))
-            .await
-            .expect("context subscription should succeed");
+        let created = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_contexts", context_id, team, conn),
+        )
+        .await
+        .expect("context subscription should succeed");
 
         assert_eq!(created.subscriber_table, "kb_contexts");
         assert_eq!(created.subscriber_id, context_id);
@@ -984,7 +1091,7 @@ mod tests {
 
         let err = create(
             &pool,
-            admin,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
             &req("kb_contexts", context_id, other_team, conn),
         )
         .await
@@ -1001,9 +1108,13 @@ mod tests {
 
         let cogmap_id = seed_cogmap_linked_to_team(&pool, team).await;
 
-        let created = create(&pool, admin, &req("kb_cogmaps", cogmap_id, team, conn))
-            .await
-            .expect("cogmap subscription should succeed");
+        let created = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_cogmaps", cogmap_id, team, conn),
+        )
+        .await
+        .expect("cogmap subscription should succeed");
 
         assert_eq!(created.subscriber_table, "kb_cogmaps");
         assert_eq!(created.subscriber_id, cogmap_id);
@@ -1020,15 +1131,30 @@ mod tests {
         grant_reach(&pool, admin, conn_a, team_a).await;
         grant_reach(&pool, admin, conn_b, team_b).await;
 
-        let _sub_a = create(&pool, admin, &req("kb_teams", team_a, team_a, conn_a))
-            .await
-            .expect("sub a");
-        let _sub_b = create(&pool, admin, &req("kb_teams", team_b, team_b, conn_b))
-            .await
-            .expect("sub b");
+        let _sub_a = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team_a, team_a, conn_a),
+        )
+        .await
+        .expect("sub a");
+        let _sub_b = create(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("kb_teams", team_b, team_b, conn_b),
+        )
+        .await
+        .expect("sub b");
 
         // admin is system admin → sees all.
-        let all = list(&pool, admin, false, None).await.expect("admin list");
+        let all = list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            false,
+            None,
+        )
+        .await
+        .expect("admin list");
         assert_eq!(all.len(), 2);
 
         // A stranger with no role on either team sees none. Seed a stranger with system access
@@ -1056,9 +1182,14 @@ mod tests {
         drop(acquired);
         crate::test_support::approve(&pool, *stranger).await;
 
-        let none = list(&pool, stranger, false, None)
-            .await
-            .expect("stranger list");
+        let none = list(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            false,
+            None,
+        )
+        .await
+        .expect("stranger list");
         assert!(none.is_empty(), "stranger should see no subscriptions");
     }
 
@@ -1071,7 +1202,7 @@ mod tests {
 
         let err = create(
             &pool,
-            admin,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
             &CreateSubscriptionRequest {
                 subscriber_table: "kb_resources".into(), // not admissible
                 subscriber_id: team,

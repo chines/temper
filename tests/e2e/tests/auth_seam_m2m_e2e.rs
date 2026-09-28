@@ -127,14 +127,15 @@ async fn registered_machine_token_is_admitted_by_the_mcp_gate(pool: sqlx::PgPool
     // D11: a machine is born Denied; approve so the mcp system gate admits it.
     common::approve(&pool, profile_id).await;
 
-    let profile = svc
+    let authed = svc
         .ensure_profile_from_parts(&machine_parts("steward-client-1"))
         .await
         .expect("mcp gate must admit a registered machine");
     // Consume the gate's return: a registered machine resolves to ITS OWN
     // pre-created agent profile, not to some ambient identity.
     assert_eq!(
-        profile.id, profile_id,
+        authed.profile().id,
+        profile_id,
         "the gate returns the machine's own registered profile"
     );
 }
@@ -168,9 +169,13 @@ async fn temper_issued_machine_resolves_on_mcp(pool: sqlx::PgPool) {
     // D11: a machine is born Denied; approve so the mcp system gate admits it.
     common::approve(&pool, profile_id).await;
 
-    let profile = svc
+    let authed = svc
         .ensure_profile_from_parts(&machine_parts("tmpr_mcp"))
         .await
         .expect("a temper-issued machine resolves on the MCP surface too (D4)");
-    assert_eq!(profile.id, profile_id, "it resolves to its own profile");
+    assert_eq!(
+        authed.profile().id,
+        profile_id,
+        "it resolves to its own profile"
+    );
 }

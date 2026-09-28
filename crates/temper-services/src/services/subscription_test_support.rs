@@ -159,9 +159,12 @@ pub async fn create_subscription(
         connection_id,
         selector,
     };
-    let sub = crate::services::subscription_service::create(pool, caller, &req)
-        .await
-        .expect("create subscription");
+    let sub = {
+        let authed = crate::test_support::authenticated_profile_for(pool, *caller).await;
+        crate::services::subscription_service::create(pool, &authed, &req)
+            .await
+            .expect("create subscription")
+    };
     sub.id
 }
 

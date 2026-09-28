@@ -115,7 +115,7 @@ use uuid::Uuid;
 use temper_core::types::ids::{BlockId, CogmapId, ProfileId, ResourceId};
 use temper_substrate::readback;
 
-use super::ScopedAuthority;
+use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::machine_client_service;
 
@@ -294,9 +294,10 @@ impl ScopedAuthority for AuditAuthority {
     ///   production's write gate (`db_backend.rs:469-483`).
     async fn resolve(
         pool: &PgPool,
-        caller: ProfileId,
+        caller: Principal<'_>,
         subject: CitationSubject,
     ) -> ApiResult<Self> {
+        let caller = caller.profile_id();
         if !readback::is_resource_visible(pool, caller, subject.finding)
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?
@@ -402,7 +403,8 @@ impl ScopedAuthority for AuditorJobAuthority {
     /// The cognitive map whose auditor queue slot is being completed.
     type Subject = CogmapId;
 
-    async fn resolve(pool: &PgPool, caller: ProfileId, cogmap: CogmapId) -> ApiResult<Self> {
+    async fn resolve(pool: &PgPool, caller: Principal<'_>, cogmap: CogmapId) -> ApiResult<Self> {
+        let caller = caller.profile_id();
         // Existence AND readability in one gated lookup — `anchor_readable_by_profile` is the same
         // predicate `steward_candidate_cogmaps` gates on, so this admits no principal the dispatch
         // would not already have handed work to. An absent row is either "no such cogmap" or "not
@@ -624,9 +626,13 @@ mod tests {
         let subject = subject_of(&pool, &s).await;
         assert_eq!(subject.finding(), ResourceId::from(s.finding));
 
-        let proof = authorize::<AuditAuthority>(&pool, ProfileId::from(s.auditor), subject)
-            .await
-            .expect("a registered machine reader who did not cite may audit");
+        let proof = authorize::<AuditAuthority>(
+            &pool,
+            Principal::Bare(ProfileId::from(s.auditor)),
+            subject,
+        )
+        .await
+        .expect("a registered machine reader who did not cite may audit");
         assert_eq!(proof.authority(), AuditAuthority::Auditor);
         assert_eq!(
             proof.subject().finding(),
@@ -655,14 +661,14 @@ mod tests {
             "the author CAN read its own finding — so readability alone would have admitted it"
         );
         assert_eq!(
-            AuditAuthority::resolve(&pool, author, subject)
+            AuditAuthority::resolve(&pool, Principal::Bare(author), subject)
                 .await
                 .unwrap(),
             AuditAuthority::Author,
             "the citer must not be able to grade its own work"
         );
         assert!(
-            authorize::<AuditAuthority>(&pool, author, subject)
+            authorize::<AuditAuthority>(&pool, Principal::Bare(author), subject)
                 .await
                 .is_err(),
             "and the gate must actually refuse, not merely classify"
@@ -742,7 +748,7 @@ mod tests {
         );
 
         assert_eq!(
-            AuditAuthority::resolve(&pool, author, subject)
+            AuditAuthority::resolve(&pool, Principal::Bare(author), subject)
                 .await
                 .unwrap(),
             AuditAuthority::Author,
@@ -795,7 +801,7 @@ mod tests {
 
         let auditor = ProfileId::from(s.auditor);
         assert_eq!(
-            AuditAuthority::resolve(&pool, auditor, subject_of(&pool, &s).await)
+            AuditAuthority::resolve(&pool, Principal::Bare(auditor), subject_of(&pool, &s).await)
                 .await
                 .unwrap(),
             AuditAuthority::Auditor,
@@ -805,7 +811,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            AuditAuthority::resolve(&pool, auditor, own).await.unwrap(),
+            AuditAuthority::resolve(&pool, Principal::Bare(auditor), own)
+                .await
+                .unwrap(),
             AuditAuthority::Author,
             "and the citation it DID contribute is not"
         );
@@ -835,15 +843,17 @@ mod tests {
             "precondition: it can read the finding"
         );
         assert_eq!(
-            AuditAuthority::resolve(&pool, reader, subject)
+            AuditAuthority::resolve(&pool, Principal::Bare(reader), subject)
                 .await
                 .unwrap(),
             AuditAuthority::Auditor,
             "a reader who did not contribute the citation may assess it, registered machine or not"
         );
-        assert!(authorize::<AuditAuthority>(&pool, reader, subject)
-            .await
-            .is_ok());
+        assert!(
+            authorize::<AuditAuthority>(&pool, Principal::Bare(reader), subject)
+                .await
+                .is_ok()
+        );
     }
 
     /// A revoked machine is refused at the DOOR, not here. `resolve_machine_from_claims` is
@@ -863,7 +873,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            AuditAuthority::resolve(&pool, ProfileId::from(s.auditor), subject)
+            AuditAuthority::resolve(&pool, Principal::Bare(ProfileId::from(s.auditor)), subject)
                 .await
                 .unwrap(),
             AuditAuthority::Auditor,
@@ -879,16 +889,18 @@ mod tests {
         let subject = subject_of(&pool, &s).await;
 
         assert_eq!(
-            AuditAuthority::resolve(&pool, ProfileId::from(s.outsider), subject)
+            AuditAuthority::resolve(&pool, Principal::Bare(ProfileId::from(s.outsider)), subject)
                 .await
                 .unwrap(),
             AuditAuthority::Unreadable
         );
-        assert!(
-            authorize::<AuditAuthority>(&pool, ProfileId::from(s.outsider), subject)
-                .await
-                .is_err()
-        );
+        assert!(authorize::<AuditAuthority>(
+            &pool,
+            Principal::Bare(ProfileId::from(s.outsider)),
+            subject
+        )
+        .await
+        .is_err());
     }
 
     /// Every denial arm refuses in the same dialect, and every one is a denial at all.
@@ -912,9 +924,13 @@ mod tests {
         // ADMITTED principal, covered by `a_human_reader_who_is_not_the_author_may_audit`. The two
         // arms that remain are the two that deny.
         for (label, caller) in [("author", s.author), ("outsider", s.outsider)] {
-            let err = authorize::<AuditAuthority>(&pool, ProfileId::from(caller), subject)
-                .await
-                .expect_err("every non-admitting arm denies");
+            let err = authorize::<AuditAuthority>(
+                &pool,
+                Principal::Bare(ProfileId::from(caller)),
+                subject,
+            )
+            .await
+            .expect_err("every non-admitting arm denies");
             assert!(
                 matches!(err, ApiError::NotFound(_)),
                 "{label} must be refused with NotFound, never Forbidden — a distinguishable \
@@ -1000,7 +1016,7 @@ mod tests {
         let cogmap = a_readable_cogmap(&pool, s.auditor).await;
         let proof = authorize::<AuditorJobAuthority>(
             &pool,
-            ProfileId::from(s.auditor),
+            Principal::Bare(ProfileId::from(s.auditor)),
             CogmapId::from(cogmap),
         )
         .await
@@ -1018,7 +1034,7 @@ mod tests {
         assert_eq!(
             AuditorJobAuthority::resolve(
                 &pool,
-                ProfileId::from(s.human_reader),
+                Principal::Bare(ProfileId::from(s.human_reader)),
                 CogmapId::from(cogmap)
             )
             .await
@@ -1039,7 +1055,7 @@ mod tests {
             assert_eq!(
                 AuditorJobAuthority::resolve(
                     &pool,
-                    ProfileId::from(caller),
+                    Principal::Bare(ProfileId::from(caller)),
                     CogmapId::from(subject)
                 )
                 .await
@@ -1049,7 +1065,7 @@ mod tests {
             );
             let err = authorize::<AuditorJobAuthority>(
                 &pool,
-                ProfileId::from(caller),
+                Principal::Bare(ProfileId::from(caller)),
                 CogmapId::from(subject),
             )
             .await

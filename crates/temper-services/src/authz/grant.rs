@@ -9,10 +9,12 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::ids::CogmapId;
 use temper_substrate::payloads::{AnchorTable, RefTarget};
 
-use super::{Authorized, ConnectionAuthority, ConnectionControlAuthority, ScopedAuthority};
+use super::{
+    Authorized, ConnectionAuthority, ConnectionControlAuthority, Principal, ScopedAuthority,
+};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{
     cogmap_write_requires_admin, is_system_admin, profile_can_grant, GrantAuthority,
@@ -23,7 +25,8 @@ use crate::services::machine_authz::AuthorizedGrant;
 impl ScopedAuthority for GrantAuthority {
     type Subject = RefTarget;
 
-    async fn resolve(pool: &PgPool, caller: ProfileId, subject: RefTarget) -> ApiResult<Self> {
+    async fn resolve(pool: &PgPool, caller: Principal<'_>, subject: RefTarget) -> ApiResult<Self> {
+        let caller = caller.profile_id();
         if is_system_admin(pool, caller).await? {
             return Ok(GrantAuthority::SystemAdmin);
         }

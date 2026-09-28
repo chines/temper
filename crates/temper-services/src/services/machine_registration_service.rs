@@ -1172,7 +1172,7 @@ mod tests {
             // The subject axis: an operator asking "who registered this machine?" gets an answer.
             let entries = admin_ledger_service::list_by_subject(
                 &pool,
-                admin,
+                &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
                 RefTarget {
                     kind: AnchorTable::Profiles,
                     id: machine_profile,
@@ -1208,9 +1208,15 @@ mod tests {
 
         // The other half: the registrar's own history now carries both mints, and the machine's
         // does not carry an act it never performed.
-        let own = admin_ledger_service::list_by_actor(&pool, admin, admin, 100, 0)
-            .await
-            .expect("the registrar reads their own acts");
+        let own = admin_ledger_service::list_by_actor(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            admin,
+            100,
+            0,
+        )
+        .await
+        .expect("the registrar reads their own acts");
         let provisions = own
             .iter()
             .filter(|e| {

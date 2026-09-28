@@ -345,7 +345,8 @@ async fn list_by_subject_finds_the_admin_event(pool: PgPool) {
 
     let got = admin_ledger_service::list_by_subject(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         RefTarget {
             kind: AnchorTable::Contexts,
             id: f.context_id,
@@ -432,7 +433,8 @@ async fn a_non_admin_cannot_read_the_ledger(pool: PgPool) {
 
     let err = admin_ledger_service::list_by_subject(
         &pool,
-        f.outsider_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.outsider_profile.uuid())
+            .await,
         RefTarget {
             kind: AnchorTable::Contexts,
             id: f.context_id,
@@ -492,7 +494,8 @@ async fn the_grant_writer_can_read_their_own_grant_record(pool: PgPool) {
 
     let got = admin_ledger_service::list_by_subject(
         &pool,
-        f.owner_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.owner_profile.uuid())
+            .await,
         RefTarget {
             kind: AnchorTable::Resources,
             id: f.owned_resource_id,
@@ -533,7 +536,8 @@ async fn the_actor_keeps_their_own_history_without_the_capability(pool: PgPool) 
     // or the test is not exercising the distinction.
     let subject_err = admin_ledger_service::list_by_subject(
         &pool,
-        f.owner_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.owner_profile.uuid())
+            .await,
         RefTarget {
             kind: AnchorTable::Contexts,
             id: f.context_id,
@@ -546,9 +550,16 @@ async fn the_actor_keeps_their_own_history_without_the_capability(pool: PgPool) 
     assert!(matches!(subject_err, ApiError::NotFound(_)));
 
     // The actor axis returns it anyway. That is the decision.
-    let mine = admin_ledger_service::list_by_actor(&pool, f.owner_profile, f.owner_profile, 50, 0)
-        .await
-        .expect("an actor always reads their own acts");
+    let mine = admin_ledger_service::list_by_actor(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.owner_profile.uuid())
+            .await,
+        f.owner_profile,
+        50,
+        0,
+    )
+    .await
+    .expect("an actor always reads their own acts");
 
     assert_eq!(
         mine.len(),
@@ -572,16 +583,29 @@ async fn reading_another_actors_history_is_admin_only(pool: PgPool) {
     )
     .await;
 
-    let err =
-        admin_ledger_service::list_by_actor(&pool, f.outsider_profile, f.admin_profile, 50, 0)
-            .await
-            .expect_err("a non-admin must not audit another profile's acts");
+    let err = admin_ledger_service::list_by_actor(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.outsider_profile.uuid())
+            .await,
+        f.admin_profile,
+        50,
+        0,
+    )
+    .await
+    .expect_err("a non-admin must not audit another profile's acts");
     assert!(matches!(err, ApiError::NotFound(_)));
 
     // ...and the admin may.
-    let audit = admin_ledger_service::list_by_actor(&pool, f.admin_profile, f.admin_profile, 50, 0)
-        .await
-        .expect("an admin audits");
+    let audit = admin_ledger_service::list_by_actor(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
+        f.admin_profile,
+        50,
+        0,
+    )
+    .await
+    .expect("an admin audits");
     assert_eq!(audit.len(), 1);
 }
 
@@ -613,10 +637,16 @@ async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
     .await;
 
     // BEFORE: owner_profile holds an `approved` standing ⇒ has_system_access is true ⇒ it reads.
-    let before =
-        admin_ledger_service::list_by_actor(&pool, f.owner_profile, f.owner_profile, 50, 0)
-            .await
-            .expect("with system access, the actor reads their own history");
+    let before = admin_ledger_service::list_by_actor(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.owner_profile.uuid())
+            .await,
+        f.owner_profile,
+        50,
+        0,
+    )
+    .await
+    .expect("with system access, the actor reads their own history");
     assert_eq!(before.len(), 1, "the self-gate returns the actor's own act");
 
     // Take the front door away. Demote owner_profile's standing to `revoked` — the single axis
@@ -635,9 +665,16 @@ async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
     );
 
     // AFTER: same call, same authorship, same everything else.
-    let err = admin_ledger_service::list_by_actor(&pool, f.owner_profile, f.owner_profile, 50, 0)
-        .await
-        .expect_err("without system access there is no reader, so there is no history");
+    let err = admin_ledger_service::list_by_actor(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.owner_profile.uuid())
+            .await,
+        f.owner_profile,
+        50,
+        0,
+    )
+    .await
+    .expect_err("without system access there is no reader, so there is no history");
     assert!(
         matches!(err, ApiError::NotFound(_)),
         "reads deny with 404, not 403 (the deny-split invariant); got {err:?}"
@@ -645,10 +682,16 @@ async fn losing_system_access_takes_your_own_history_with_it(pool: PgPool) {
 
     // The admin keeps its own `approved` standing, so the demotion did not touch them — proving it
     // revoked one profile's access rather than simply breaking the surface for everyone.
-    let admin_still_reads =
-        admin_ledger_service::list_by_actor(&pool, f.admin_profile, f.owner_profile, 50, 0)
-            .await
-            .expect("the admin keeps system access via its own approved standing");
+    let admin_still_reads = admin_ledger_service::list_by_actor(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
+        f.owner_profile,
+        50,
+        0,
+    )
+    .await
+    .expect("the admin keeps system access via its own approved standing");
     assert_eq!(admin_still_reads.len(), 1);
 }
 
@@ -1261,7 +1304,8 @@ async fn granting_writes_an_event_and_the_row(pool: PgPool) {
 
     let outcome = access_service::grant_capability(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         &grant_req(f.context_id, f.team_id),
     )
     .await
@@ -1282,7 +1326,8 @@ async fn granting_writes_an_event_and_the_row(pool: PgPool) {
     // ...and the same txn put the act on the ledger, subject-addressable, banned-key-free.
     let entries = admin_ledger_service::list_by_subject(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         RefTarget {
             kind: AnchorTable::Contexts,
             id: f.context_id,
@@ -1305,12 +1350,18 @@ async fn granting_writes_an_event_and_the_row(pool: PgPool) {
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn revoking_writes_an_event_even_though_the_row_is_deleted(pool: PgPool) {
     let f = admin_fixture(&pool).await;
-    access_service::grant_capability(&pool, f.admin_profile, &grant_req(f.context_id, f.team_id))
-        .await
-        .unwrap();
+    access_service::grant_capability(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
+        &grant_req(f.context_id, f.team_id),
+    )
+    .await
+    .unwrap();
     let out = access_service::revoke_capability(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         &revoke_req(f.context_id, f.team_id),
     )
     .await
@@ -1331,7 +1382,8 @@ async fn revoking_writes_an_event_even_though_the_row_is_deleted(pool: PgPool) {
     // projection. That asymmetry is the whole point of the sink.
     let entries = admin_ledger_service::list_by_subject(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         RefTarget {
             kind: AnchorTable::Contexts,
             id: f.context_id,
@@ -1380,7 +1432,8 @@ async fn the_connection_grant_reach_bypass_is_also_on_the_ledger(pool: PgPool) {
 
     let entries = admin_ledger_service::list_by_subject(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         RefTarget {
             kind: AnchorTable::Connections,
             id: connection_id,
@@ -1413,7 +1466,8 @@ async fn a_capability_change_still_writes_an_event_carrying_previous(pool: PgPoo
     // Fresh grant: read-only. inserted = true.
     let first = access_service::grant_capability(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         &GrantCapabilityRequest {
             subject_table: "kb_contexts".into(),
             subject_id: f.context_id,
@@ -1437,7 +1491,8 @@ async fn a_capability_change_still_writes_an_event_carrying_previous(pool: PgPoo
     // MUST still reach the ledger.
     let second = access_service::grant_capability(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         &GrantCapabilityRequest {
             subject_table: "kb_contexts".into(),
             subject_id: f.context_id,
@@ -1459,7 +1514,8 @@ async fn a_capability_change_still_writes_an_event_carrying_previous(pool: PgPoo
 
     let entries = admin_ledger_service::list_by_subject(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         RefTarget {
             kind: AnchorTable::Contexts,
             id: f.context_id,
@@ -1532,9 +1588,16 @@ async fn a_kb_events_subject_parses_and_then_denies(pool: PgPool) {
     // Half two: and it is refused. `owner_profile` is deliberately the STRONGEST non-admin in the
     // fixture — it satisfies `can(…,'grant',…)` on its own resource — so a 404 here is the
     // `kb_events` kind being unreachable, not this caller being powerless in general.
-    let err = admin_ledger_service::list_by_subject(&pool, f.owner_profile, parsed, 50, 0)
-        .await
-        .expect_err("a non-admin must be denied a ledger keyed on an event subject");
+    let err = admin_ledger_service::list_by_subject(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.owner_profile.uuid())
+            .await,
+        parsed,
+        50,
+        0,
+    )
+    .await
+    .expect_err("a non-admin must be denied a ledger keyed on an event subject");
 
     assert!(
         matches!(err, ApiError::NotFound(_)),
@@ -1626,7 +1689,8 @@ async fn an_admin_reads_who_revoked_whom_and_who_demoted_them(pool: PgPool) {
 
     let entries = admin_ledger_service::list_by_subject(
         &pool,
-        f.admin_profile,
+        &temper_services::test_support::authenticated_profile_for(&pool, f.admin_profile.uuid())
+            .await,
         RefTarget {
             kind: AnchorTable::Profiles,
             id: subject.uuid(),
@@ -1685,9 +1749,15 @@ async fn a_subject_reads_their_own_request_but_not_the_admin_approval_of_it(pool
     )
     .await;
 
-    let own = admin_ledger_service::list_by_actor(&pool, subject, subject, 50, 0)
-        .await
-        .expect("a subject may read the record of acts they performed");
+    let own = admin_ledger_service::list_by_actor(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, subject.uuid()).await,
+        subject,
+        50,
+        0,
+    )
+    .await
+    .expect("a subject may read the record of acts they performed");
 
     let acts: Vec<&str> = own
         .iter()
@@ -1709,7 +1779,7 @@ async fn a_subject_reads_their_own_request_but_not_the_admin_approval_of_it(pool
     // cannot reach the admin's act by asking about themselves instead.
     let about_self = admin_ledger_service::list_by_subject(
         &pool,
-        subject,
+        &temper_services::test_support::authenticated_profile_for(&pool, subject.uuid()).await,
         RefTarget {
             kind: AnchorTable::Profiles,
             id: subject.uuid(),
@@ -1769,9 +1839,15 @@ async fn revocation_takes_the_subjects_own_standing_acts_with_it(pool: PgPool) {
 
     // Positive control: while approved, the self-read genuinely works — so the refusal below is
     // caused by the standing change and not by the fixture never having had a readable act.
-    let before = admin_ledger_service::list_by_actor(&pool, subject, subject, 50, 0)
-        .await
-        .expect("an approved subject reads their own acts");
+    let before = admin_ledger_service::list_by_actor(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, subject.uuid()).await,
+        subject,
+        50,
+        0,
+    )
+    .await
+    .expect("an approved subject reads their own acts");
     assert!(
         before
             .iter()
@@ -1789,7 +1865,14 @@ async fn revocation_takes_the_subjects_own_standing_acts_with_it(pool: PgPool) {
     )
     .await;
 
-    let after = admin_ledger_service::list_by_actor(&pool, subject, subject, 50, 0).await;
+    let after = admin_ledger_service::list_by_actor(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, subject.uuid()).await,
+        subject,
+        50,
+        0,
+    )
+    .await;
     assert!(
         matches!(after, Err(ApiError::NotFound(_))),
         "a revoked principal loses their own history along with their access — §11.1b's rule, \

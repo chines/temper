@@ -106,7 +106,7 @@ pub async fn detail(
     auth: AuthUser,
     Path(team_id): Path<Uuid>,
 ) -> ApiResult<Json<TeamDetail>> {
-    team_service::team_detail(&state.pool, ProfileId::from(auth.0.profile().id), team_id)
+    team_service::team_detail(&state.pool, &auth.0, team_id)
         .await
         .map(Json)
 }

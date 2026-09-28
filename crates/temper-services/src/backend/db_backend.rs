@@ -10,6 +10,7 @@
 
 use crate::authz::{
     authorize, citation_subject, require_machine_principal, AuditAuthority, AuditorJobAuthority,
+    Principal,
 };
 use crate::backend::region_clocks;
 use async_trait::async_trait;
@@ -2925,7 +2926,11 @@ impl Backend for DbBackend {
         //    `From<ApiError>` carries through as `TemperError::NotFound` (`error.rs:158-168`) — no
         //    existence oracle beside the leak-safe evidence read.
         let subject = citation_subject(&self.pool, cmd.block, source_id).await?;
-        let proof = authorize::<AuditAuthority>(&self.pool, self.profile_id, subject).await?;
+        // Class E survivor — the CLI/backend seam has no Level-1 proof to pass; the gate receives
+        // the bare id exactly as before (`Principal::Bare`), unchanged in behavior.
+        let proof =
+            authorize::<AuditAuthority>(&self.pool, Principal::Bare(self.profile_id), subject)
+                .await?;
         // 2. Correlation integrity — additive to the authorization above, before any mutation.
         self.check_act_invocation(cmd.act.invocation).await?;
 
@@ -3825,8 +3830,13 @@ impl Backend for DbBackend {
         &self,
         cmd: CompleteAuditorJob,
     ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError> {
-        let proof =
-            authorize::<AuditorJobAuthority>(&self.pool, self.profile_id, cmd.cogmap).await?;
+        // Class E survivor — the bare-id seam, unchanged in behavior (`Principal::Bare`).
+        let proof = authorize::<AuditorJobAuthority>(
+            &self.pool,
+            Principal::Bare(self.profile_id),
+            cmd.cogmap,
+        )
+        .await?;
 
         let completed = crate::services::workflow_job_service::complete_claimed(
             &self.pool,

@@ -61,17 +61,16 @@ pub async fn list(
     auth: AuthUser,
     Query(q): Query<AdminLedgerQuery>,
 ) -> ApiResult<Json<AdminLedgerResponse>> {
-    let caller = ProfileId::from(auth.0.profile().id);
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = q.offset.unwrap_or(0).max(0);
 
     let entries = match resolve_axis(&q)? {
         Axis::Subject(subject) => {
-            admin_ledger_service::list_by_subject(&state.pool, caller, subject, limit, offset)
+            admin_ledger_service::list_by_subject(&state.pool, &auth.0, subject, limit, offset)
                 .await?
         }
         Axis::Actor(actor) => {
-            admin_ledger_service::list_by_actor(&state.pool, caller, actor, limit, offset).await?
+            admin_ledger_service::list_by_actor(&state.pool, &auth.0, actor, limit, offset).await?
         }
     };
 

@@ -19,9 +19,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::ProfileId;
-
-use super::ScopedAuthority;
+use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::{access_service, team_service};
 
@@ -49,7 +47,12 @@ impl ScopedAuthority for SubscriptionAuthority {
     /// question separately.
     type Subject = Uuid;
 
-    async fn resolve(pool: &PgPool, caller: ProfileId, authoring_team: Uuid) -> ApiResult<Self> {
+    async fn resolve(
+        pool: &PgPool,
+        caller: Principal<'_>,
+        authoring_team: Uuid,
+    ) -> ApiResult<Self> {
+        let caller = caller.profile_id();
         // Role first, matching `TeamReadAuthority`'s ordering and for the same reason: the common
         // caller here is a team manager, and probing `is_system_admin` first would add a query to
         // every one of them.

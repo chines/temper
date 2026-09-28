@@ -21,7 +21,8 @@
 
 use sqlx::PgPool;
 
-use crate::authz::{ContextAdminAuthority, TwoSidedAuthority, TwoSidedScope};
+use crate::auth::AuthenticatedProfile;
+use crate::authz::{ContextAdminAuthority, Principal, TwoSidedAuthority, TwoSidedScope};
 use crate::error::{ApiError, ApiResult};
 use crate::services::team_service;
 use temper_core::context_ref::{ContextOwnerRef, ContextRef};
@@ -756,8 +757,9 @@ fn manage_capable_roles() -> Vec<String> {
 /// The comment on `list_visible` gives the fuller argument for the subquery's shape.
 pub async fn list_retired_administered(
     pool: &PgPool,
-    profile_id: ProfileId,
+    authed: &AuthenticatedProfile,
 ) -> ApiResult<Vec<ContextRowWithCounts>> {
+    let profile_id = ProfileId::from(authed.profile().id);
     let roles = manage_capable_roles();
     let is_admin = crate::services::access_service::is_system_admin(pool, profile_id).await?;
     let rows = sqlx::query_as!(
@@ -823,9 +825,10 @@ pub async fn list_retired_administered(
 /// reason that constant's doc gives.
 pub async fn get_retired_administered(
     pool: &PgPool,
-    profile_id: ProfileId,
+    authed: &AuthenticatedProfile,
     context_id: ContextId,
 ) -> ApiResult<ContextRow> {
+    let profile_id = ProfileId::from(authed.profile().id);
     let roles = manage_capable_roles();
     let is_admin = crate::services::access_service::is_system_admin(pool, profile_id).await?;
     sqlx::query_as!(
@@ -878,13 +881,13 @@ pub async fn get_retired_administered(
 /// `shared: false` when it already existed.
 pub async fn share(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     context_id: uuid::Uuid,
     req: &ShareContextRequest,
 ) -> ApiResult<ShareContextOutcome> {
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        caller,
+        Principal::Proof(authed),
         TwoSidedScope::context(context_id, req.team_id),
     )
     .await?;
@@ -914,13 +917,13 @@ pub async fn share(
 /// (the same `crate::authz::TwoSidedAuthority` gate).
 pub async fn unshare(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     context_id: uuid::Uuid,
     team_id: uuid::Uuid,
 ) -> ApiResult<UnshareContextOutcome> {
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        caller,
+        Principal::Proof(authed),
         TwoSidedScope::context(context_id, team_id),
     )
     .await?;
@@ -956,13 +959,14 @@ pub async fn unshare(
 /// `UNIQUE(owner_table, owner_id, slug)` constraint is the backstop).
 pub async fn reassign(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     context_id: uuid::Uuid,
     to_team_id: uuid::Uuid,
 ) -> ApiResult<ReassignContextOutcome> {
+    let caller = ProfileId::from(authed.profile().id);
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        caller,
+        Principal::Proof(authed),
         TwoSidedScope::context(context_id, to_team_id),
     )
     .await?;
@@ -1122,11 +1126,13 @@ async fn inherited_reach(
 /// put.
 pub async fn rename(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     context_id: uuid::Uuid,
     name: &str,
 ) -> ApiResult<RenameContextOutcome> {
-    crate::authz::authorize::<ContextAdminAuthority>(pool, caller, context_id).await?;
+    let caller = ProfileId::from(authed.profile().id);
+    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::Proof(authed), context_id)
+        .await?;
 
     // The current identity pair plus the already-sigil'd owner ref, in one read. A rename leaves
     // `(owner_table, owner_id)` untouched, so the ref composed from this row is still correct after
@@ -1257,10 +1263,12 @@ pub async fn rename(
 /// point is that a context homing live resources can still be retired.
 pub async fn retire(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     context_id: uuid::Uuid,
 ) -> ApiResult<RetireContextOutcome> {
-    crate::authz::authorize::<ContextAdminAuthority>(pool, caller, context_id).await?;
+    let caller = ProfileId::from(authed.profile().id);
+    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::Proof(authed), context_id)
+        .await?;
 
     // The current identity pair plus the already-sigil'd owner ref, in one read — copied verbatim
     // from `rename` (`:867-880`). `fetch_optional`, not `fetch_one`: the gate's `SystemAdmin` arm
@@ -1331,10 +1339,12 @@ pub async fn retire(
 /// primary key, not through `context_visible_to`.
 pub async fn restore(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     context_id: uuid::Uuid,
 ) -> ApiResult<RestoreContextOutcome> {
-    crate::authz::authorize::<ContextAdminAuthority>(pool, caller, context_id).await?;
+    let caller = ProfileId::from(authed.profile().id);
+    crate::authz::authorize::<ContextAdminAuthority>(pool, Principal::Proof(authed), context_id)
+        .await?;
 
     let cur = sqlx::query!(
         r#"SELECT owner_table AS "owner_table!", owner_id AS "owner_id!", slug, name,
@@ -1662,19 +1672,53 @@ mod tests {
         // Non-admin caller → Forbidden.
         let (admin, non_admin, team_id, context_id) = seed_admin_team_context(&pool).await;
         let req = ShareContextRequest { team_id };
-        let denied = share(&pool, non_admin, *context_id, &req).await;
+        let denied = share(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, non_admin.uuid()).await,
+            *context_id,
+            &req,
+        )
+        .await;
         assert!(matches!(denied, Err(ApiError::Forbidden)));
 
         // Admin → shares; first call inserts, second is a no-op.
-        let first = share(&pool, admin, *context_id, &req).await.unwrap();
+        let first = share(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            *context_id,
+            &req,
+        )
+        .await
+        .unwrap();
         assert!(first.shared);
-        let second = share(&pool, admin, *context_id, &req).await.unwrap();
+        let second = share(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            *context_id,
+            &req,
+        )
+        .await
+        .unwrap();
         assert!(!second.shared);
 
         // Unshare removes it; second unshare is a no-op.
-        let u1 = unshare(&pool, admin, *context_id, team_id).await.unwrap();
+        let u1 = unshare(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            *context_id,
+            team_id,
+        )
+        .await
+        .unwrap();
         assert!(u1.unshared);
-        let u2 = unshare(&pool, admin, *context_id, team_id).await.unwrap();
+        let u2 = unshare(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            *context_id,
+            team_id,
+        )
+        .await
+        .unwrap();
         assert!(!u2.unshared);
     }
 
@@ -1809,7 +1853,14 @@ mod tests {
         assert!(can_modify(&pool, alice, r).await);
         assert!(!can_modify(&pool, bob, r).await);
 
-        let outcome = reassign(&pool, alice, ctx, acme).await.expect("transfer");
+        let outcome = reassign(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            acme,
+        )
+        .await
+        .expect("transfer");
         assert!(outcome.reassigned);
         assert_eq!(outcome.owner_ref, "+acme");
         assert_eq!(
@@ -1840,9 +1891,23 @@ mod tests {
         add_member(&pool, acme, alice, "owner").await;
         let ctx = mk_personal_context(&pool, "proj", alice).await;
 
-        let first = reassign(&pool, alice, ctx, acme).await.unwrap();
+        let first = reassign(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            acme,
+        )
+        .await
+        .unwrap();
         assert!(first.reassigned);
-        let second = reassign(&pool, alice, ctx, acme).await.unwrap();
+        let second = reassign(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            acme,
+        )
+        .await
+        .unwrap();
         assert!(!second.reassigned, "already team-owned → no-op");
     }
 
@@ -1855,7 +1920,14 @@ mod tests {
         add_member(&pool, acme, mallory, "owner").await;
         let ctx = mk_personal_context(&pool, "proj", alice).await;
 
-        let err = reassign(&pool, mallory, ctx, acme).await.unwrap_err();
+        let err = reassign(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, mallory.uuid()).await,
+            ctx,
+            acme,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -1867,7 +1939,14 @@ mod tests {
         add_member(&pool, acme, alice, "member").await;
         let ctx = mk_personal_context(&pool, "proj", alice).await;
 
-        let err = reassign(&pool, alice, ctx, acme).await.unwrap_err();
+        let err = reassign(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            acme,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -1881,9 +1960,14 @@ mod tests {
         let alice_ctx = mk_personal_context(&pool, "proj", alice).await;
         add_member(&pool, gating_team, alice, "maintainer").await;
 
-        let err = reassign(&pool, alice, alice_ctx, gating_team)
-            .await
-            .unwrap_err();
+        let err = reassign(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            alice_ctx,
+            gating_team,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
     }
 
@@ -1896,7 +1980,14 @@ mod tests {
         mk_team_context(&pool, "proj", acme).await;
         let ctx = mk_personal_context(&pool, "proj", alice).await;
 
-        let err = reassign(&pool, alice, ctx, acme).await.unwrap_err();
+        let err = reassign(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            acme,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, ApiError::Conflict(_)));
         assert_eq!(
             owner_of_context(&pool, ctx).await,
@@ -1913,9 +2004,14 @@ mod tests {
         let acme = mk_team(&pool, "acme").await;
         add_member(&pool, acme, admin, "owner").await;
 
-        let outcome = reassign(&pool, admin, *context_id, acme)
-            .await
-            .expect("admin transfer");
+        let outcome = reassign(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            *context_id,
+            acme,
+        )
+        .await
+        .expect("admin transfer");
         assert!(outcome.reassigned);
         assert_eq!(
             owner_of_context(&pool, *context_id).await,
@@ -1929,7 +2025,14 @@ mod tests {
         let acme = mk_team(&pool, "acme").await;
         add_member(&pool, acme, alice, "owner").await;
         let ctx = mk_personal_context(&pool, "proj", alice).await;
-        reassign(&pool, alice, ctx, acme).await.unwrap();
+        reassign(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            acme,
+        )
+        .await
+        .unwrap();
 
         let n = sqlx::query_scalar!(
             "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
@@ -2106,7 +2209,14 @@ mod tests {
         let ctx = mk_named_personal_context(&pool, "notes", "Notes", alice).await;
 
         for bad in ["   ", "!!!"] {
-            match rename(&pool, alice, ctx, bad).await {
+            match rename(
+                &pool,
+                &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+                ctx,
+                bad,
+            )
+            .await
+            {
                 Err(ApiError::BadRequest(_)) => {}
                 other => panic!("{bad:?} must be refused with 400, got {other:?}"),
             }
@@ -2127,7 +2237,14 @@ mod tests {
         let alice = mk_profile_ent(&pool, "alice").await;
         let ctx = mk_named_personal_context(&pool, "temper-kb", "Temper KB", alice).await;
 
-        let outcome = rename(&pool, alice, ctx, "  Temper   KB  ").await.unwrap();
+        let outcome = rename(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            "  Temper   KB  ",
+        )
+        .await
+        .unwrap();
         assert!(!outcome.renamed);
         assert_eq!(outcome.name, "Temper KB");
         assert_eq!(outcome.slug, "temper-kb");
@@ -2143,7 +2260,15 @@ mod tests {
         mk_named_personal_context(&pool, "notes", "Notes", alice).await;
         let scratch = mk_named_personal_context(&pool, "scratch", "Scratch", alice).await;
 
-        match rename(&pool, alice, scratch, "Notes").await.unwrap_err() {
+        match rename(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            scratch,
+            "Notes",
+        )
+        .await
+        .unwrap_err()
+        {
             ApiError::Conflict(msg) => assert!(
                 msg.contains("notes"),
                 "the refusal names the colliding slug: {msg}"
@@ -2165,7 +2290,14 @@ mod tests {
         let alice = mk_profile_ent(&pool, "alice").await;
         let ctx = mk_named_personal_context(&pool, "proj", "Proj", alice).await;
 
-        let outcome = rename(&pool, alice, ctx, "  Temper   KB ").await.unwrap();
+        let outcome = rename(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            "  Temper   KB ",
+        )
+        .await
+        .unwrap();
         assert!(outcome.renamed);
         assert_eq!(outcome.name, "Temper KB", "stored canonical, not verbatim");
         assert_eq!(outcome.slug, "temper-kb");
@@ -2190,7 +2322,14 @@ mod tests {
         // "Temper KB" and "Temper-KB" are different names that sluggify identically.
         let ctx = mk_named_personal_context(&pool, "temper-kb", "Temper KB", alice).await;
 
-        let outcome = rename(&pool, alice, ctx, "Temper-KB").await.unwrap();
+        let outcome = rename(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            "Temper-KB",
+        )
+        .await
+        .unwrap();
         assert!(outcome.renamed, "a display-name change is not a no-op");
         assert_eq!(outcome.slug, "temper-kb", "the address stayed put");
         assert_eq!(
@@ -2212,7 +2351,14 @@ mod tests {
         let alice = mk_profile_ent(&pool, "alice").await;
         let ctx = mk_named_personal_context(&pool, "temper-kb", "Temper  KB", alice).await;
 
-        let outcome = rename(&pool, alice, ctx, "Temper KB").await.unwrap();
+        let outcome = rename(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            "Temper KB",
+        )
+        .await
+        .unwrap();
         assert!(outcome.renamed, "the repair is a real state change");
         assert_eq!(
             name_slug_of(&pool, ctx).await,
@@ -2249,14 +2395,24 @@ mod tests {
         let ctx = mk_team_context(&pool, "eng-notes", acme).await;
 
         assert!(matches!(
-            rename(&pool, member, ctx, "Engineering Notes")
-                .await
-                .unwrap_err(),
+            rename(
+                &pool,
+                &crate::test_support::authenticated_profile_for(&pool, member.uuid()).await,
+                ctx,
+                "Engineering Notes"
+            )
+            .await
+            .unwrap_err(),
             ApiError::Forbidden
         ));
-        match rename(&pool, stranger, ctx, "Engineering Notes")
-            .await
-            .unwrap_err()
+        match rename(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await,
+            ctx,
+            "Engineering Notes",
+        )
+        .await
+        .unwrap_err()
         {
             ApiError::NotFound(msg) => assert_eq!(msg, CONTEXT_REFUSAL),
             other => panic!("expected NotFound, got {other:?}"),
@@ -2373,7 +2529,14 @@ mod tests {
         assert!(is_readable(&pool, alice, r).await);
         assert!(!is_readable(&pool, stranger, r).await);
 
-        let outcome = rename(&pool, alice, ctx, "Temper KB").await.unwrap();
+        let outcome = rename(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+            "Temper KB",
+        )
+        .await
+        .unwrap();
         assert!(outcome.renamed);
 
         let after = sqlx::query!(
@@ -2404,9 +2567,13 @@ mod tests {
         let ctx = mk_personal_context(&pool, "proj", alice).await;
         let r = mk_homed_resource(&pool, ctx, alice).await;
 
-        retire(&pool, alice, ctx)
-            .await
-            .expect("retire succeeds WITH a resource homed here");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("retire succeeds WITH a resource homed here");
 
         let row = sqlx::query!(
             r#"SELECT is_active AS "is_active!" FROM kb_contexts WHERE id = $1"#,
@@ -2447,7 +2614,13 @@ mod tests {
         let alice = mk_profile_ent(&pool, "alice").await;
         let ctx = mk_personal_context(&pool, "scratch", alice).await;
 
-        let out = retire(&pool, alice, ctx).await.expect("retire");
+        let out = retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("retire");
         assert!(
             out.slug.starts_with("scratch-retired"),
             "got slug {:?}",
@@ -2467,11 +2640,20 @@ mod tests {
         let alice = mk_profile_ent(&pool, "alice").await;
         let ctx = mk_personal_context(&pool, "temp", alice).await;
 
-        retire(&pool, alice, ctx)
-            .await
-            .expect("first retire succeeds");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("first retire succeeds");
 
-        let second = retire(&pool, alice, ctx).await;
+        let second = retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await;
         assert!(
             matches!(second, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
             "expected NotFound, got {second:?}"
@@ -2486,9 +2668,21 @@ mod tests {
         let alice = mk_profile_ent(&pool, "alice").await;
         let ctx = mk_personal_context(&pool, "scratch", alice).await;
 
-        retire(&pool, alice, ctx).await.expect("retire");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("retire");
 
-        let out = restore(&pool, alice, ctx).await.expect("restore");
+        let out = restore(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("restore");
         assert_eq!(out.slug, "scratch");
         assert!(!out.slug_changed, "the address was free, nothing to report");
         assert_eq!(out.name, "scratch");
@@ -2509,14 +2703,26 @@ mod tests {
         let alice = mk_profile_ent(&pool, "alice").await;
         let ctx = mk_personal_context(&pool, "scratch", alice).await;
 
-        retire(&pool, alice, ctx).await.expect("retire");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("retire");
 
         // A new context claims the freed slug before the first one is restored.
         create(&pool, alice, "kb_profiles", *alice, "scratch")
             .await
             .expect("the freed slug is immediately reusable");
 
-        let out = restore(&pool, alice, ctx).await.expect("restore");
+        let out = restore(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("restore");
         assert_eq!(out.slug, "scratch-2", "got slug {:?}", out.slug);
         assert!(
             out.slug_changed,
@@ -2548,13 +2754,29 @@ mod tests {
             second.slug
         );
 
-        retire(&pool, alice, *second.id)
-            .await
-            .expect("retire notes-2");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            *second.id,
+        )
+        .await
+        .expect("retire notes-2");
         // Retiring the first frees `notes`, so the restore below can reclaim it.
-        retire(&pool, alice, *first.id).await.expect("retire notes");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            *first.id,
+        )
+        .await
+        .expect("retire notes");
 
-        let out = restore(&pool, alice, *second.id).await.expect("restore");
+        let out = restore(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            *second.id,
+        )
+        .await
+        .expect("restore");
         assert_eq!(out.slug, "notes", "got slug {:?}", out.slug);
         assert_eq!(out.context_ref, "@alice/notes");
         assert!(
@@ -2580,11 +2802,21 @@ mod tests {
         assert_eq!(first.slug, "notes");
         assert_eq!(second.slug, "notes-2");
 
-        retire(&pool, alice, *second.id)
-            .await
-            .expect("retire notes-2");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            *second.id,
+        )
+        .await
+        .expect("retire notes-2");
 
-        let out = restore(&pool, alice, *second.id).await.expect("restore");
+        let out = restore(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            *second.id,
+        )
+        .await
+        .expect("restore");
         assert_eq!(out.slug, "notes-2", "got slug {:?}", out.slug);
         assert_eq!(out.context_ref, "@alice/notes-2");
         assert!(
@@ -2599,7 +2831,12 @@ mod tests {
         let alice = mk_profile_ent(&pool, "alice").await;
         let ctx = mk_personal_context(&pool, "scratch", alice).await;
 
-        let out = restore(&pool, alice, ctx).await;
+        let out = restore(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await;
         assert!(
             matches!(out, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
             "expected NotFound, got {out:?}"
@@ -2632,18 +2869,34 @@ mod tests {
             "member can author before retirement"
         );
 
-        retire(&pool, alice, ctx).await.expect("retire");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("retire");
 
         // After retirement: the member — who could read and author it a moment ago — sees
         // nothing in the retired listing. This is the property under test.
-        let bob_listing = list_retired_administered(&pool, bob).await.unwrap();
+        let bob_listing = list_retired_administered(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, bob.uuid()).await,
+        )
+        .await
+        .unwrap();
         assert!(
             bob_listing.is_empty(),
             "a member who could read/author before retirement must see nothing after: {bob_listing:?}"
         );
 
         // The owner, who manages the owning team, sees exactly the one retired context.
-        let alice_listing = list_retired_administered(&pool, alice).await.unwrap();
+        let alice_listing = list_retired_administered(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+        )
+        .await
+        .unwrap();
         assert_eq!(alice_listing.len(), 1, "got {alice_listing:?}");
         assert_eq!(alice_listing[0].id, ContextId::from(ctx));
         assert!(alice_listing[0].retired, "the listed row must say retired");
@@ -2660,15 +2913,30 @@ mod tests {
         add_member(&pool, acme, bob, "member").await;
         let ctx = mk_team_context(&pool, "proj", acme).await;
 
-        retire(&pool, alice, ctx).await.expect("retire");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("retire");
 
-        let shown = get_retired_administered(&pool, alice, ContextId::from(ctx))
-            .await
-            .expect("the administrator can show the retired context");
+        let shown = get_retired_administered(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            ContextId::from(ctx),
+        )
+        .await
+        .expect("the administrator can show the retired context");
         assert_eq!(shown.id, ContextId::from(ctx));
         assert!(shown.retired, "the shown row must say retired");
 
-        let denied = get_retired_administered(&pool, bob, ContextId::from(ctx)).await;
+        let denied = get_retired_administered(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, bob.uuid()).await,
+            ContextId::from(ctx),
+        )
+        .await;
         assert!(
             matches!(denied, Err(ApiError::NotFound(ref msg)) if msg == CONTEXT_REFUSAL),
             "a non-administering member must be refused, got {denied:?}"
@@ -2698,9 +2966,20 @@ mod tests {
         let ctx = mk_personal_context(&pool, "priv", owner).await;
         mk_homed_resource(&pool, ctx, owner).await;
 
-        retire(&pool, owner, ctx).await.expect("retire");
+        retire(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, owner.uuid()).await,
+            ctx,
+        )
+        .await
+        .expect("retire");
 
-        let root_listing = list_retired_administered(&pool, root).await.unwrap();
+        let root_listing = list_retired_administered(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, root.uuid()).await,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             root_listing.len(),
             1,
@@ -2710,9 +2989,13 @@ mod tests {
         assert_eq!(root_listing[0].id, ContextId::from(ctx));
         assert!(root_listing[0].retired, "the listed row must say retired");
 
-        let shown = get_retired_administered(&pool, root, ContextId::from(ctx))
-            .await
-            .expect("a system admin can show a retired context they neither own nor manage");
+        let shown = get_retired_administered(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, root.uuid()).await,
+            ContextId::from(ctx),
+        )
+        .await
+        .expect("a system admin can show a retired context they neither own nor manage");
         assert_eq!(shown.id, ContextId::from(ctx));
         assert!(shown.retired, "the shown row must say retired");
     }
