@@ -67,7 +67,11 @@ async fn cli_refusal(app: &common::E2eTestApp, args: &[&str]) -> (bool, String) 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_materialize_delta_reads_answer_through_the_cli(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
-    app.client.profile().get().await.expect("profile pre-flight");
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
     app.client
         .contexts()
         .create("delta-ctx", None)
@@ -76,8 +80,15 @@ async fn the_materialize_delta_reads_answer_through_the_cli(pool: sqlx::PgPool) 
 
     let delta = cli_json(
         &app,
-        &["context", "materialize-delta", "@me/delta-ctx", "--format", "json"],
-    ).await;
+        &[
+            "context",
+            "materialize-delta",
+            "@me/delta-ctx",
+            "--format",
+            "json",
+        ],
+    )
+    .await;
     assert_eq!(delta["anchor_table"], "kb_contexts");
     assert!(
         delta["formation_events"].is_i64(),
@@ -101,14 +112,15 @@ async fn the_materialize_delta_reads_answer_through_the_cli(pool: sqlx::PgPool) 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_materialize_delta_deny_is_the_uniform_404(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
-    app.client.profile().get().await.expect("profile pre-flight");
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
 
     let absent = Uuid::now_v7();
-    let (ok, faces) = cli_refusal(
-        &app,
-        &["context", "materialize-delta", &absent.to_string()],
-    )
-    .await;
+    let (ok, faces) =
+        cli_refusal(&app, &["context", "materialize-delta", &absent.to_string()]).await;
     assert!(!ok, "an absent context's delta read must refuse");
     assert!(
         faces.contains("not found") || faces.contains("404"),
@@ -119,7 +131,11 @@ async fn a_materialize_delta_deny_is_the_uniform_404(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn resource_meta_get_set_is_the_metadata_only_door(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
-    app.client.profile().get().await.expect("profile pre-flight");
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
     app.client
         .contexts()
         .create("meta-ctx", None)
@@ -149,7 +165,10 @@ async fn resource_meta_get_set_is_the_metadata_only_door(pool: sqlx::PgPool) {
 
     // The read answers both tiers; the body travels with it (ResourceView).
     let got = cli_json(&app, &["resource", "meta", "get", &id, "--format", "json"]).await;
-    assert_eq!(got["id"], created["id"], "the meta read addresses the resource");
+    assert_eq!(
+        got["id"], created["id"],
+        "the meta read addresses the resource"
+    );
 
     // The set states BOTH tiers in full — and never re-chunks (the body is untouched).
     let set = cli_json(
@@ -168,7 +187,10 @@ async fn resource_meta_get_set_is_the_metadata_only_door(pool: sqlx::PgPool) {
         ],
     )
     .await;
-    assert_eq!(set["open_meta"]["marker"], "x", "the open tier lands: {set}");
+    assert_eq!(
+        set["open_meta"]["marker"], "x",
+        "the open tier lands: {set}"
+    );
 
     // Merge semantics, OBSERVED at the wire (the route comment's "states the tiers in
     // full" does not hold at the backend): named keys overwrite, omitted keys survive —
@@ -188,7 +210,8 @@ async fn resource_meta_get_set_is_the_metadata_only_door(pool: sqlx::PgPool) {
             "--format",
             "json",
         ],
-    ).await;
+    )
+    .await;
     assert_eq!(
         replaced["open_meta"]["tags"],
         Value::Array(vec![Value::String("b".to_string())]),
@@ -231,7 +254,11 @@ async fn resource_meta_get_set_is_the_metadata_only_door(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_out_of_range_verdict_is_refused_client_side_with_the_sentence(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
-    app.client.profile().get().await.expect("profile pre-flight");
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
 
     let (ok, faces) = cli_refusal(
         &app,
@@ -244,7 +271,8 @@ async fn an_out_of_range_verdict_is_refused_client_side_with_the_sentence(pool: 
             "--value",
             "1.5",
         ],
-    ).await;
+    )
+    .await;
     assert!(!ok, "a verdict outside [-1, 1] must refuse");
     assert!(
         faces.contains("[-1.0, 1.0]"),
@@ -255,7 +283,11 @@ async fn an_out_of_range_verdict_is_refused_client_side_with_the_sentence(pool: 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_absent_address_refusals_carry_their_door_faces(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
-    app.client.profile().get().await.expect("profile pre-flight");
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
 
     // audit-citation on an absent block: the door's 404 — unreadable finding, self-audit,
     // and absent block are ONE sentence by design.
@@ -270,7 +302,8 @@ async fn the_absent_address_refusals_carry_their_door_faces(pool: sqlx::PgPool) 
             "--value",
             "0.5",
         ],
-    ).await;
+    )
+    .await;
     assert!(!ok, "an audit on an absent block must refuse");
     assert!(
         faces.contains("not found") || faces.contains("404"),
@@ -286,7 +319,8 @@ async fn the_absent_address_refusals_carry_their_door_faces(pool: sqlx::PgPool) 
     );
 
     // data-artifact get on an absent id: the flat read's 404.
-    let (ok, faces) = cli_refusal(&app, &["data-artifact", "get", &Uuid::now_v7().to_string()]).await;
+    let (ok, faces) =
+        cli_refusal(&app, &["data-artifact", "get", &Uuid::now_v7().to_string()]).await;
     assert!(!ok, "an absent artifact must refuse");
     assert!(
         faces.contains("not found") || faces.contains("404"),
@@ -297,7 +331,11 @@ async fn the_absent_address_refusals_carry_their_door_faces(pool: sqlx::PgPool) 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_schema_cogmap_home_arms_declare_and_list_through_the_cli(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
-    app.client.profile().get().await.expect("profile pre-flight");
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
 
     // A fresh cogmap home — genesis through the client, then the CLI drives both arms.
     let outcome = app
@@ -384,7 +422,8 @@ async fn the_schema_cogmap_home_arms_declare_and_list_through_the_cli(pool: sqlx
             "--context",
             "@me/nope",
         ],
-    ).await;
+    )
+    .await;
     // A missing context ref would 404 at the resolver; BOTH given refuses earlier.
     if ok {
         panic!("naming both homes must refuse: {faces}");
