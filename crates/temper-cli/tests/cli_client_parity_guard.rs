@@ -57,10 +57,7 @@ const CLIENT_ONLY: &[(&str, &str)] = &[
         // spelling of `list_for`.
         "declare_for",
     ),
-    (
-        "data_artifacts.rs",
-        "list_for",
-    ),
+    ("data_artifacts.rs", "list_for"),
     (
         "profile.rs",
         // UI-intended: the settings page's linked-identities read. The CLI's auth
@@ -159,11 +156,7 @@ fn every_client_api_method_has_a_cli_caller_or_a_recorded_reason() {
 
     let messages: Vec<String> = uncalled
         .iter()
-        .filter(|(f, m)| {
-            !CLIENT_ONLY
-                .iter()
-                .any(|(lf, lm)| lf == f && lm == m)
-        })
+        .filter(|(f, m)| !CLIENT_ONLY.iter().any(|(lf, lm)| lf == f && lm == m))
         .map(|(f, m)| {
             format!(
                 "{f}:{m} — no `.{m}(` caller under crates/temper-cli/src/. Add the CLI \

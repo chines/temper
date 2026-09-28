@@ -10,21 +10,22 @@ Manage contexts (projects)
 Usage: temper context [OPTIONS] <COMMAND>
 
 Commands:
-  subscribe       Subscribe to a context locally so `temper pull` materializes it. Local config only — this does NOT create the context on the server (use `context create`) and has no server/RBAC effect
-  unsubscribe     Unsubscribe from a context locally (drops it from the local pull set). Local config only — no server effect
-  create          Create a new context on the server
-  list            List the contexts you can see on the server (with owner ref + resource counts)
-  share           Share a context into a team's read-reach. Requires that you administer the context (own it, or manage its owning team) AND manage the target team (owner/maintainer), OR that you are an instance administrator. The context ref is a UUID or the `@handle/slug` / `+team-slug/slug` form (from `context list`); `@me` shorthand is not accepted
-  unshare         Unshare a context from a team (same authority as `share`)
-  transfer        Transfer a context's ownership to a team — the single path to shared authorship (read-sharing stays `share`; writing into a context requires team ownership)
-  delete          Retire a context
-  restore         Restore a retired context, reversing `temper context delete`
-  rename          Rename a context. The slug is derived from the new name — there is no separate `--slug`
-  shape           Orient in a context by its REGIONS: the distilled, region-level view of everything homed there, most salient first. The fastest way to see what a context is about without reading any single resource in it
-  region-metrics  Per-region analytics for a context: centrality, content cohesion, internal tension, reference standing, telos alignment
-  analytics       Context-level staleness: when the shape was last materialized, the latest touch you can see to its regions and edges, and whether the read is stale
-  materialize     Re-form a context's regions when enough has changed since the last materialize. Below the threshold this is a safe no-op (`materialized: false`). Requires write access to the context
-  help            Print this message or the help of the given subcommand(s)
+  subscribe          Subscribe to a context locally so `temper pull` materializes it. Local config only — this does NOT create the context on the server (use `context create`) and has no server/RBAC effect
+  unsubscribe        Unsubscribe from a context locally (drops it from the local pull set). Local config only — no server effect
+  create             Create a new context on the server
+  list               List the contexts you can see on the server (with owner ref + resource counts)
+  share              Share a context into a team's read-reach. Requires that you administer the context (own it, or manage its owning team) AND manage the target team (owner/maintainer), OR that you are an instance administrator. The context ref is a UUID or the `@handle/slug` / `+team-slug/slug` form (from `context list`); `@me` shorthand is not accepted
+  unshare            Unshare a context from a team (same authority as `share`)
+  transfer           Transfer a context's ownership to a team — the single path to shared authorship (read-sharing stays `share`; writing into a context requires team ownership)
+  delete             Retire a context
+  restore            Restore a retired context, reversing `temper context delete`
+  rename             Rename a context. The slug is derived from the new name — there is no separate `--slug`
+  shape              Orient in a context by its REGIONS: the distilled, region-level view of everything homed there, most salient first. The fastest way to see what a context is about without reading any single resource in it
+  region-metrics     Per-region analytics for a context: centrality, content cohesion, internal tension, reference standing, telos alignment
+  analytics          Context-level staleness: when the shape was last materialized, the latest touch you can see to its regions and edges, and whether the read is stale
+  materialize        Re-form a context's regions when enough has changed since the last materialize. Below the threshold this is a safe no-op (`materialized: false`). Requires write access to the context
+  materialize-delta  Read a context's formation drift since its last materialize — the read peer of `context materialize`: how many formation events are pending, and whether the threshold clears. Deny is 404 (absent and unreadable collapsed — no existence oracle)
+  help               Print this message or the help of the given subcommand(s)
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -353,6 +354,25 @@ Arguments:
 
 Options:
       --threshold <THRESHOLD>  Formation-event threshold to gate on; omit for the default
+      --vault <VAULT>          Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>        Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>      ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help                   Print help
+```
+
+### `temper context materialize-delta`
+
+```text
+Read a context's formation drift since its last materialize — the read peer of `context materialize`: how many formation events are pending, and whether the threshold clears. Deny is 404 (absent and unreadable collapsed — no existence oracle)
+
+Usage: temper context materialize-delta [OPTIONS] <CONTEXT>
+
+Arguments:
+  <CONTEXT>  Context ref: a UUID or `@me/slug` / `+team-slug/slug`
+
+Options:
+      --threshold <THRESHOLD>  Threshold to gate the delta against; omit for the server default
       --vault <VAULT>          Path to vault (overrides TEMPER_VAULT and auto-detection)
       --format <FORMAT>        Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>      ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1

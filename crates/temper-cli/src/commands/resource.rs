@@ -2638,13 +2638,10 @@ pub fn meta_set(params: MetaSetParams<'_>) -> Result<()> {
                  an unknown key is refused): {e}"
             ))
         })?;
-    let open_meta: serde_json::Value = serde_json::from_str(params.open).map_err(|e| {
-        TemperError::Api(format!("--open is not valid JSON: {e}"))
-    })?;
+    let open_meta: serde_json::Value = serde_json::from_str(params.open)
+        .map_err(|e| TemperError::Api(format!("--open is not valid JSON: {e}")))?;
     if !open_meta.is_object() {
-        return Err(TemperError::Api(
-            "--open must be a JSON object".to_string(),
-        ));
+        return Err(TemperError::Api("--open must be a JSON object".to_string()));
     }
 
     let payload = MetaUpdatePayload {

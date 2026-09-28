@@ -10,19 +10,20 @@ Operate on cognitive maps (create, read, reconcile, materialize, bind, grant)
 Usage: temper cogmap [OPTIONS] <COMMAND>
 
 Commands:
-  list            List the cognitive maps you can see — each with its ref, held-by scope, region/resource counts, and charter statement (what the map is for). Filter by name and/or team
-  show            Orient on one cognitive map: its charter (what it's for) and the resources it's built on (its foundational homed set, with the telos flagged)
-  reconcile       Reconcile a cognitive map's content to a committed manifest
-  create          Genesis (create) a new cognitive map from a committed manifest
-  shape           Read a cognitive map's materialized regions (surface tier), wrapped in an envelope — `regions` plus `population`, `emptiness` and `materialized_at`. When `regions` is empty, read `emptiness` rather than guessing: `never_clustered` (run `cogmap materialize`), `nothing_visible` (materialized, but it formed no regions, or none of them holds a member you can read — one answer for both, so this is not by itself a permissions problem), `lens_narrowed` (your `--lens` excluded all `population` regions you can see), or `unreadable_or_absent`
-  region-metrics  Read a cognitive map's per-region analytics metrics
-  analytics       Read a cognitive map's map-level analytics (telos, staleness, regulation)
-  materialize     Re-materialize a cognitive map's regions when its event delta clears the threshold
-  bind            Bind a cognitive map to a team. Requires system-admin, OR that you manage the team (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to the team's shared resources
-  unbind          Unbind a cognitive map from a team (same authority as bind)
-  grant           Grant a capability on a cognitive map (admin or a can_grant holder). Post-Q-A, authoring a map requires an explicit write grant, not team membership
-  revoke          Revoke a capability grant on a cognitive map (admin or a can_grant holder)
-  help            Print this message or the help of the given subcommand(s)
+  list               List the cognitive maps you can see — each with its ref, held-by scope, region/resource counts, and charter statement (what the map is for). Filter by name and/or team
+  show               Orient on one cognitive map: its charter (what it's for) and the resources it's built on (its foundational homed set, with the telos flagged)
+  reconcile          Reconcile a cognitive map's content to a committed manifest
+  create             Genesis (create) a new cognitive map from a committed manifest
+  shape              Read a cognitive map's materialized regions (surface tier), wrapped in an envelope — `regions` plus `population`, `emptiness` and `materialized_at`. When `regions` is empty, read `emptiness` rather than guessing: `never_clustered` (run `cogmap materialize`), `nothing_visible` (materialized, but it formed no regions, or none of them holds a member you can read — one answer for both, so this is not by itself a permissions problem), `lens_narrowed` (your `--lens` excluded all `population` regions you can see), or `unreadable_or_absent`
+  region-metrics     Read a cognitive map's per-region analytics metrics
+  analytics          Read a cognitive map's map-level analytics (telos, staleness, regulation)
+  materialize        Re-materialize a cognitive map's regions when its event delta clears the threshold
+  materialize-delta  Read a map's formation delta since its last materialize — the read peer of `cogmap materialize`: how many formation events are pending, and whether the threshold clears. 404 when the map is absent or unreadable (uniform — no oracle)
+  bind               Bind a cognitive map to a team. Requires system-admin, OR that you manage the team (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to the team's shared resources
+  unbind             Unbind a cognitive map from a team (same authority as bind)
+  grant              Grant a capability on a cognitive map (admin or a can_grant holder). Post-Q-A, authoring a map requires an explicit write grant, not team membership
+  revoke             Revoke a capability grant on a cognitive map (admin or a can_grant holder)
+  help               Print this message or the help of the given subcommand(s)
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -245,6 +246,25 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+```
+
+### `temper cogmap materialize-delta`
+
+```text
+Read a map's formation delta since its last materialize — the read peer of `cogmap materialize`: how many formation events are pending, and whether the threshold clears. 404 when the map is absent or unreadable (uniform — no oracle)
+
+Usage: temper cogmap materialize-delta [OPTIONS] <COGMAP>
+
+Arguments:
+  <COGMAP>  The cognitive map, by ref (UUID or `slug-<uuid>`)
+
+Options:
+      --threshold <THRESHOLD>  Threshold to gate the delta against. Server default when omitted
+      --vault <VAULT>          Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>        Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>      ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help                   Print help
 ```
 
 ### `temper cogmap bind`

@@ -18,6 +18,8 @@ Commands:
   read-block          Read one content block by address — the three-state resolution
   update              Update a resource's frontmatter and/or body
   annotate            Attach provenance sources to a resource's block — WITHOUT a body revise (issue #355)
+  meta                Read or replace a resource's frontmatter without touching the body — the dedicated metadata-only door (`GET/PUT /api/resources/{id}/meta`)
+  audit-citation      Record a citation-audit verdict against one (block, source) citation — the block-addressed door (`POST /api/citation-audits`)
   delete              Delete a resource (soft-delete via the API)
   reassign            Reassign a resource's owner (mis-attribution self-fix, or a team admin acting over a resource scoped to their team)
   grant               Grant a capability on a resource to a profile or team (system-admin, a can_grant holder, or the resource owner)
@@ -482,6 +484,188 @@ Options:
 
       --color <COLOR>
           Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --correlation <CORRELATION>
+          Stitch this write into an act-grain thread shared with other writes (a bare UUID you mint). Provenance only — it never authorizes. Omit and the event self-roots
+
+      --confidence <CONFIDENCE>
+          Graded authorship confidence: tentative, probable, or confident
+          
+          [possible values: tentative, probable, confident]
+
+      --reasoning <REASONING>
+          Free-text reasoning for the act (authorship; requires --confidence)
+
+      --rationale <RATIONALE>
+          Structured rationale for the act (authorship; requires --confidence)
+
+      --persona <PERSONA>
+          Persona/role the author acted as (authorship; requires --confidence)
+
+      --model <MODEL>
+          Model that authored the act (authorship; requires --confidence)
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper resource meta`
+
+```text
+Read or replace a resource's frontmatter without touching the body — the dedicated metadata-only door (`GET/PUT /api/resources/{id}/meta`).
+
+Distinct from `resource update`: that PATCHes frontmatter from typed flags and can carry a body revise; this door states the meta tiers in full and never re-chunks or re-embeds.
+
+Usage: temper resource meta [OPTIONS] <COMMAND>
+
+Commands:
+  get   Read a resource's frontmatter — both tiers, body untouched
+  set   Replace a resource's frontmatter — PUT semantics, BOTH tiers stated in full
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+#### `temper resource meta get`
+
+```text
+Read a resource's frontmatter — both tiers, body untouched.
+
+404 when the resource is absent or unreadable.
+
+Usage: temper resource meta get [OPTIONS] <REF>
+
+Arguments:
+  <REF>
+          Resource ref: a UUID or the decorated `slug-<uuid>` form
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+#### `temper resource meta set`
+
+```text
+Replace a resource's frontmatter — PUT semantics, BOTH tiers stated in full.
+
+A tier is replaced wholesale: keys you omit from `--managed`/`--open` are cleared, not merged (the additive channel is `resource update --open-meta-add`). No body revise, no re-chunk, no re-embed. 403 when the resource is readable but not modifiable; 404 when absent or unreadable.
+
+Usage: temper resource meta set [OPTIONS] --managed <MANAGED> --open <OPEN> <REF>
+
+Arguments:
+  <REF>
+          Resource ref: a UUID or the decorated `slug-<uuid>` form
+
+Options:
+      --managed <MANAGED>
+          Managed (temper-*) frontmatter as a JSON object string — the closed vocabulary only; an unknown temper-* key is refused client-side, there is no catch-all. Stated in full: omitted keys are cleared
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --open <OPEN>
+          Open (caller-defined) frontmatter as a JSON object string. Stated in full: omitted keys are cleared — pass '{"tags":[]}' to keep tags empty deliberately, not by omission
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --invocation <INVOCATION>
+          Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --correlation <CORRELATION>
+          Stitch this write into an act-grain thread shared with other writes (a bare UUID you mint). Provenance only — it never authorizes. Omit and the event self-roots
+
+      --confidence <CONFIDENCE>
+          Graded authorship confidence: tentative, probable, or confident
+          
+          [possible values: tentative, probable, confident]
+
+      --reasoning <REASONING>
+          Free-text reasoning for the act (authorship; requires --confidence)
+
+      --rationale <RATIONALE>
+          Structured rationale for the act (authorship; requires --confidence)
+
+      --persona <PERSONA>
+          Persona/role the author acted as (authorship; requires --confidence)
+
+      --model <MODEL>
+          Model that authored the act (authorship; requires --confidence)
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `temper resource audit-citation`
+
+```text
+Record a citation-audit verdict against one (block, source) citation — the block-addressed door (`POST /api/citation-audits`).
+
+The authorization subject is the finding that owns the block, resolved server-side — the caller never names a finding. Append-only: a later audit never erases an earlier one. Only Resource-kind sources are auditable; the value is the signed defensibility verdict in [-1.0, 1.0]. 404 collapses unreadable finding / self-audit / absent block into one sentence; 409 when --invocation names a closed run.
+
+Usage: temper resource audit-citation [OPTIONS] --source <SOURCE> --value <VALUE> <BLOCK>
+
+Arguments:
+  <BLOCK>
+          The audited citation's block id (from `resource show --provenance`)
+
+Options:
+      --source <SOURCE>
+          The cited source — a resource ref (UUID or decorated `slug-<uuid>`). Only resource-kind sources are auditable
+
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --value <VALUE>
+          Signed verdict in [-1.0, 1.0]: how much this source supports the specific connection the citation claims — never whether the claim is true
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --reason <REASON>
+          Optional free-text rationale, recorded on the ledger row
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+      --invocation <INVOCATION>
+          Correlate this act with an open invocation envelope (its ref/UUID from `invocation open`)
 
       --correlation <CORRELATION>
           Stitch this write into an act-grain thread shared with other writes (a bare UUID you mint). Provenance only — it never authorizes. Omit and the event self-roots
