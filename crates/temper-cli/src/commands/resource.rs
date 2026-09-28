@@ -2672,6 +2672,55 @@ pub fn meta_set(params: MetaSetParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Args for [`audit_citation`] — the block-addressed citation-audit write.
+pub struct AuditCitationParams<'a> {
+    pub block: uuid::Uuid,
+    pub source: &'a str,
+    pub value: f64,
+    pub reason: Option<&'a str>,
+    pub act: temper_core::types::ActInput,
+    pub format: crate::format::OutputFormat,
+}
+
+/// `temper resource audit-citation <block> --source <ref> --value <-1..1>` — the
+/// block-addressed citation-audit door (`POST /api/citation-audits`). The finding that
+/// owns the block is resolved server-side; the caller never names one. Only
+/// Resource-kind sources are auditable, so `--source` is a resource ref.
+pub fn audit_citation(params: AuditCitationParams<'_>) -> Result<()> {
+    use temper_core::types::citation_audit::BlockCitationAuditRequest;
+    use temper_core::types::provenance::ProvenanceSource;
+
+    if !(-1.0..=1.0).contains(&params.value) {
+        return Err(TemperError::Api(format!(
+            "--value {} is outside [-1.0, 1.0] — the signed defensibility verdict, never a \
+             claim about what the source says",
+            params.value
+        )));
+    }
+    let source_id = temper_workflow::operations::parse_ref(params.source)?;
+
+    let req = BlockCitationAuditRequest {
+        block_id: params.block,
+        source: ProvenanceSource::Resource(uuid::Uuid::from(source_id)),
+        value: params.value,
+        reason: params.reason.map(|s| s.to_string()),
+        act: params.act,
+    };
+
+    let audit_id = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .record_citation_audit_for_block(&req)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    let rendered = crate::format::render(&audit_id, params.format)?;
+    output::plain(rendered);
+    Ok(())
+}
+
 /// Args for [`annotate`] — the annotate-only provenance backfill (issue #355).
 pub struct AnnotateParams<'a> {
     /// Resource ref: a UUID or the decorated `slug-<uuid>` form.

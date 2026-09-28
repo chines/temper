@@ -388,6 +388,22 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         },
                     ),
                 },
+                ResourceAction::AuditCitation {
+                    block,
+                    source,
+                    value,
+                    reason,
+                    act,
+                } => temper_cli::commands::resource::audit_citation(
+                    temper_cli::commands::resource::AuditCitationParams {
+                        block,
+                        source: &source,
+                        value,
+                        reason: reason.as_deref(),
+                        act: act.into_act_input()?,
+                        format: output_format,
+                    },
+                ),
                 ResourceAction::Delete { r#ref, force, act } => {
                     temper_cli::commands::resource::delete(
                         &config,

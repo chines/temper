@@ -869,6 +869,33 @@ pub enum ResourceAction {
         #[command(subcommand)]
         action: ResourceMetaAction,
     },
+    /// Record a citation-audit verdict against one (block, source) citation — the
+    /// block-addressed door (`POST /api/citation-audits`).
+    ///
+    /// The authorization subject is the finding that owns the block, resolved
+    /// server-side — the caller never names a finding. Append-only: a later audit
+    /// never erases an earlier one. Only Resource-kind sources are auditable; the
+    /// value is the signed defensibility verdict in [-1.0, 1.0]. 404 collapses
+    /// unreadable finding / self-audit / absent block into one sentence; 409 when
+    /// --invocation names a closed run.
+    AuditCitation {
+        /// The audited citation's block id (from `resource show --provenance`).
+        block: uuid::Uuid,
+        /// The cited source — a resource ref (UUID or decorated `slug-<uuid>`). Only
+        /// resource-kind sources are auditable.
+        #[arg(long)]
+        source: String,
+        /// Signed verdict in [-1.0, 1.0]: how much this source supports the specific
+        /// connection the citation claims — never whether the claim is true.
+        #[arg(long, allow_negative_numbers = true)]
+        value: f64,
+        /// Optional free-text rationale, recorded on the ledger row.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
+    },
     /// Delete a resource (soft-delete via the API).
     ///
     /// Sets `is_active = false` server-side; the row is preserved. Removing a
