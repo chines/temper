@@ -142,23 +142,59 @@ pub fn commit(
     Ok(())
 }
 
+/// `temper data-artifact get <artifact_ref>` — the flat artifact read
+/// (`GET /api/data-artifacts/{id}`): no owning-resource address needed.
+pub fn get_by_id(artifact_ref: &str, fmt: OutputFormat) -> crate::error::Result<()> {
+    let artifact_id = parse_ref(artifact_ref)?;
+
+    let artifact = runtime::with_client(move |client| {
+        Box::pin(async move {
+            client
+                .data_artifacts()
+                .get_by_id(uuid::Uuid::from(artifact_id))
+                .await
+                .map_err(runtime::client_err_to_temper)
+        })
+    })?;
+
+    let rendered = crate::format::render(&artifact, fmt)?;
+    output::plain(rendered);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // schema subgroup — shape registry reads and writes
 // ---------------------------------------------------------------------------
 
-/// `temper data-artifact schema list --context <ref>` — list live shapes for a context home.
+/// `temper data-artifact schema list --context <ref> | --cogmap <ref>` — list live shapes
+/// for a home anchor (context or cognitive map; exactly one).
 pub async fn schema_list_remote(
     client: &temper_client::TemperClient,
-    context: &str,
+    context: Option<&str>,
+    cogmap: Option<&str>,
     fmt: OutputFormat,
 ) -> crate::error::Result<()> {
-    let context_id =
-        crate::commands::context_cmd::resolve_context_id_for_read(client, context).await?;
-    let shapes: Vec<ShapeView> = client
-        .data_artifacts()
-        .list_shapes(context_id)
-        .await
-        .map_err(runtime::client_err_to_temper)?;
+    let shapes: Vec<ShapeView> = if let Some(cogmap_ref) = cogmap {
+        let cogmap_id = parse_ref(cogmap_ref)?;
+        client
+            .data_artifacts()
+            .list_cogmap_shapes(uuid::Uuid::from(cogmap_id))
+            .await
+            .map_err(runtime::client_err_to_temper)?
+    } else {
+        let context = context.ok_or_else(|| {
+            crate::error::TemperError::Project(
+                "schema list needs exactly one home: --context <ref> or --cogmap <ref>".to_string(),
+            )
+        })?;
+        let context_id =
+            crate::commands::context_cmd::resolve_context_id_for_read(client, context).await?;
+        client
+            .data_artifacts()
+            .list_shapes(context_id)
+            .await
+            .map_err(runtime::client_err_to_temper)?
+    };
     let rendered = crate::format::render(&shapes, fmt)?;
     output::plain(rendered);
     Ok(())
@@ -183,7 +219,8 @@ pub async fn schema_show_remote(
 
 /// Parameters for [`schema_declare_remote`] — the CLI `schema declare` invocation.
 pub struct SchemaDeclareParams<'a> {
-    pub context: &'a str,
+    pub context: Option<&'a str>,
+    pub cogmap: Option<&'a str>,
     pub kind: &'a str,
     pub kind_owner: Option<&'a str>,
     pub enforcement: EnforcementMode,
@@ -192,13 +229,15 @@ pub struct SchemaDeclareParams<'a> {
     pub format: OutputFormat,
 }
 
-/// `temper data-artifact schema declare <ref> --kind <k>` — declare a shape for a context home.
+/// `temper data-artifact schema declare [<context_ref> | --cogmap <ref>] --kind <k>` —
+/// declare a shape for a family within a context or cognitive-map home (exactly one).
 pub async fn schema_declare_remote(
     client: &temper_client::TemperClient,
     params: SchemaDeclareParams<'_>,
 ) -> crate::error::Result<()> {
     let SchemaDeclareParams {
         context,
+        cogmap,
         kind,
         kind_owner,
         enforcement,
@@ -208,8 +247,15 @@ pub async fn schema_declare_remote(
     } = params;
     use std::io::IsTerminal;
 
-    let context_id =
-        crate::commands::context_cmd::resolve_context_id_for_read(client, context).await?;
+    match (context, cogmap) {
+        (Some(_), Some(_)) | (None, None) => {
+            return Err(crate::error::TemperError::Project(
+                "schema declare needs exactly one home: a positional context ref, or --cogmap <ref>"
+                    .to_string(),
+            ));
+        }
+        _ => {}
+    }
 
     let stdin_is_tty = std::io::stdin().is_terminal();
     let body_opt = body_source::resolve_body_source(
@@ -236,11 +282,25 @@ pub async fn schema_declare_remote(
         act,
     };
 
-    let shape: ShapeView = client
-        .data_artifacts()
-        .declare_shape(context_id, &request)
-        .await
-        .map_err(runtime::client_err_to_temper)?;
+    // The home kind picks the route arm: a cogmap home declares through
+    // POST /api/cognitive-maps/{id}/shapes, a context through POST /api/contexts/{id}/shapes.
+    let shape: ShapeView = if let Some(cogmap_ref) = cogmap {
+        let cogmap_id = parse_ref(cogmap_ref)?;
+        client
+            .data_artifacts()
+            .declare_cogmap_shape(uuid::Uuid::from(cogmap_id), &request)
+            .await
+            .map_err(runtime::client_err_to_temper)?
+    } else {
+        let context = context.expect("validated: exactly one home");
+        let context_id =
+            crate::commands::context_cmd::resolve_context_id_for_read(client, context).await?;
+        client
+            .data_artifacts()
+            .declare_shape(context_id, &request)
+            .await
+            .map_err(runtime::client_err_to_temper)?
+    };
     let rendered = crate::format::render(&shape, fmt)?;
     output::plain(rendered);
     Ok(())

@@ -1051,6 +1051,15 @@ pub enum DataArtifactAction {
         /// Artifact ID (UUID)
         artifact_id: String,
     },
+    /// Read a single data artifact by its own id — the flat read, no owning-resource
+    /// address needed (`GET /api/data-artifacts/{id}`).
+    ///
+    /// The peer of `resource show`: works when the owning resource's address is not at
+    /// hand, and answers folded (superseded) artifacts by their own id.
+    Get {
+        /// Artifact ref: a UUID or the decorated `slug-<uuid>` form
+        artifact: String,
+    },
     /// Commit one data artifact to a resource
     Commit {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
@@ -1091,25 +1100,36 @@ pub enum DataArtifactAction {
     reason = "clap arg-definition enum, parsed once"
 )]
 pub enum SchemaAction {
-    /// List live shapes declared for a context — what families are governed and how
+    /// List live shapes declared for a home anchor — what families are governed and how.
+    /// Exactly one of `--context` / `--cogmap`: a shape's family is homed in one anchor kind.
     List {
         /// Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
         #[arg(long)]
-        context: String,
+        context: Option<String>,
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form. Mutually
+        /// exclusive with --context.
+        #[arg(long)]
+        cogmap: Option<String>,
     },
     /// Show a single shape by its ID — the schema, version, and enforcement mode
     Show {
         /// Shape ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,
     },
-    /// Declare a shape for a data-artifact family within a context home.
+    /// Declare a shape for a data-artifact family within a context or cognitive-map home.
     ///
-    /// Gated on authoring authority over the context. The schema content is read from
+    /// Gated on authoring authority over the home. Exactly one of the positional
+    /// context ref / `--cogmap`. The schema content is read from
     /// `--content @<path>`, `--content -` (stdin), or piped stdin — the same convention as
     /// `data-artifact commit`. The content must be a valid JSON Schema (draft 2020-12).
     Declare {
-        /// Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
-        r#ref: String,
+        /// Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form. Mutually
+        /// exclusive with --cogmap — exactly one home.
+        r#ref: Option<String>,
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form. Mutually
+        /// exclusive with the positional context ref.
+        #[arg(long)]
+        cogmap: Option<String>,
         /// The bare family name (e.g. `"measurement"`)
         #[arg(long)]
         kind: String,
