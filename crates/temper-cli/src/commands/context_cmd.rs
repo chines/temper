@@ -585,6 +585,27 @@ pub async fn materialize_remote(
     Ok(())
 }
 
+/// `temper context materialize-delta <context_ref> [--threshold N]` — the read peer of
+/// [`materialize_remote`]: how far formation has drifted since the last materialize.
+/// Addressed by ref, but the DELTA read itself takes the resolved UUID; a deny renders
+/// as the route's uniform 404 (absent and unreadable collapsed).
+pub async fn materialize_delta_remote(
+    client: &temper_client::TemperClient,
+    context: &str,
+    threshold: Option<i64>,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
+    let context_id = resolve_context_id_for_read(client, context).await?;
+    let delta = client
+        .contexts()
+        .materialize_delta(context_id, threshold)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let rendered = crate::format::render(&delta, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

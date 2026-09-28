@@ -12,6 +12,7 @@ Usage: temper data-artifact [OPTIONS] <COMMAND>
 Commands:
   list    List data artifacts owned by a resource
   show    Show a single data artifact by ID
+  get     Read a single data artifact by its own id — the flat read, no owning-resource address needed (`GET /api/data-artifacts/{id}`)
   commit  Commit one data artifact to a resource
   schema  Declare and inspect data-artifact shapes (the schema registry)
   help    Print this message or the help of the given subcommand(s)
@@ -65,6 +66,36 @@ Options:
   -h, --help               Print help
 ```
 
+### `temper data-artifact get`
+
+```text
+Read a single data artifact by its own id — the flat read, no owning-resource address needed (`GET /api/data-artifacts/{id}`).
+
+The peer of `resource show`: works when the owning resource's address is not at hand, and answers folded (superseded) artifacts by their own id.
+
+Usage: temper data-artifact get [OPTIONS] <ARTIFACT>
+
+Arguments:
+  <ARTIFACT>
+          Artifact ref: a UUID or the decorated `slug-<uuid>` form
+
+Options:
+      --vault <VAULT>
+          Path to vault (overrides TEMPER_VAULT and auto-detection)
+
+      --format <FORMAT>
+          Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+
+      --embed-threads <N>
+          ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
 ### `temper data-artifact commit`
 
 ```text
@@ -104,9 +135,9 @@ Declare and inspect data-artifact shapes (the schema registry)
 Usage: temper data-artifact schema [OPTIONS] <COMMAND>
 
 Commands:
-  list     List live shapes declared for a context — what families are governed and how
+  list     List live shapes declared for a home anchor — what families are governed and how. Exactly one of `--context` / `--cogmap`: a shape's family is homed in one anchor kind
   show     Show a single shape by its ID — the schema, version, and enforcement mode
-  declare  Declare a shape for a data-artifact family within a context home
+  declare  Declare a shape for a data-artifact family within a context or cognitive-map home
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -120,13 +151,14 @@ Options:
 #### `temper data-artifact schema list`
 
 ```text
-List live shapes declared for a context — what families are governed and how
+List live shapes declared for a home anchor — what families are governed and how. Exactly one of `--context` / `--cogmap`: a shape's family is homed in one anchor kind
 
-Usage: temper data-artifact schema list [OPTIONS] --context <CONTEXT>
+Usage: temper data-artifact schema list [OPTIONS]
 
 Options:
       --context <CONTEXT>  Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --cogmap <COGMAP>    Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form. Mutually exclusive with --context
       --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
       --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
@@ -154,19 +186,19 @@ Options:
 #### `temper data-artifact schema declare`
 
 ```text
-Declare a shape for a data-artifact family within a context home.
+Declare a shape for a data-artifact family within a context or cognitive-map home.
 
-Gated on authoring authority over the context. The schema content is read from `--content @<path>`, `--content -` (stdin), or piped stdin — the same convention as `data-artifact commit`. The content must be a valid JSON Schema (draft 2020-12).
+Gated on authoring authority over the home. Exactly one of the positional context ref / `--cogmap`. The schema content is read from `--content @<path>`, `--content -` (stdin), or piped stdin — the same convention as `data-artifact commit`. The content must be a valid JSON Schema (draft 2020-12).
 
-Usage: temper data-artifact schema declare [OPTIONS] --kind <KIND> <REF>
+Usage: temper data-artifact schema declare [OPTIONS] --kind <KIND> [REF]
 
 Arguments:
-  <REF>
-          Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
+  [REF]
+          Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form. Mutually exclusive with --cogmap — exactly one home
 
 Options:
-      --kind <KIND>
-          The bare family name (e.g. `"measurement"`)
+      --cogmap <COGMAP>
+          Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form. Mutually exclusive with the positional context ref
 
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -174,11 +206,17 @@ Options:
       --format <FORMAT>
           Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
 
-      --kind-owner <KIND_OWNER>
-          Namespace override for the family name: `kb_profiles:<uuid>` or `kb_teams:<uuid>`. Omit to let the server default it from the home — which refuses on an empty context (no homed resource to default from)
+      --kind <KIND>
+          The bare family name (e.g. `"measurement"`)
 
       --embed-threads <N>
           ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+
+      --kind-owner <KIND_OWNER>
+          Namespace override for the family name: `kb_profiles:<uuid>` or `kb_teams:<uuid>`. Omit to let the server default it from the home — which refuses on an empty context (no homed resource to default from)
+
+      --color <COLOR>
+          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
 
       --enforcement <ENFORCEMENT>
           Enforcement mode: `advisory` (default — non-conforming commits succeed and are recorded) or `enforcing` (non-conforming commits are refused)
@@ -188,9 +226,6 @@ Options:
           - enforcing: Non-conforming commits are refused, and the refusal carries what failed
           
           [default: advisory]
-
-      --color <COLOR>
-          Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
 
       --content <CONTENT>
           Content source: `@<path>` (file), `-` (stdin), or omitted for implicit stdin. The content must be valid JSON (a JSON Schema draft 2020-12 document)

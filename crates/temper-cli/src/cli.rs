@@ -859,6 +859,42 @@ pub enum ResourceAction {
         #[command(flatten)]
         act: ActArgs,
     },
+    /// Read or replace a resource's frontmatter without touching the body — the
+    /// dedicated metadata-only door (`GET/PUT /api/resources/{id}/meta`).
+    ///
+    /// Distinct from `resource update`: that PATCHes frontmatter from typed flags and
+    /// can carry a body revise; this door names both tiers at once and merges per key.
+    Meta {
+        #[command(subcommand)]
+        action: ResourceMetaAction,
+    },
+    /// Record a citation-audit verdict against one (block, source) citation — the
+    /// block-addressed door (`POST /api/citation-audits`).
+    ///
+    /// The authorization subject is the finding that owns the block, resolved
+    /// server-side — the caller never names a finding. Append-only: a later audit
+    /// never erases an earlier one. Only Resource-kind sources are auditable; the
+    /// value is the signed defensibility verdict in [-1.0, 1.0]. 404 collapses
+    /// unreadable finding / self-audit / absent block into one sentence; 409 when
+    /// --invocation names a closed run.
+    AuditCitation {
+        /// The audited citation's block id (from `resource show --provenance`).
+        block: uuid::Uuid,
+        /// The cited source — a resource ref (UUID or decorated `slug-<uuid>`). Only
+        /// resource-kind sources are auditable.
+        #[arg(long)]
+        source: String,
+        /// Signed verdict in [-1.0, 1.0]: how much this source supports the specific
+        /// connection the citation claims — never whether the claim is true.
+        #[arg(long, allow_negative_numbers = true)]
+        value: f64,
+        /// Optional free-text rationale, recorded on the ledger row.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
+    },
     /// Delete a resource (soft-delete via the API).
     ///
     /// Sets `is_active = false` server-side; the row is preserved. Removing a
@@ -954,6 +990,45 @@ pub enum ResourceAction {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum ResourceMetaAction {
+    /// Read a resource's frontmatter — both tiers, body untouched.
+    ///
+    /// 404 when the resource is absent or unreadable.
+    Get {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+    },
+    /// Replace a resource's frontmatter — the metadata-only PUT, both tiers named at once.
+    ///
+    /// Merge semantics (observed at the backend, not inherited from the route's
+    /// comment): every key you name is overwritten, every key you omit is preserved —
+    /// a named open-tier key set to null reads back as absent. No body revise, no
+    /// re-chunk, no re-embed. 403 when the resource is readable but not modifiable;
+    /// 404 when absent or unreadable.
+    Set {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// Managed (temper-) frontmatter as a JSON object string — the closed
+        /// vocabulary only; an unknown temper-* key is refused client-side, there
+        /// is no catch-all. Named keys overwrite; omitted keys are preserved.
+        /// NOTE: a managed key set to null is a silent NO-OP (deserialized to
+        /// absent → preserved by the backend merge); there is no clear channel on
+        /// the managed tier.
+        #[arg(long, required = true)]
+        managed: String,
+        /// Open (caller-defined) frontmatter as a JSON object string. Named keys
+        /// overwrite; omitted keys are preserved (the additive channel is
+        /// `resource update --open-meta-add`). A named key set to null reads back
+        /// as absent.
+        #[arg(long, required = true)]
+        open: String,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum DataArtifactAction {
     /// List data artifacts owned by a resource
@@ -979,6 +1054,15 @@ pub enum DataArtifactAction {
         r#ref: String,
         /// Artifact ID (UUID)
         artifact_id: String,
+    },
+    /// Read a single data artifact by its own id — the flat read, no owning-resource
+    /// address needed (`GET /api/data-artifacts/{id}`).
+    ///
+    /// The peer of `resource show`: works when the owning resource's address is not at
+    /// hand, and answers folded (superseded) artifacts by their own id.
+    Get {
+        /// Artifact ref: a UUID or the decorated `slug-<uuid>` form
+        artifact: String,
     },
     /// Commit one data artifact to a resource
     Commit {
@@ -1020,25 +1104,36 @@ pub enum DataArtifactAction {
     reason = "clap arg-definition enum, parsed once"
 )]
 pub enum SchemaAction {
-    /// List live shapes declared for a context — what families are governed and how
+    /// List live shapes declared for a home anchor — what families are governed and how.
+    /// Exactly one of `--context` / `--cogmap`: a shape's family is homed in one anchor kind.
     List {
         /// Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
         #[arg(long)]
-        context: String,
+        context: Option<String>,
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form. Mutually
+        /// exclusive with --context.
+        #[arg(long)]
+        cogmap: Option<String>,
     },
     /// Show a single shape by its ID — the schema, version, and enforcement mode
     Show {
         /// Shape ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,
     },
-    /// Declare a shape for a data-artifact family within a context home.
+    /// Declare a shape for a data-artifact family within a context or cognitive-map home.
     ///
-    /// Gated on authoring authority over the context. The schema content is read from
+    /// Gated on authoring authority over the home. Exactly one of the positional
+    /// context ref / `--cogmap`. The schema content is read from
     /// `--content @<path>`, `--content -` (stdin), or piped stdin — the same convention as
     /// `data-artifact commit`. The content must be a valid JSON Schema (draft 2020-12).
     Declare {
-        /// Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form
-        r#ref: String,
+        /// Context ref: a UUID or the `@owner/slug` / `+team-slug/slug` form. Mutually
+        /// exclusive with --cogmap — exactly one home.
+        r#ref: Option<String>,
+        /// Cognitive-map ref: a UUID or the decorated `slug-<uuid>` form. Mutually
+        /// exclusive with the positional context ref.
+        #[arg(long)]
+        cogmap: Option<String>,
         /// The bare family name (e.g. `"measurement"`)
         #[arg(long)]
         kind: String,
@@ -1213,6 +1308,16 @@ pub enum ContextAction {
         /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
         context: String,
         /// Formation-event threshold to gate on; omit for the default.
+        #[arg(long)]
+        threshold: Option<i64>,
+    },
+    /// Read a context's formation drift since its last materialize — the read peer of
+    /// `context materialize`: how many formation events are pending, and whether the
+    /// threshold clears. Deny is 404 (absent and unreadable collapsed — no existence oracle).
+    MaterializeDelta {
+        /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
+        context: String,
+        /// Threshold to gate the delta against; omit for the server default.
         #[arg(long)]
         threshold: Option<i64>,
     },
@@ -2061,6 +2166,16 @@ pub enum CogmapCmd {
         #[arg(long)]
         threshold: Option<i64>,
     },
+    /// Read a map's formation delta since its last materialize — the read peer of
+    /// `cogmap materialize`: how many formation events are pending, and whether the
+    /// threshold clears. 404 when the map is absent or unreadable (uniform — no oracle).
+    MaterializeDelta {
+        /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+        /// Threshold to gate the delta against. Server default when omitted.
+        #[arg(long)]
+        threshold: Option<i64>,
+    },
     /// Bind a cognitive map to a team. Requires system-admin, OR that you manage the team
     /// (owner/maintainer) AND administer the map (hold a grant on it). Widens the map's reach to
     /// the team's shared resources.
@@ -2408,6 +2523,18 @@ pub enum BlobAction {
         home: Option<String>,
         #[arg(long, value_enum, default_value = "context")]
         home_table: CliHomeTable,
+    },
+    /// Read a staged upload's currently-landed segments — the resume read. A resumed
+    /// segmented upload can see where it stopped: which seqs landed, total staged bytes.
+    /// 404 means the session is absent or not the caller's (indistinguishable by design).
+    Progress {
+        /// The upload session id (from `blob put`'s segmented begin, or a prior `blob progress`).
+        upload: uuid::Uuid,
+    },
+    /// Read a blob's live relation edges back — the read peer of `blob relate`.
+    Relations {
+        /// The blob's id.
+        blob: uuid::Uuid,
     },
     /// Relate a blob to a resource (blob-relation peers narrow to resources).
     ///

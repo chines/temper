@@ -10,11 +10,13 @@ Commit, read, list, and relate binary blobs (writes go through the cloud API)
 Usage: temper blob [OPTIONS] <COMMAND>
 
 Commands:
-  put     Commit a file's bytes as a blob, homed in a context or cogmap you can author
-  get     Read a blob's bytes back, whole, streamed (to --out, or stdout)
-  list    List the blobs you can read (optionally scoped to one home anchor)
-  relate  Relate a blob to a resource (blob-relation peers narrow to resources)
-  help    Print this message or the help of the given subcommand(s)
+  put        Commit a file's bytes as a blob, homed in a context or cogmap you can author
+  get        Read a blob's bytes back, whole, streamed (to --out, or stdout)
+  list       List the blobs you can read (optionally scoped to one home anchor)
+  progress   Read a staged upload's currently-landed segments — the resume read. A resumed segmented upload can see where it stopped: which seqs landed, total staged bytes. 404 means the session is absent or not the caller's (indistinguishable by design)
+  relations  Read a blob's live relation edges back — the read peer of `blob relate`
+  relate     Relate a blob to a resource (blob-relation peers narrow to resources)
+  help       Print this message or the help of the given subcommand(s)
 
 Options:
       --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -103,6 +105,42 @@ Options:
       --embed-threads <N>        ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
       --color <COLOR>            Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
   -h, --help                     Print help
+```
+
+### `temper blob progress`
+
+```text
+Read a staged upload's currently-landed segments — the resume read. A resumed segmented upload can see where it stopped: which seqs landed, total staged bytes. 404 means the session is absent or not the caller's (indistinguishable by design)
+
+Usage: temper blob progress [OPTIONS] <UPLOAD>
+
+Arguments:
+  <UPLOAD>  The upload session id (from `blob put`'s segmented begin, or a prior `blob progress`)
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
+```
+
+### `temper blob relations`
+
+```text
+Read a blob's live relation edges back — the read peer of `blob relate`
+
+Usage: temper blob relations [OPTIONS] <BLOB>
+
+Arguments:
+  <BLOB>  The blob's id
+
+Options:
+      --vault <VAULT>      Path to vault (overrides TEMPER_VAULT and auto-detection)
+      --format <FORMAT>    Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
+      --embed-threads <N>  ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1
+      --color <COLOR>      Color output: auto | always | never (default: auto). Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto
+  -h, --help               Print help
 ```
 
 ### `temper blob relate`

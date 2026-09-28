@@ -101,6 +101,30 @@ pub fn run(action: BlobAction, fmt: OutputFormat) -> Result<()> {
                 Ok(())
             })
         }),
+        BlobAction::Progress { upload } => crate::actions::runtime::with_client(|client| {
+            Box::pin(async move {
+                let progress = client
+                    .blobs()
+                    .progress(upload)
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)?;
+                let rendered = crate::format::render(&progress, fmt)?;
+                output::plain(rendered);
+                Ok(())
+            })
+        }),
+        BlobAction::Relations { blob } => crate::actions::runtime::with_client(|client| {
+            Box::pin(async move {
+                let rows = client
+                    .blobs()
+                    .relations(blob)
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)?;
+                let rendered = crate::format::render(&rows, fmt)?;
+                output::plain(rendered);
+                Ok(())
+            })
+        }),
         BlobAction::Relate {
             blob,
             to,

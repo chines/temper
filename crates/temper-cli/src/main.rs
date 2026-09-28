@@ -3,8 +3,8 @@ use temper_cli::cli::{
     AdminAction, AdminConnectionAction, AdminMachineAction, AdminProfilesAction,
     AdminRequestsAction, AdminReviewsAction, AdminSamlAction, AdminSlackAction,
     AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction,
-    DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, SchemaAction, SkillAction,
-    SlackAction, StewardCmd, TeamAction,
+    DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, ResourceMetaAction,
+    SchemaAction, SkillAction, SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -369,6 +369,41 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         act: act.into_act_input()?,
                     },
                 ),
+                ResourceAction::Meta { action } => match action {
+                    ResourceMetaAction::Get { r#ref } => {
+                        temper_cli::commands::resource::meta_get(&r#ref, output_format)
+                    }
+                    ResourceMetaAction::Set {
+                        r#ref,
+                        managed,
+                        open,
+                        act,
+                    } => temper_cli::commands::resource::meta_set(
+                        temper_cli::commands::resource::MetaSetParams {
+                            r#ref: &r#ref,
+                            managed: &managed,
+                            open: &open,
+                            act: act.into_act_input()?,
+                            format: output_format,
+                        },
+                    ),
+                },
+                ResourceAction::AuditCitation {
+                    block,
+                    source,
+                    value,
+                    reason,
+                    act,
+                } => temper_cli::commands::resource::audit_citation(
+                    temper_cli::commands::resource::AuditCitationParams {
+                        block,
+                        source: &source,
+                        value,
+                        reason: reason.as_deref(),
+                        act: act.into_act_input()?,
+                        format: output_format,
+                    },
+                ),
                 ResourceAction::Delete { r#ref, force, act } => {
                     temper_cli::commands::resource::delete(
                         &config,
@@ -450,6 +485,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         },
                     )
                 }
+                DataArtifactAction::Get { artifact } => {
+                    temper_cli::commands::data_artifact::get_by_id(&artifact, output_format)
+                }
                 DataArtifactAction::Commit {
                     r#ref,
                     kind,
@@ -474,12 +512,13 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     },
                 ),
                 DataArtifactAction::Schema { action } => match action {
-                    SchemaAction::List { context } => {
+                    SchemaAction::List { context, cogmap } => {
                         temper_cli::actions::runtime::with_client(|client| {
                             Box::pin(async move {
                                 temper_cli::commands::data_artifact::schema_list_remote(
                                     client,
-                                    &context,
+                                    context.as_deref(),
+                                    cogmap.as_deref(),
                                     output_format,
                                 )
                                 .await
@@ -500,6 +539,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     }
                     SchemaAction::Declare {
                         r#ref,
+                        cogmap,
                         kind,
                         kind_owner,
                         enforcement,
@@ -518,7 +558,8 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                             temper_cli::commands::data_artifact::schema_declare_remote(
                                 client,
                                 temper_cli::commands::data_artifact::SchemaDeclareParams {
-                                    context: &r#ref,
+                                    context: r#ref.as_deref(),
+                                    cogmap: cogmap.as_deref(),
                                     kind: &kind,
                                     kind_owner: kind_owner.as_deref(),
                                     enforcement: wire_enforcement,
@@ -679,6 +720,19 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                 temper_cli::actions::runtime::with_client(|client| {
                     Box::pin(async move {
                         temper_cli::commands::context_cmd::materialize_remote(
+                            client,
+                            &context,
+                            threshold,
+                            output_format,
+                        )
+                        .await
+                    })
+                })
+            }
+            ContextAction::MaterializeDelta { context, threshold } => {
+                temper_cli::actions::runtime::with_client(|client| {
+                    Box::pin(async move {
+                        temper_cli::commands::context_cmd::materialize_delta_remote(
                             client,
                             &context,
                             threshold,
@@ -1736,6 +1790,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             CogmapCmd::Analytics { cogmap } => commands::cogmap::analytics(&cogmap, output_format),
             CogmapCmd::Materialize { cogmap, threshold } => {
                 commands::cogmap::materialize(&cogmap, threshold, output_format)
+            }
+            CogmapCmd::MaterializeDelta { cogmap, threshold } => {
+                commands::cogmap::materialize_delta(&cogmap, threshold, output_format)
             }
             CogmapCmd::Bind { r#ref, team } => commands::cogmap::bind(&r#ref, &team, output_format),
             CogmapCmd::Unbind { r#ref, team } => {

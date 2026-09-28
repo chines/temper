@@ -2596,6 +2596,135 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// `temper resource meta get <ref>` — the frontmatter-only read (`GET /api/resources/{id}/meta`).
+/// The body is untouched; both meta tiers answer filled. 404 when absent or unreadable.
+pub fn meta_get(r#ref: &str, fmt: crate::format::OutputFormat) -> Result<()> {
+    let id = temper_workflow::operations::parse_ref(r#ref)?;
+    let view = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .get_meta(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    let rendered = crate::format::render(&view, fmt)?;
+    output::plain(rendered);
+    Ok(())
+}
+
+/// Args for [`meta_set`] — the metadata-only full-replace write.
+pub struct MetaSetParams<'a> {
+    pub r#ref: &'a str,
+    pub managed: &'a str,
+    pub open: &'a str,
+    pub act: temper_core::types::ActInput,
+    pub format: crate::format::OutputFormat,
+}
+
+/// `temper resource meta set <ref> --managed '<json>' --open '<json>'` — the metadata-only PUT.
+/// Both tiers named at once; the backend MERGES per key (named keys overwrite, omitted
+/// keys preserved — observed at the wire, not inherited from the route comment). No body
+/// revise, no re-chunk. Mirrors the MCP `update_resource_meta` sibling: the payload's
+/// resource_id/hash fields are vestigial wire baggage carried as named placeholders,
+/// not claims.
+pub fn meta_set(params: MetaSetParams<'_>) -> Result<()> {
+    use temper_core::types::managed_meta::MetaUpdatePayload;
+
+    let id = temper_workflow::operations::parse_ref(params.r#ref)?;
+    let managed_meta: temper_workflow::types::ManagedMeta = serde_json::from_str(params.managed)
+        .map_err(|e| {
+            TemperError::Api(format!(
+                "--managed is not a valid managed-meta object (the closed temper-* vocabulary; \
+                 an unknown key is refused): {e}"
+            ))
+        })?;
+    let open_meta: serde_json::Value = serde_json::from_str(params.open)
+        .map_err(|e| TemperError::Api(format!("--open is not valid JSON: {e}")))?;
+    if !open_meta.is_object() {
+        return Err(TemperError::Api("--open must be a JSON object".to_string()));
+    }
+
+    let payload = MetaUpdatePayload {
+        resource_id: uuid::Uuid::from(id).into(),
+        managed_meta,
+        open_meta,
+        // Vestigial wire baggage — the handler takes the id from the path and the
+        // backend recomputes hashes server-side. Empty placeholders, per the MCP sibling.
+        managed_hash: String::new(),
+        open_hash: String::new(),
+        act: params.act,
+    };
+
+    let view = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .update_meta(uuid::Uuid::from(id), &payload)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    let rendered = crate::format::render(&view, params.format)?;
+    output::plain(rendered);
+    Ok(())
+}
+
+/// Args for [`audit_citation`] — the block-addressed citation-audit write.
+pub struct AuditCitationParams<'a> {
+    pub block: uuid::Uuid,
+    pub source: &'a str,
+    pub value: f64,
+    pub reason: Option<&'a str>,
+    pub act: temper_core::types::ActInput,
+    pub format: crate::format::OutputFormat,
+}
+
+/// `temper resource audit-citation <block> --source <ref> --value <-1..1>` — the
+/// block-addressed citation-audit door (`POST /api/citation-audits`). The finding that
+/// owns the block is resolved server-side; the caller never names one.
+///
+/// Deliberately NOT `resolve_provenance_source` (the one-classifier convention): that
+/// classifier maps URLs to the `Remote` kind, and the audit door refuses every
+/// non-Resource kind — mapping a URL just to eat the door's 400 would trade a clear
+/// client-side sentence for a server round-trip. `--source` is therefore a resource ref
+/// only, and the help says so.
+pub fn audit_citation(params: AuditCitationParams<'_>) -> Result<()> {
+    use temper_core::types::citation_audit::BlockCitationAuditRequest;
+    use temper_core::types::provenance::ProvenanceSource;
+
+    if !(-1.0..=1.0).contains(&params.value) {
+        return Err(TemperError::Api(format!(
+            "--value {} is outside [-1.0, 1.0] — the signed defensibility verdict, never a \
+             claim about what the source says",
+            params.value
+        )));
+    }
+    let source_id = temper_workflow::operations::parse_ref(params.source)?;
+
+    let req = BlockCitationAuditRequest {
+        block_id: params.block,
+        source: ProvenanceSource::Resource(uuid::Uuid::from(source_id)),
+        value: params.value,
+        reason: params.reason.map(|s| s.to_string()),
+        act: params.act,
+    };
+
+    let audit_id = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .record_citation_audit_for_block(&req)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    let rendered = crate::format::render(&audit_id, params.format)?;
+    output::plain(rendered);
+    Ok(())
+}
+
 /// Args for [`annotate`] — the annotate-only provenance backfill (issue #355).
 pub struct AnnotateParams<'a> {
     /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
