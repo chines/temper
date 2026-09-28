@@ -23,9 +23,9 @@
 # Usage:
 #   .github/scripts/check-openapi-routes.sh [ROUTES_FILE]
 #
-# ROUTES_FILE defaults to crates/temper-api/src/routes.rs relative to the repo
-# root (inferred from this script's location). A path may be passed explicitly
-# for testing against fixtures.
+# With no argument the checker scans the whole routes module (every .rs under
+# crates/temper-api/src/routes/ — the paths are spread across the per-group files). A path
+# may be passed explicitly for testing against fixtures.
 #
 # Bash 3.2 compatible (macOS default): no assoc arrays, no mapfile.
 
@@ -33,7 +33,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-ROUTES_FILE="${1:-${REPO_ROOT}/crates/temper-api/src/routes.rs}"
+if [ -n "${1:-}" ]; then
+    ROUTES_SOURCES="$1"
+elif [ -d "${REPO_ROOT}/crates/temper-api/src/routes" ]; then
+    ROUTES_SOURCES="$(find "${REPO_ROOT}/crates/temper-api/src/routes" -maxdepth 1 -name '*.rs' | sort)"
+else
+    echo "ERROR: routes module not found: ${REPO_ROOT}/crates/temper-api/src/routes" >&2
+    exit 1
+fi
 
 # The operator-only / server-to-server surfaces deliberately mounted with plain
 # `.route()` and kept OUT of the OpenAPI contract. Keep in sync with the
@@ -94,8 +101,8 @@ ALLOWLIST='/api/access/admin/requests
 /api/erasure/drain
 /api/intake/webhook'
 
-if [ ! -f "$ROUTES_FILE" ]; then
-    echo "ERROR: routes file not found: $ROUTES_FILE" >&2
+if [ -n "${1:-}" ] && [ ! -f "$1" ]; then
+    echo "ERROR: routes source not found: $1" >&2
     exit 1
 fi
 
@@ -126,7 +133,7 @@ PATHS="$(awk '
             break
         }
     }
-' "$ROUTES_FILE")"
+' $ROUTES_SOURCES)"
 
 OFFENDERS=""
 while IFS= read -r path; do
@@ -141,7 +148,7 @@ EOF
 
 if [ -n "$OFFENDERS" ]; then
     {
-        echo "ERROR: undocumented plain .route(...) mount(s) in ${ROUTES_FILE#"${REPO_ROOT}/"}:"
+        echo "ERROR: undocumented plain .route(...) mount(s) in ${ROUTES_SOURCES#"${REPO_ROOT}/"}:"
         printf '%s' "$OFFENDERS"
         echo ""
         echo "A plain .route(...) is axum-only — the route never enters the OpenAPI"

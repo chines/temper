@@ -3,7 +3,7 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# audit-route-auth.sh freezes the unauthenticated route set of crates/temper-api/src/routes.rs —
+# audit-route-auth.sh freezes the unauthenticated route set of crates/temper-api/src/routes/ —
 # and ONLY that file. temper-mcp's router (crates/temper-mcp/src/router.rs) is a second routing
 # surface, built in a different shape: one `build_router` function assembling sub-routers inline
 # with `.merge()`. A new public route added to THAT surface trips no guard. This script freezes

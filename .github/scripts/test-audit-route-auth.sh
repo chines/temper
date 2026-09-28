@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # .github/scripts/test-audit-route-auth.sh
 #
-# Test harness for audit-route-auth.sh's (b) WIRING assertions. Runs the auditor against the real
-# routes.rs and against fixtures DERIVED from it by deleting exactly one layer mount, asserting the
-# auditor fails and names the right builder.
+# Test harness for audit-route-auth.sh's (b) TABLE/WIRING assertions. Runs the auditor against the
+# real routes module and against fixture copies DERIVED from it by one targeted mutation each,
+# asserting the auditor fails and names the reason.
 #
 # WHY A HARNESS RATHER THAN A COMMENT
 # -----------------------------------
-# The wiring assertion used to be a whole-file `grep -q` for each layer's name. Every signature
-# gate is mounted TWICE — in `create_app` AND in `create_internal_app` — so deleting one mount left
-# the name present and the auditor GREEN, while one deployed surface served that route group
-# unauthenticated. A guard that cannot fail is worse than no guard: it emits a green tick that
-# means nothing. The tests below are the evidence that this one CAN fail, re-run on every CI run.
+# The wiring assertion must be able to fail. It used to be a whole-file `grep -q` per layer name;
+# every signature gate was mounted TWICE (create_app AND create_internal_app), so deleting one
+# mount left the name present and the auditor GREEN while one deployed surface served the group
+# ungated. The route table moved the surface again: both builders now consume ONE table through
+# ONE apply_tier, so the possible regressions are a middleware lost from a TIER STACK, a row's
+# TIER quietly changed, or a builder STOPPING CONSUMING the table. The fixtures below perform
+# exactly those mutations on copies of the module and assert the auditor CAN fail, with the right
+# message, on every CI run.
 #
-# Fixtures are derived from the live routes.rs rather than hand-written, so they cannot rot into
-# testing a shape the file no longer has.
+# Fixtures are derived from the live module rather than hand-written, so they cannot rot into
+# testing a shape the code no longer has.
 #
 #   bash .github/scripts/test-audit-route-auth.sh
 
@@ -23,26 +26,26 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AUDIT_SCRIPT="${SCRIPT_DIR}/audit-route-auth.sh"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-REAL_ROUTES="${REPO_ROOT}/crates/temper-api/src/routes.rs"
+REAL_ROUTES="${REPO_ROOT}/crates/temper-api/src/routes"
 PASS=0
 FAIL=0
 
 FIXTURE_DIR="$(mktemp -d)"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 
-# run_test NAME ROUTES_FILE EXPECTED_EXIT [EXPECTED_SUBSTRING]
+# run_test NAME ROUTES_PATH EXPECTED_EXIT [EXPECTED_SUBSTRING]
 #
 # A fixture never matches the reviewed route BASELINE, so exit code alone cannot distinguish "the
 # wiring assertion bit" from "the baseline diff tripped". EXPECTED_SUBSTRING pins the actual reason.
 run_test() {
     local test_name="$1"
-    local routes_file="$2"
+    local routes_path="$2"
     local expected_exit="$3"
     local expected_substr="${4:-}"
 
     local output actual_exit
     set +e
-    output="$(ROUTES_FILE="$routes_file" bash "$AUDIT_SCRIPT" 2>&1)"
+    output="$(ROUTES_FILE="$routes_path" bash "$AUDIT_SCRIPT" 2>&1)"
     actual_exit=$?
     set -e
 
@@ -64,57 +67,65 @@ run_test() {
     PASS=$((PASS + 1))
 }
 
-# drop_layer_in BUILDER LAYER OUTFILE — copy the real routes.rs, deleting the line that mounts
-# LAYER inside BUILDER's body only. Models a mount removed from ONE app builder: the exact edit the
-# old whole-file grep could not see.
-drop_layer_in() {
-    awk -v fname="$1" -v layer="$2" '
-        $0 ~ "^(pub )?fn "fname"\\(" { inside = 1 }
-        inside && index($0, layer) > 0 { next }
-        inside && /^\}/ { inside = 0 }
-        { print }
-    ' "$REAL_ROUTES" > "$3"
+# copy_module OUTDIR — a fresh copy of the live routes module to mutate.
+copy_module() {
+    cp -R "$REAL_ROUTES" "$1"
 }
 
-echo "Running audit-route-auth.sh wiring tests..."
+echo "Running audit-route-auth.sh table/wiring tests..."
 echo ""
 
-# --- (a) the real routes.rs passes: every layer mounted in every builder that serves it ---
-run_test "real routes.rs: passes" "$REAL_ROUTES" 0
+# --- (a) the real routes module passes: every row present with its tier, every stack complete ---
+run_test "real routes module: passes" "$REAL_ROUTES" 0
 
-# --- (b) each signature gate dropped from create_internal_app ONLY must fail ---
-# This is the regression the whole-file grep missed: the layer name is still present (create_app
-# still mounts it), yet the internal Vercel function would serve the group ungated.
-for layer in require_internal_signature require_slack_link_signature require_slack_mint_signature; do
-    FIX="${FIXTURE_DIR}/internal_no_${layer}.rs"
-    drop_layer_in create_internal_app "$layer" "$FIX"
-    run_test "${layer} dropped from create_internal_app only: fails" "$FIX" 1 \
-        "'${layer}' not mounted in create_internal_app()"
-done
+# --- (b) a middleware dropped from a tier stack must fail, naming the middleware ---
+# The gated tier losing require_auth: every gated group on BOTH builders would authenticate nobody.
+FIX="${FIXTURE_DIR}/no_require_auth"
+copy_module "$FIX"
+sed -i '' '/auth::require_auth/d' "$FIX/mod.rs"
+run_test "require_auth dropped from apply_tier: fails" "$FIX" 1 \
+    "'auth::require_auth' not applied by apply_tier"
 
-# --- (c) each signature gate dropped from create_app ONLY must fail, symmetrically ---
-for layer in require_internal_signature require_slack_link_signature require_slack_mint_signature; do
-    FIX="${FIXTURE_DIR}/public_no_${layer}.rs"
-    drop_layer_in create_app "$layer" "$FIX"
-    run_test "${layer} dropped from create_app only: fails" "$FIX" 1 \
-        "'${layer}' not mounted in create_app()"
-done
+# The reconcile signature lost: internal_routes serves its HMAC group ungated.
+FIX="${FIXTURE_DIR}/no_internal_signature"
+copy_module "$FIX"
+sed -i '' '/require_internal_signature/d' "$FIX/mod.rs"
+run_test "require_internal_signature dropped from apply_tier: fails" "$FIX" 1 \
+    "'require_internal_signature' not applied by apply_tier"
 
-# --- (d) the user-auth layers, dropped from create_app ---
-for layer in 'auth::require_auth' 'require_system_access'; do
-    FIX="${FIXTURE_DIR}/no_$(echo "$layer" | tr -c 'a-zA-Z0-9' '_').rs"
-    drop_layer_in create_app "$layer" "$FIX"
-    run_test "${layer} dropped from create_app: fails" "$FIX" 1 \
-        "'${layer}' not mounted in create_app()"
-done
+# --- (c) a row's tier quietly changed must fail, naming the group ---
+# internal_routes flipped to SelfGated is exactly the "serve it ungated" edit the old
+# per-builder grep could not see either; the row pin is what makes it visible.
+FIX="${FIXTURE_DIR}/tier_flip"
+copy_module "$FIX"
+sed -i '' 's/key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile)/key: "internal_routes", tier: Tier::SelfGated/' "$FIX/mod.rs"
+run_test "internal_routes tier flipped to SelfGated: fails" "$FIX" 1 \
+    "table row changed"
+
+# --- (d) a builder that stops consuming the table must fail ---
+# The internal function assembling its own router is a parallel wiring path the row pins
+# cannot see; the mount-from-table assertion is what catches it.
+FIX="${FIXTURE_DIR}/internal_app_off_table"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+marker = "pub fn create_internal_app"
+head, tail = s.split(marker, 1)
+body, rest = tail.split("\n}", 1)
+body = body.replace("app = app.merge(mount_group(&group, &state));", "// removed")
+open(p, "w").write(head + marker + body + "\n}" + rest)
+PYEOF
+run_test "create_internal_app not mounting from the table: fails" "$FIX" 1 \
+    "does not mount from the route table"
 
 # --- (e) a renamed/removed app builder is caught rather than silently skipped ---
-# An empty body would make every `grep -q` in it vacuously... absent. Assert the auditor says so
-# explicitly instead of reporting a confusing per-layer miss for a builder that does not exist.
-RENAMED="${FIXTURE_DIR}/renamed_builder.rs"
-sed 's/^pub fn create_internal_app(/pub fn create_system_app(/' "$REAL_ROUTES" > "$RENAMED"
-run_test "create_internal_app renamed: fails loudly" "$RENAMED" 1 \
-    "app builder 'create_internal_app' not found"
+FIX="${FIXTURE_DIR}/renamed_builder"
+copy_module "$FIX"
+sed -i '' 's/^pub fn create_internal_app(/pub fn create_system_app(/' "$FIX/mod.rs"
+run_test "create_internal_app renamed: fails loudly" "$FIX" 1 \
+    "does not mount from the route table"
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"

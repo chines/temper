@@ -23,6 +23,26 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **PR 3 of the single-ingress refactor: routes.rs collapses to a declarative route table — the audit scripts assert the table**
+  A pure route-wiring refactor, declared because the wire-touched path moved: the twelve
+  sub-router functions in `routes.rs` (1,226 lines) become per-group files under
+  `crates/temper-api/src/routes/`, one table in `mod.rs` maps every group key to its
+  auth tier, the tier's middleware stack is applied in exactly one place (`apply_tier`),
+  and both app builders consume the same table (the duplicated internal-stack wiring in
+  `create_app`/`create_internal_app` dies with it). The audit scripts re-point at the
+  table — `audit-route-auth.sh` now pins each group's exact `(group, tier)` row (stronger
+  than the per-builder layer greps it replaces) and `check-openapi-routes.sh` scans the
+  module directory. Who observes: nobody — the group set, the middleware addition order,
+  and every route's posture are byte-identical; openapi.json is byte-stable
+  (check-openapi-routes + check-openapi-pin untouched and green); no signature, refusal
+  dialect, or gate changes. The one comment corrected with evidence: the pre-table
+  "INNERMOST" relay-trust comment mis-stated axum's layer ordering (last-added layer is
+  outermost, per axum 0.8.9 `Endpoint::layer`/`PathRouter::layer`); the table's row
+  comments state the true execution order — no behavior rides the correction.
+pr: self
+classes: additive
+surfaces: http
+status: signal-only
 - **PR 2 of the single-ingress refactor: the Class F conditional write-gates and the Bare-site ledger consume the typed principal — signatures, not behavior**
   Every site in PR 1's disclosed residual ledger flips from `Principal::Bare` to
   `Principal::Proof` end-to-end: the thirteen production sites (connection_service
