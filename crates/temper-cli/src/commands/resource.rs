@@ -2683,8 +2683,13 @@ pub struct AuditCitationParams<'a> {
 
 /// `temper resource audit-citation <block> --source <ref> --value <-1..1>` — the
 /// block-addressed citation-audit door (`POST /api/citation-audits`). The finding that
-/// owns the block is resolved server-side; the caller never names one. Only
-/// Resource-kind sources are auditable, so `--source` is a resource ref.
+/// owns the block is resolved server-side; the caller never names one.
+///
+/// Deliberately NOT `resolve_provenance_source` (the one-classifier convention): that
+/// classifier maps URLs to the `Remote` kind, and the audit door refuses every
+/// non-Resource kind — mapping a URL just to eat the door's 400 would trade a clear
+/// client-side sentence for a server round-trip. `--source` is therefore a resource ref
+/// only, and the help says so.
 pub fn audit_citation(params: AuditCitationParams<'_>) -> Result<()> {
     use temper_core::types::citation_audit::BlockCitationAuditRequest;
     use temper_core::types::provenance::ProvenanceSource;

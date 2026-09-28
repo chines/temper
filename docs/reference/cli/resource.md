@@ -514,7 +514,7 @@ Options:
 ```text
 Read or replace a resource's frontmatter without touching the body — the dedicated metadata-only door (`GET/PUT /api/resources/{id}/meta`).
 
-Distinct from `resource update`: that PATCHes frontmatter from typed flags and can carry a body revise; this door states the meta tiers in full and never re-chunks or re-embeds.
+Distinct from `resource update`: that PATCHes frontmatter from typed flags and can carry a body revise; this door names both tiers at once and merges per key.
 
 Usage: temper resource meta [OPTIONS] <COMMAND>
 
@@ -585,7 +585,7 @@ Arguments:
 
 Options:
       --managed <MANAGED>
-          Managed (temper-) frontmatter as a JSON object string — the closed vocabulary only; an unknown temper-* key is refused client-side, there is no catch-all. Named keys overwrite; omitted keys are preserved
+          Managed (temper-) frontmatter as a JSON object string — the closed vocabulary only; an unknown temper-* key is refused client-side, there is no catch-all. Named keys overwrite; omitted keys are preserved. NOTE: a managed key set to null is a silent NO-OP (deserialized to absent → preserved by the backend merge); there is no clear channel on the managed tier
 
       --vault <VAULT>
           Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -594,7 +594,7 @@ Options:
           Output format: json | toon (default: toon on a TTY, json otherwise). Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default
 
       --open <OPEN>
-          Open (caller-defined) frontmatter as a JSON object string. Named keys overwrite; omitted keys are preserved (the additive channel is `resource update --open-meta-add`)
+          Open (caller-defined) frontmatter as a JSON object string. Named keys overwrite; omitted keys are preserved (the additive channel is `resource update --open-meta-add`). A named key set to null reads back as absent
 
       --embed-threads <N>
           ONNX intra-op threads for embedding. `0` = let ONNX Runtime decide. Default: this machine's performance-core count (NOT its total core count — efficiency cores measurably slow the batch down). Precedence: --embed-threads → TEMPER_ONNX_INTRA_THREADS → detected → 1

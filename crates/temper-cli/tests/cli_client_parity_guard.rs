@@ -12,15 +12,18 @@
 //! inventory that goes stale the day a method lands. A method added to temper-client
 //! without a CLI caller turns this red on its own and names itself in the failure.
 //!
-//! # The matcher is deliberately loose, and that is the safe direction
+//! # The matcher is deliberately loose — read the guarantee precisely
 //!
 //! A method counts as covered when `<method>(` appears anywhere in
-//! `crates/temper-cli/src/` as a call. That cannot distinguish which sub-client a
-//! `.get(` belongs to — so a false RED is possible (two families sharing a method
-//! name, only one actually called), and a false GREEN is not: a `.name(` match IS a
-//! caller of something with that exact name, and the allowlist adjudicates the
-//! homonym. The failure mode of a loose matcher is a documented allowlist row, not a
-//! silent gap.
+//! `crates/temper-cli/src/` as a call. The guard's guaranteed direction: **a method
+//! with no CLI caller and no allowlist row turns this red, naming itself.** The
+//! converse is NOT guaranteed — the matcher cannot tell which sub-client a `.get(`
+//! belongs to, and the CLI tree is full of non-client `.get(`/`.list(` receivers
+//! (`serde_json::Value`, reqwest builders). So a homonymous method losing its one
+//! genuine caller can stay green on a homonym's match. That residue is adjudicated by
+//! the allowlist (its stale-entry arm reddens entries whose method no longer appears
+//! uncovered — the inverse signal) and by the reviewer, not by this matcher; a tighter
+//! receiver-aware matcher is the known upgrade path if that residue ever bites.
 //!
 //! # The allowlist is the record
 //!
@@ -42,7 +45,8 @@ const INFRA_FILES: &[&str] = &[
     "lib.rs",        // the client struct's constructors and sub-client accessors
     "login.rs",      // the OAuth login flow (drives `temper auth login`)
     "login_page.rs", // the login flow's local success/failure pages
-    "upload.rs",     // temper-cloud's upload helper, not a KB door
+    "upload.rs",     // the typed temper-cloud upload client (`POST /api/upload`) — a real
+                     // wire door no CLI verb drives; exempt as out of the KB surface
 ];
 
 /// (file, method) pairs ruled client-only, each with the reason a future reader can

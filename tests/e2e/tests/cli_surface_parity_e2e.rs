@@ -10,8 +10,9 @@
 //!
 //! - `context materialize-delta` / `cogmap materialize-delta` — the formation-drift
 //!   reads; deny is the route's uniform 404.
-//! - `resource meta get/set` — the metadata-only door; PUT states BOTH tiers in full
-//!   (a tier omitted from `--open` is cleared, not merged), and never touches the body.
+//! - `resource meta get/set` — the metadata-only door; the PUT MERGES per key (named
+//!   keys overwrite, omitted keys are preserved — observed at the backend; the route
+//!   comment's "stated in full" claim does not hold), and never touches the body.
 //! - `resource audit-citation` — the block-addressed audit door; an out-of-range
 //!   `--value` is refused client-side with the verdict sentence, an absent block is the
 //!   door's 404.
@@ -424,8 +425,15 @@ async fn the_schema_cogmap_home_arms_declare_and_list_through_the_cli(pool: sqlx
         ],
     )
     .await;
-    // A missing context ref would 404 at the resolver; BOTH given refuses earlier.
-    if ok {
-        panic!("naming both homes must refuse: {faces}");
-    }
+    assert!(
+        !ok,
+        "naming both homes must refuse — the face assert below must hold on a refusal"
+    );
+    // A missing context ref would 404 at the resolver; BOTH given refuses EARLIER,
+    // client-side, with the exactly-one-home sentence — assert the FACE, not just the
+    // refusal, or the run would stay green if the validation were deleted.
+    assert!(
+        faces.contains("exactly one home"),
+        "naming both homes must refuse with the exactly-one-home sentence: {faces}"
+    );
 }

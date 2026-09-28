@@ -863,8 +863,7 @@ pub enum ResourceAction {
     /// dedicated metadata-only door (`GET/PUT /api/resources/{id}/meta`).
     ///
     /// Distinct from `resource update`: that PATCHes frontmatter from typed flags and
-    /// can carry a body revise; this door states the meta tiers in full and never
-    /// re-chunks or re-embeds.
+    /// can carry a body revise; this door names both tiers at once and merges per key.
     Meta {
         #[command(subcommand)]
         action: ResourceMetaAction,
@@ -1013,11 +1012,15 @@ pub enum ResourceMetaAction {
         /// Managed (temper-) frontmatter as a JSON object string — the closed
         /// vocabulary only; an unknown temper-* key is refused client-side, there
         /// is no catch-all. Named keys overwrite; omitted keys are preserved.
+        /// NOTE: a managed key set to null is a silent NO-OP (deserialized to
+        /// absent → preserved by the backend merge); there is no clear channel on
+        /// the managed tier.
         #[arg(long, required = true)]
         managed: String,
         /// Open (caller-defined) frontmatter as a JSON object string. Named keys
         /// overwrite; omitted keys are preserved (the additive channel is
-        /// `resource update --open-meta-add`).
+        /// `resource update --open-meta-add`). A named key set to null reads back
+        /// as absent.
         #[arg(long, required = true)]
         open: String,
         /// Per-act authorship + invocation-correlation flags.
