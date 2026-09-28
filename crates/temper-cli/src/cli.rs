@@ -2409,6 +2409,18 @@ pub enum BlobAction {
         #[arg(long, value_enum, default_value = "context")]
         home_table: CliHomeTable,
     },
+    /// Read a staged upload's currently-landed segments — the resume read. A resumed
+    /// segmented upload can see where it stopped: which seqs landed, total staged bytes.
+    /// 404 means the session is absent or not the caller's (indistinguishable by design).
+    Progress {
+        /// The upload session id (from `blob put`'s segmented begin, or a prior `blob progress`).
+        upload: uuid::Uuid,
+    },
+    /// Read a blob's live relation edges back — the read peer of `blob relate`.
+    Relations {
+        /// The blob's id.
+        blob: uuid::Uuid,
+    },
     /// Relate a blob to a resource (blob-relation peers narrow to resources).
     ///
     /// The edge homes on the blob's home anchor; retraction rides
