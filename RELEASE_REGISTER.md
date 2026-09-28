@@ -25,7 +25,7 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
 ## Since v0.5.3 — unreleased
 - **PR 2 of the single-ingress refactor: the Class F conditional write-gates and the Bare-site ledger consume the typed principal — signatures, not behavior**
   Every site in PR 1's disclosed residual ledger flips from `Principal::Bare` to
-  `Principal::Proof` end-to-end: the fourteen production sites (connection_service
+  `Principal::Proof` end-to-end: the thirteen production sites (connection_service
   get_for_caller/provision/revoke/authorize_live/grant_reach/revoke_reach,
   machine_client_service get_for_caller/revoke/rotate_secret, machine_authz
   authorize_registration/contain_reach, cogmap_service bind_team/unbind_team),

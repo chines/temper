@@ -350,8 +350,8 @@ pub async fn bind_team(
     Path(cogmap_id): Path<Uuid>,
     Json(body): Json<BindTeamRequest>,
 ) -> ApiResult<Json<BindTeamOutcome>> {
-    // Auth before writes lives in the service (`TwoSidedAuthority`), so the MCP
-    // surface — which calls the service directly — is gated identically.
+    // Auth before writes lives in the service (`TwoSidedAuthority`), so every surface —
+    // MCP included, which binds to these same routes — is gated identically.
     let outcome = cogmap_service::bind_team(&state.pool, &auth.0, cogmap_id, &body).await?;
     Ok(Json(outcome))
 }

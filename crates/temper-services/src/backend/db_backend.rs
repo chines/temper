@@ -718,6 +718,10 @@ struct ReconcileCtx {
 }
 
 impl DbBackend {
+    /// `profile_id` MUST be middleware-resolved (the HTTP handlers pass the authenticated
+    /// caller's own id) or the CLI operator's — the type carries no proof of that, which is
+    /// the Class E residue this seam accepts: the bare id is the caller's own identity, and
+    /// the gates below re-probe it. A future PR may let proof-holding callers pass the proof.
     pub fn new(pool: PgPool, profile_id: ProfileId) -> Self {
         Self { pool, profile_id }
     }
