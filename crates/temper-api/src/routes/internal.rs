@@ -35,7 +35,8 @@ pub(super) fn internal_routes() -> Router<AppState> {
 /// different keys: `internal_routes` is layered with `require_internal_signature`
 /// (`INTERNAL_RECONCILE_SECRET`), and gating this route on the reconcile secret would let
 /// either principal forge the other's calls. One scheme, two secrets, two routers — the
-/// layer is applied at each merge site so the route can never be mounted ungated.
+/// layer is applied by the table's `InternalHmac` tier, so the route can never be
+/// mounted ungated.
 /// Excluded from the OpenAPI contract entirely.
 pub(super) fn slack_link_internal_routes() -> Router<AppState> {
     Router::new().route(
@@ -54,7 +55,8 @@ pub(super) fn slack_link_internal_routes() -> Router<AppState> {
 /// Sharing one key would make compromise of the cheap capability yield the expensive one — the
 /// same reasoning that already separates `internal_routes` from `slack_link_internal_routes`,
 /// applied where the stakes are highest. One scheme, three secrets, three routers — the layer is
-/// applied at each merge site so the route can never be mounted ungated.
+/// applied by the table's `InternalHmac` tier, so the route can never be mounted
+/// ungated.
 /// Excluded from the OpenAPI contract entirely.
 pub(super) fn slack_mint_internal_routes() -> Router<AppState> {
     Router::new().route(

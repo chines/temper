@@ -127,6 +127,51 @@ sed -i '' 's/^pub fn create_internal_app(/pub fn create_system_app(/' "$FIX/mod.
 run_test "create_internal_app renamed: fails loudly" "$FIX" 1 \
     "does not mount from the route table"
 
+# --- (f) a row's build fn pointed at another group's fn must fail ---
+# The one-token edit the table made easy: swap the gated row's build fn for public's and every
+# (key, tier) pin stays textually true while the gated API mounts with no middleware at all.
+FIX="${FIXTURE_DIR}/build_fn_swap"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace(
+    'Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes),',
+    'Group { key: "gated_routes", tier: Tier::Gated, build: Documented(public_routes),')
+open(p, "w").write(s)
+PYEOF
+run_test "gated row's build fn swapped to public_routes: fails" "$FIX" 1 \
+    "table row changed"
+
+# --- (g) a row's serves column flipped must fail ---
+# webhook_intake (the broker-attestation door) gaining BothBuilders puts it on the second
+# deployed Vercel function with zero signal; the reverse flip un-serves a signature group.
+FIX="${FIXTURE_DIR}/serves_flip"
+copy_module "$FIX"
+sed -i '' 's/key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly/key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::BothBuilders/' "$FIX/mod.rs"
+run_test "webhook row's serves flipped to BothBuilders: fails" "$FIX" 1 \
+    "table row changed"
+
+# --- (h) a middleware pair swapped inside a tier arm must fail the order pin ---
+# Presence-greps stay green through a swap; the order pin is what catches it.
+FIX="${FIXTURE_DIR}/order_swap"
+copy_module "$FIX"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+gated_arm = s.split("Tier::Gated => router", 1)[1].split("Tier::InternalHmac", 1)[0]
+swapped = gated_arm.replace(
+    "system_access::require_system_access,\n            ))\n            .layer(from_fn_with_state(state.clone(), auth::require_auth))",
+    "auth::require_auth,\n            ))\n            .layer(from_fn_with_state(state.clone(), system_access::require_system_access))", 1)
+assert swapped != gated_arm, "swap did not apply"
+s = s.replace(gated_arm, swapped, 1)
+open(p, "w").write(s)
+PYEOF
+run_test "Gated arm's auth/system-access pair swapped: fails" "$FIX" 1 \
+    "order pin"
+
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed (total: $((PASS + FAIL)))"
 [ "$FAIL" -eq 0 ]

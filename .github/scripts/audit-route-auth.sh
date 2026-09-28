@@ -123,6 +123,27 @@ slack_link_public_routes	handlers::slack_link::callback
 webhook_intake_routes	handlers::webhook_intake::receive
 EOF
 
+# The gated↔auth_only widening boundary: auth_only is the ONE auth-covered group a handler can
+# move into from gated to SILENTLY DROP the system-access gate while keeping JWT auth (moves the
+# other way — into a REVIEW group — trip the review baseline above; gated itself grows freely by
+# design, so freezing ITS set would trip on every new documented route). Baseline auth_only's
+# handler set: a handler ADDED here (a gated→auth_only move among them) fails until acknowledged.
+read -r -d '' AUTH_ONLY_BASELINE <<'EOF' || true
+auth_only_routes	handlers::access::create_request
+auth_only_routes	handlers::access::create_review_request
+auth_only_routes	handlers::access::get_own_request
+auth_only_routes	handlers::access::get_settings
+auth_only_routes	handlers::access::withdraw_request
+auth_only_routes	handlers::invitations::accept
+auth_only_routes	handlers::invitations::count_mine
+auth_only_routes	handlers::invitations::decline
+auth_only_routes	handlers::invitations::list_mine
+auth_only_routes	handlers::profiles::get
+auth_only_routes	handlers::profiles::list_auth_links
+auth_only_routes	handlers::profiles::update
+auth_only_routes	handlers::slack_disconnect::disconnect_me
+EOF
+
 # Every (sub-router group, handler) pair declared in the routes module, keyed on the handler ident
 # (stable across single-line and multi-line `.route(` / `routes!(` forms). Each group fn lives in
 # its own file with its comments, so attribution is per-file and exact.
@@ -177,28 +198,32 @@ fn_body() {
   ' $ROUTES_FILES
 }
 
-# require_tier GROUP TIER_SPELLING — the row asserting GROUP must exist with exactly TIER_SPELLING.
-require_tier() {
-  local group="$1" tier="$2"
-  grep -Eq "key: \"$group\", tier: $tier" $ROUTES_FILES || {
-    echo "audit-route-auth: FAIL — table row changed: no row 'key: \"$group\", tier: $tier'" >&2
-    echo "  A group's tier is its reviewed auth posture. If the change is intentional it must be" >&2
-    echo "  reviewed and this assertion updated together with routes/mod.rs." >&2
+# require_row GROUP FULL_ROW_TEXT — the row asserting GROUP must exist VERBATIM: tier, build fn,
+# body_limit and serves all pinned. The #[rustfmt::skip] guarantee makes the whole row one
+# greppable line, so a one-token edit anywhere on it (a tier changed, a build fn pointed at
+# another group's fn, a body limit nulled, a group mounted by a builder that never served it)
+# fails here instead of passing green through a table that no longer says what it mounts.
+require_row() {
+  local group="$1" row="$2"
+  grep -qF -- "$row" $ROUTES_FILES || {
+    echo "audit-route-auth: FAIL — table row changed: no row matching: $row" >&2
+    echo "  A row's tier, build fn, body limit and served-by set are its reviewed posture. If the" >&2
+    echo "  change is intentional it must be reviewed and this assertion updated with routes/mod.rs." >&2
     fail=1
   }
 }
 
-require_tier 'public_routes'              'Tier::Public'
-require_tier 'auth_only_routes'           'Tier::AuthOnly'
-require_tier 'gated_routes'               'Tier::Gated'
-require_tier 'blob_commit_routes'         'Tier::Gated'
-require_tier 'blob_segment_routes'        'Tier::Gated'
-require_tier 'internal_routes'            'Tier::InternalHmac\(SignatureKind::Reconcile\)'
-require_tier 'slack_link_internal_routes' 'Tier::InternalHmac\(SignatureKind::SlackLink\)'
-require_tier 'slack_mint_internal_routes' 'Tier::InternalHmac\(SignatureKind::SlackMint\)'
-require_tier 'slack_link_public_routes'   'Tier::SelfGated'
-require_tier 'embed_internal_routes'      'Tier::SelfGated'
-require_tier 'webhook_intake_routes'      'Tier::SelfGated'
+require_row 'public_routes'              'Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly },'
+require_row 'auth_only_routes'           'Group { key: "auth_only_routes", tier: Tier::AuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly },'
+require_row 'gated_routes'               'Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly },'
+require_row 'blob_commit_routes'         'Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly },'
+require_row 'blob_segment_routes'        'Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly },'
+require_row 'internal_routes'            'Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders },'
+require_row 'slack_link_internal_routes' 'Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders },'
+require_row 'slack_mint_internal_routes' 'Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders },'
+require_row 'slack_link_public_routes'   'Group { key: "slack_link_public_routes", tier: Tier::SelfGated, build: Undocumented(slack_link_public_routes), body_limit: None, serves: Serves::AppOnly },'
+require_row 'embed_internal_routes'      'Group { key: "embed_internal_routes", tier: Tier::SelfGated, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders },'
+require_row 'webhook_intake_routes'      'Group { key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly },'
 
 # The tier stacks: apply_tier is the one place a middleware stack is spelled. Every middleware
 # name the postures promise must appear in its body — a name dropped here un-gates every group
@@ -222,6 +247,36 @@ assert_in_body 'require_route_rate_limit'
 assert_in_body 'require_internal_signature'
 assert_in_body 'require_slack_link_signature'
 assert_in_body 'require_slack_mint_signature'
+# The body ceilings are security controls too: the gated router's 25 MB inheritance and the
+# doors' inner limits. A name dropped here re-widens a streamed-body window silently.
+assert_in_body 'DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)'
+
+# ORDER is load-bearing in apply_tier, not just presence: the arms add middlewares INNER first
+# (last-added is outermost and runs first, per the module doc), so the byte offsets must be
+# strictly increasing along each arm's addition order. A swapped pair changes which refusal an
+# unauthenticated caller meets first — a behavior change presence-greps stay green through.
+require_order() {
+  local fn_name="$1"; shift
+  fn_body "$fn_name" | awk -v fn="$fn_name" -v names="$*" '
+    BEGIN { n = split(names, arr, " ") }
+    { body = body $0 "\n" }
+    END {
+      cursor = 1; bad = 0
+      for (i = 1; i <= n; i++) {
+        # Sequential search: each name must first occur AFTER the previous one, so a name
+        # reused across match arms (auth::require_auth is in AuthOnly AND Gated) resolves to
+        # THIS arm occurrence, not the first one in the file.
+        idx = index(substr(body, cursor), arr[i])
+        if (idx == 0) { print "audit-route-auth: FAIL — order pin: \x27" arr[i] "\x27 not found in " fn "'"'"'s body (after offset " cursor-1 ")" > "/dev/stderr"; bad = 1; next }
+        abs = cursor + idx - 1
+        if (abs < cursor) { print "audit-route-auth: FAIL — order pin: \x27" arr[i] "\x27 out of addition order in " fn > "/dev/stderr"; bad = 1 }
+        cursor = abs + length(arr[i])
+      }
+      exit bad
+    }' || fail=1
+}
+require_order apply_tier 'system_access::require_system_access' 'auth::require_auth' 'require_relay_trust' 'DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)'
+require_order apply_tier 'rate_limit::require_route_rate_limit' 'internal_auth::require_internal_signature'
 
 # Both builders must mount FROM the table. A builder that stops consuming it (e.g. re-derives its
 # own router) is a second, drift-prone wiring path — the exact thing the table exists to prevent.
@@ -257,6 +312,19 @@ if ! diff <(printf '%s\n' "$NORM_BASELINE") <(printf '%s\n' "$REVIEW_CURRENT") >
   echo "diff (baseline -> current):" >&2
   cat /tmp/route-auth.diff >&2
   echo "If reviewed and correct: UPDATE_BASELINE=1 .github/scripts/audit-route-auth.sh" >&2
+  fail=1
+fi
+
+# (d) The gated→auth_only widening boundary: a handler ADDED to auth_only fails until
+# acknowledged — the one auth-covered group a silent move into drops the system-access gate.
+AUTH_ONLY_CURRENT="$(printf '%s\n' "$ALL" | grep -E '^auth_only_routes'$'\t' || true)"
+NORM_AUTH_ONLY="$(printf '%s\n' "$AUTH_ONLY_BASELINE" | sort -u)"
+if ! diff <(printf '%s\n' "$NORM_AUTH_ONLY") <(printf '%s\n' "$AUTH_ONLY_CURRENT") >/tmp/route-auth-authonly.diff 2>&1; then
+  echo "audit-route-auth: FAIL — the auth_only group's handler set changed." >&2
+  echo "A handler moved INTO auth_only from a gated group drops require_system_access while keeping" >&2
+  echo "JWT auth — a privilege widening. diff (baseline -> current):" >&2
+  cat /tmp/route-auth-authonly.diff >&2
+  echo "If reviewed and correct: extend AUTH_ONLY_BASELINE in this script." >&2
   fail=1
 fi
 

@@ -3,7 +3,7 @@
 #
 # Guard the "OpenAPI spec is a product of the router" invariant.
 #
-# Every documented route in crates/temper-api/src/routes.rs is mounted via
+# Every documented route in crates/temper-api/src/routes/ is mounted via
 # `.routes(routes!(handler))`, which registers the axum route AND collects its
 # `#[utoipa::path]` into the spec. A route mounted with plain `.route(...)` is
 # axum-only: it never enters the OpenAPI contract. That is correct for the
@@ -44,7 +44,7 @@ fi
 
 # The operator-only / server-to-server surfaces deliberately mounted with plain
 # `.route()` and kept OUT of the OpenAPI contract. Keep in sync with the
-# comments in routes.rs (gated_routes / internal_routes / embed_internal_routes /
+# comments in the routes module (gated.rs / internal.rs / embed_internal.rs /
 # webhook_intake_routes).
 #
 # On /api/intake/webhook: its caller is Vercel Connect forwarding a third-party system's
@@ -157,7 +157,7 @@ if [ -n "$OFFENDERS" ]; then
         echo ""
         echo "If the route is genuinely operator-only / server-to-server and must stay"
         echo "out of the contract, add its path to the allowlist in this script (and"
-        echo "keep the routes.rs comment explaining why)."
+        echo "keep the route-group comment explaining why)."
     } >&2
     exit 1
 fi

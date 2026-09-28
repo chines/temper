@@ -147,8 +147,9 @@ fn route_table() -> Vec<Group> {
         // The three internal HMAC groups — one scheme, three secrets, three routers.
         // Signature gates mount in BOTH builders; losing one mount is not a downgrade
         // to authenticated-but-broad, it is the group served ungated on that surface.
-        // The rate-limit layer sits INNER to the signature so an unsigned caller gets
-        // the 401 and never spends the signed caller's budget.
+        // The rate-limit layer rides the RECONCILE pair only (the base wiring applied
+        // it there and nowhere else) and sits INNER to the signature so an unsigned
+        // caller gets the 401 and never spends the signed caller's budget.
         Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders },
         Group { key: "slack_link_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackLink), build: Undocumented(slack_link_internal_routes), body_limit: None, serves: Serves::BothBuilders },
         Group { key: "slack_mint_internal_routes", tier: Tier::InternalHmac(SignatureKind::SlackMint), build: Undocumented(slack_mint_internal_routes), body_limit: None, serves: Serves::BothBuilders },
@@ -161,7 +162,10 @@ fn route_table() -> Vec<Group> {
         Group { key: "embed_internal_routes", tier: Tier::SelfGated, build: Undocumented(embed_internal_routes), body_limit: None, serves: Serves::BothBuilders },
         // Vercel Connect's webhook intake — self-gated on the broker's RS256
         // attestation (a third party's signature against a remote JWKS, not a shared
-        // secret), and create_app only: Connect forwards to the public host.
+        // secret), and create_app only: Connect forwards to the public host. The row's
+        // body_limit is None because the door sets its own 25 MiB
+        // (GITHUB_MAX_WEBHOOK_BYTES) INSIDE the group fn — the table column is not the
+        // whole truth for this one door; the limit is not config-derivable at the table.
         Group { key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly },
     ]
 }
@@ -213,10 +217,17 @@ fn apply_tier(router: Router<AppState>, tier: Tier, state: &AppState) -> Router<
             // the doors that chose their own limits stay inner and win.
             .layer(DefaultBodyLimit::max(GATED_MAX_BODY_BYTES)),
         Tier::InternalHmac(kind) => {
-            let router = router.layer(from_fn_with_state(
-                state.clone(),
-                temper_services::rate_limit::require_route_rate_limit,
-            ));
+            // The rate-limit layer rides ONLY the reconcile pair's router — the base wiring
+            // applied it there and to nothing else (the slack groups carry signature only).
+            // Extending it to the slack groups is a declared behavioral change, not a
+            // refactor; do not fold it in here silently.
+            let router = match kind {
+                SignatureKind::Reconcile => router.layer(from_fn_with_state(
+                    state.clone(),
+                    temper_services::rate_limit::require_route_rate_limit,
+                )),
+                SignatureKind::SlackLink | SignatureKind::SlackMint => router,
+            };
             match kind {
                 SignatureKind::Reconcile => router.layer(from_fn_with_state(
                     state.clone(),
