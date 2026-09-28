@@ -3,8 +3,8 @@ use temper_cli::cli::{
     AdminAction, AdminConnectionAction, AdminMachineAction, AdminProfilesAction,
     AdminRequestsAction, AdminReviewsAction, AdminSamlAction, AdminSlackAction,
     AdminSubscriptionAction, AuthAction, Cli, CogmapCmd, Commands, ConfigAction, ContextAction,
-    DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, SchemaAction, SkillAction,
-    SlackAction, StewardCmd, TeamAction,
+    DataArtifactAction, InvocationCmd, MemoryAction, ResourceAction, ResourceMetaAction,
+    SchemaAction, SkillAction, SlackAction, StewardCmd, TeamAction,
 };
 use temper_cli::commands;
 use temper_cli::format::OutputFormat;
@@ -369,6 +369,25 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                         act: act.into_act_input()?,
                     },
                 ),
+                ResourceAction::Meta { action } => match action {
+                    ResourceMetaAction::Get { r#ref } => {
+                        temper_cli::commands::resource::meta_get(&r#ref, output_format)
+                    }
+                    ResourceMetaAction::Set {
+                        r#ref,
+                        managed,
+                        open,
+                        act,
+                    } => temper_cli::commands::resource::meta_set(
+                        temper_cli::commands::resource::MetaSetParams {
+                            r#ref: &r#ref,
+                            managed: &managed,
+                            open: &open,
+                            act: act.into_act_input()?,
+                            format: output_format,
+                        },
+                    ),
+                },
                 ResourceAction::Delete { r#ref, force, act } => {
                     temper_cli::commands::resource::delete(
                         &config,

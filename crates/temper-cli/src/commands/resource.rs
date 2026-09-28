@@ -2596,6 +2596,82 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// `temper resource meta get <ref>` — the frontmatter-only read (`GET /api/resources/{id}/meta`).
+/// The body is untouched; both meta tiers answer filled. 404 when absent or unreadable.
+pub fn meta_get(r#ref: &str, fmt: crate::format::OutputFormat) -> Result<()> {
+    let id = temper_workflow::operations::parse_ref(r#ref)?;
+    let view = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .get_meta(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    let rendered = crate::format::render(&view, fmt)?;
+    output::plain(rendered);
+    Ok(())
+}
+
+/// Args for [`meta_set`] — the metadata-only full-replace write.
+pub struct MetaSetParams<'a> {
+    pub r#ref: &'a str,
+    pub managed: &'a str,
+    pub open: &'a str,
+    pub act: temper_core::types::ActInput,
+    pub format: crate::format::OutputFormat,
+}
+
+/// `temper resource meta set <ref> --managed '<json>' --open '<json>'` — the meta-only PUT.
+/// BOTH tiers are stated in full (omitted keys cleared); no body revise, no re-chunk.
+/// Mirrors the MCP `update_resource_meta` sibling: the payload's resource_id/hash fields
+/// are vestigial wire baggage carried as named placeholders, not claims.
+pub fn meta_set(params: MetaSetParams<'_>) -> Result<()> {
+    use temper_core::types::managed_meta::MetaUpdatePayload;
+
+    let id = temper_workflow::operations::parse_ref(params.r#ref)?;
+    let managed_meta: temper_workflow::types::ManagedMeta = serde_json::from_str(params.managed)
+        .map_err(|e| {
+            TemperError::Api(format!(
+                "--managed is not a valid managed-meta object (the closed temper-* vocabulary; \
+                 an unknown key is refused): {e}"
+            ))
+        })?;
+    let open_meta: serde_json::Value = serde_json::from_str(params.open).map_err(|e| {
+        TemperError::Api(format!("--open is not valid JSON: {e}"))
+    })?;
+    if !open_meta.is_object() {
+        return Err(TemperError::Api(
+            "--open must be a JSON object".to_string(),
+        ));
+    }
+
+    let payload = MetaUpdatePayload {
+        resource_id: uuid::Uuid::from(id).into(),
+        managed_meta,
+        open_meta,
+        // Vestigial wire baggage — the handler takes the id from the path and the
+        // backend recomputes hashes server-side. Empty placeholders, per the MCP sibling.
+        managed_hash: String::new(),
+        open_hash: String::new(),
+        act: params.act,
+    };
+
+    let view = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .update_meta(uuid::Uuid::from(id), &payload)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    let rendered = crate::format::render(&view, params.format)?;
+    output::plain(rendered);
+    Ok(())
+}
+
 /// Args for [`annotate`] — the annotate-only provenance backfill (issue #355).
 pub struct AnnotateParams<'a> {
     /// Resource ref: a UUID or the decorated `slug-<uuid>` form.

@@ -859,6 +859,16 @@ pub enum ResourceAction {
         #[command(flatten)]
         act: ActArgs,
     },
+    /// Read or replace a resource's frontmatter without touching the body — the
+    /// dedicated metadata-only door (`GET/PUT /api/resources/{id}/meta`).
+    ///
+    /// Distinct from `resource update`: that PATCHes frontmatter from typed flags and
+    /// can carry a body revise; this door states the meta tiers in full and never
+    /// re-chunks or re-embeds.
+    Meta {
+        #[command(subcommand)]
+        action: ResourceMetaAction,
+    },
     /// Delete a resource (soft-delete via the API).
     ///
     /// Sets `is_active = false` server-side; the row is preserved. Removing a
@@ -951,6 +961,40 @@ pub enum ResourceAction {
     Facets {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ResourceMetaAction {
+    /// Read a resource's frontmatter — both tiers, body untouched.
+    ///
+    /// 404 when the resource is absent or unreadable.
+    Get {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+    },
+    /// Replace a resource's frontmatter — PUT semantics, BOTH tiers stated in full.
+    ///
+    /// A tier is replaced wholesale: keys you omit from `--managed`/`--open` are
+    /// cleared, not merged (the additive channel is `resource update --open-meta-add`).
+    /// No body revise, no re-chunk, no re-embed. 403 when the resource is readable
+    /// but not modifiable; 404 when absent or unreadable.
+    Set {
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
+        /// Managed (temper-*) frontmatter as a JSON object string — the closed
+        /// vocabulary only; an unknown temper-* key is refused client-side, there
+        /// is no catch-all. Stated in full: omitted keys are cleared.
+        #[arg(long, required = true)]
+        managed: String,
+        /// Open (caller-defined) frontmatter as a JSON object string. Stated in
+        /// full: omitted keys are cleared — pass '{"tags":[]}' to keep tags empty
+        /// deliberately, not by omission.
+        #[arg(long, required = true)]
+        open: String,
+        /// Per-act authorship + invocation-correlation flags.
+        #[command(flatten)]
+        act: ActArgs,
     },
 }
 
