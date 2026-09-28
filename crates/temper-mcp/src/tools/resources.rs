@@ -469,7 +469,8 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
 
 /// Classify each wire source (http/https URL → Remote, else ref → Resource) with the
 /// shared resolver the CLI uses; an unparseable value is a hard error, never a silent
-/// drop. The migrated handlers' version of `provenance_body`'s classification loop.
+/// drop. The door's flat-form classifier — the direct binding's `provenance_body`
+/// died with the beat G4 swap (its caller, `build_create_command`, crossed whole).
 fn resolve_sources(sources: Option<Vec<String>>) -> Result<Vec<ProvenanceSource>, rmcp::ErrorData> {
     sources
         .unwrap_or_default()

@@ -23,6 +23,56 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **Beat G4: the last mixed direct cluster crosses the network door — reblock, blobs, segmented ingest, data_artifacts(+shapes) forward as relays; the direct binding is steward-and-nothing-else**
+  The twelve direct handlers (reblock 1, blobs 2, the consolidated segmented-ingest
+  tool's 4 actions, data_artifacts 3, shapes 3) stop executing in-process and forward
+  to their deployed routes as temper-client relays — caller's bearer re-issued,
+  service credential + `mcp` carrier as default headers, refusals mapped arm-for-arm
+  from the preserved bodies through the one `AcrossAuth` idiom. Tool names, schemas,
+  descriptions byte-identical (the declaration witness holds). The retained resolver
+  (the G3d pinned pattern, adopted per Pete's 2026-09-27 ruling for reblock's
+  context scope): the `@me/…`-grammar ref resolves in-process, visibility-gated, from
+  the one validated decode — resolver and forwarded act cannot disagree on identity.
+  `build_create_command` + `provenance_body` die whole with their last caller, and
+  temper-mcp's `temper-substrate` dependency dies with them.
+  SIX DECLARED PARITY DELTAS (the G3c delta format; pinned green against the direct
+  binding first, flipped in the swap commit, named in the tool modules' headers and
+  the parity suite's header — these three sites agree): (1) finalize's
+  expectation-mismatch Conflicts (`expected_blocks` / `expected_body_hash`) — the
+  direct catch-all's `internal_error` renders the wire 409's `invalid_params` with
+  the server's own sentence, prefix and `Conflict: ` label stripped; (2)
+  `get_data_artifact`'s absent face — the direct 200-text posture ("Artifact not
+  found or not visible to you.") renders the flat route's 404 `invalid_params` with
+  the server's sentence; (3) `get_data_artifact_shape`'s absent face — same flip
+  ("shape not found"); (4) the blob read/commit/relate not-found prefixes
+  (`blob_commit: ` / `blob_relate: ` / `blob_read: `) drop for the server's bare
+  sentence (kind and gate identical); (5) the blob read result's `content_hash` is
+  now the collected bytes' own sha256 — the wire read carries no hash header, the
+  proof a whole read is what was committed moves from row attestation to
+  self-attestation; (6) the consolidated `segmented_ingest`'s `begin` becomes
+  USABLE — the flattened-create collision (serde binding the outer `content` slot
+  over `create.content`) refused every begin-by-the-advertised-shape call, the
+  dispatcher now reshapes explicitly (the in-band repair row below). The append
+  occupied-seq face is NOT a delta: both sides refuse `internal_error` (the append
+  route bridges the raise generically) — named at the pin. The blob read ceiling
+  stays byte-stable (the tool's own sentence and numbers). Accepted residuals
+  (accept-and-name, per the G3b convention): the relay's non-idempotent-retry
+  posture can double-assert a blob relation on a timed-out-but-landed write (the
+  caller's own redrive has the same property — design-ruled); the shapes-declare
+  route's act-envelope drop (both doors, filed
+  [01a0e2f0-5bdc-7b00-94d2-0fbf9d141df0](https://github.com/tasker-systems/temper/issues/));
+  the source gate's shape heuristic and the 400-label sweep's coverage are
+  unchanged. Who observes: an MCP-calling agent — every refusal face above renders
+  the server's or the tool's own sentence with kind and gate identical; the
+  ledger's `<handle>@mcp` attribution is witnessed on a real commit through the
+  door (the family's own witness test, bite-proven from the relay-client builder:
+  stripping the carrier reddens it with `@web`; a dead relay base URL reddens the
+  cluster — the door is the only path).
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
+
 - **Two MCP wire-shape defects repaired in-band ahead of beat G4's swap — the consolidated segmented-ingest `begin` becomes usable, and blob commits accept whitespace-wrapped base64**
   The beat G4 parity ground pass probed both red. (1) The consolidated
   `segmented_ingest` tool's `begin` was unreachable on the wire: the outer `content`

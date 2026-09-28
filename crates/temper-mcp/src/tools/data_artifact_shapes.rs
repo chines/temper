@@ -147,8 +147,10 @@ pub async fn declare_shape(
     let anchor = parse_home_anchor(&input.home_type, &input.home_id)?;
 
     // The act envelope assembles into the wire's typed act — never defaulted, never
-    // dropped (the G3c act-ride discipline; the wire accepts the envelope today and
-    // its drop is the separately-filed defect task 01a0e2f0-5bdc-7b00-94d2-0fbf9d141df0).
+    // dropped (the G3c act-ride discipline). The route accepts the envelope today;
+    // that it does not yet reach the declare event is the separately-filed defect
+    // task 01a0e2f0-5bdc-7b00-94d2-0fbf9d141df0 — BOTH doors drop it, so parity
+    // holds with the defect inherited.
     let confidence = match input.confidence.as_deref() {
         Some("tentative") => Some(temper_core::types::authorship::ConfidenceBand::Tentative),
         Some("probable") => Some(temper_core::types::authorship::ConfidenceBand::Probable),

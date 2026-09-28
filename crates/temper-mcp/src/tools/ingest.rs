@@ -22,14 +22,12 @@
 //! # Declared parity deltas (the direct faces pinned by
 //! # `ingest_blobs_artifacts_parity_test.rs`, flipped here deliberately)
 //!
-//! - **Append's occupied-seq Conflict**: an occupied seq refusing on re-write answers
-//!   `Conflict::Conflict` through the direct binding's generic `api_err` mapper — no Conflict
-//!   arm existed, so it fell to `internal_error`. The wire's 409 answers typed
-//!   (`ClientError::Conflict`) and renders `invalid_params` with the server's own sentence,
-//!   the `Conflict: ` label stripped.
 //! - **Finalize's expectation-mismatch Conflict** (`expected_blocks`,
-//!   `expected_body_hash`): same shape — the direct map had no `Conflict` arm; the wire's
-//!   409 renders `invalid_params` with the server's own sentence.
+//!   `expected_body_hash`): the direct map had no `Conflict` arm (the catch-all rendered
+//!   it `internal_error`); the wire's 409 renders `invalid_params` with the server's own
+//!   sentence. The append path's occupied-seq re-write is NOT a delta — both sides refuse
+//!   `internal_error` (the append route bridges the raise generically, never a typed 409);
+//!   named at the pin, not declared here.
 //! - **Finalize's whole-content-hash mismatch** (`expected_content_hash` — NOT reachable
 //!   from MCP today: the tool sends `None`, declared below): the wire answers 422
 //!   `CONTENT_INTEGRITY` typed (`ClientError::ContentIntegrity`) and renders
@@ -172,50 +170,91 @@ pub struct IngestBlocksInput {
 // `Surface::Mcp` stamp the direct command carried (now the carrier).
 
 /// The wire `IngestPayload` for a begin call: the create fields, the segment's raw
-/// text, and the segmented-begin discriminator. The MCP caller's sources grammar —
-/// `Vec<String>` of refs or URLs — resolves to the wire's typed `ProvenanceSource`s
-/// here, where the classifier lives.
-fn wire_begin(input: IngestBeginInput) -> IngestPayload {
+/// text, and the segmented-begin discriminator. The direct binding's home refusals
+/// are carried MCP-local (the `build_create_command` shape they came from): exactly
+/// one of `context_ref` / `cogmap`, the goal ref's parse failure a hard error, the
+/// sources' classifier failure a hard error ("never a silent drop"), and a
+/// managed_meta serialization failure an internal error — none silently defaulted.
+fn wire_begin(input: IngestBeginInput) -> Result<IngestPayload, rmcp::ErrorData> {
     let create = input.create;
-    IngestPayload {
+    let home_cogmap_id = create
+        .cogmap
+        .as_deref()
+        .map(|r| {
+            temper_workflow::operations::parse_ref(r)
+                .map(|p| p.uuid())
+                .map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("invalid cogmap ref: {e}"), None)
+                })
+        })
+        .transpose()?;
+    match (&create.context_ref, home_cogmap_id) {
+        (Some(_), Some(_)) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                "context_ref and cogmap are mutually exclusive; supply exactly one home"
+                    .to_string(),
+                None,
+            ));
+        }
+        (None, None) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                "no home specified — supply exactly one of context_ref or cogmap".to_string(),
+                None,
+            ));
+        }
+        _ => {}
+    }
+    let goal = create
+        .goal
+        .as_deref()
+        .map(|r| {
+            temper_workflow::operations::parse_ref(r)
+                .map(|p| p.uuid())
+                .map_err(|e| {
+                    rmcp::ErrorData::invalid_params(format!("invalid goal ref: {e}"), None)
+                })
+        })
+        .transpose()?;
+    let managed_meta = create
+        .managed_meta
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("managed_meta serialization failed: {e}"), None)
+        })?;
+    let sources = create
+        .sources
+        .unwrap_or_default()
+        .iter()
+        .map(|s| temper_workflow::operations::resolve_provenance_source(s))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| {
+            rmcp::ErrorData::invalid_params(format!("invalid sources value: {e}"), None)
+        })?;
+    Ok(IngestPayload {
         title: create.title,
         origin_uri: create
             .origin_uri
             .unwrap_or_else(|| format!("mcp://agent/{}", Uuid::new_v4())),
-        context_ref: create.context_ref.unwrap_or_else(|| "@me/default".into()),
-        home_cogmap_id: create
-            .cogmap
-            .as_deref()
-            .and_then(|r| temper_workflow::operations::parse_ref(r).ok())
-            .map(|p| p.uuid()),
+        context_ref: create.context_ref.unwrap_or_default(),
+        home_cogmap_id,
         doc_type_name: create.doc_type_name,
-        goal: create
-            .goal
-            .as_deref()
-            .and_then(|r| temper_workflow::operations::parse_ref(r).ok())
-            .map(|p| p.uuid()),
+        goal,
         content_hash: None,
         idempotency_key: create.idempotency_key,
         content: create.content.unwrap_or_default(),
         metadata: None,
-        managed_meta: create
-            .managed_meta
-            .and_then(|m| serde_json::to_value(m).ok()),
+        managed_meta,
         open_meta: create.open_meta,
         chunks_packed: None,
-        sources: create
-            .sources
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|s| temper_workflow::operations::resolve_provenance_source(s).ok())
-            .collect(),
+        sources,
         act: create.act,
         segmented: Some(SegmentedBegin {
             total_blocks_hint: input.total_blocks_hint,
             block_budget: input.block_budget.unwrap_or(DEFAULT_BLOCK_BUDGET),
             source_hash: input.source_hash,
         }),
-    }
+    })
 }
 
 // ── Tool handlers ──────────────────────────────────────────────────────────────
@@ -244,7 +283,7 @@ pub async fn ingest_begin(
     let out = svc
         .relay_client(parts)?
         .ingest()
-        .begin_segmented(&wire_begin(input))
+        .begin_segmented(&wire_begin(input)?)
         .await
         .across_auth(|e| map_err(e, "ingest_begin"))?;
 

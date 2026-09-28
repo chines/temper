@@ -30,6 +30,12 @@
 //!   `invalid_params` prefixed `invalid context ref: `; a context the caller cannot
 //!   resolve renders prefixed `context not found: `. All at the resolve callsite, never
 //!   reaching the backend.
+//! - *Declared deltas, carried-forward note* — the module header declares a NotFound
+//!   prefix-drop and a Conflict-arm addition for this family; neither face is
+//!   pinned here (the direct suite never constructed a reblock NotFound or 409 —
+//!   the receipt's `Denied` rows and cursor resume are the family's own surface).
+//!   The mapper carries them per the G3c idiom; the register's beat G4 row counts
+//!   the family's deltas as declared-not-pinned.
 //! - *Below threshold* — scope=context dry_run=true on a fresh context answers the
 //!   documented no-op receipt (`reblocked: 0` / `no_op: 0` — one row per candidate,
 //!   so an empty candidate set is an empty `outcomes`); pins that the answer is a
@@ -43,9 +49,15 @@
 //! **blob_read** (`tools/blobs.rs`) — needs the app's blob_store configured.
 //! - *Requirement arm* — read without `blob_id` answers `invalid_params` "read
 //!   requires `blob_id`".
-//! - *Absent or invisible blob* — the visibility gate's `NotFound` renders
-//!   `invalid_params` prefixed `{action}: ` — the caller is refused identically either
-//!   way, the service's own sentence.
+//! - *Absent or invisible blob* — **FLIPPED DELTA** (the blob family's prefix-drop,
+//!   shared with commit/relate): the direct binding rendered the visibility gate's
+//!   `NotFound` as `invalid_params` prefixed `{action}: `; the door's
+//!   `ClientError::NotFound` carries the server's own sentence bare. Named here; the
+//!   prefix-drop's pin lives on the blob_commit invisible-home face.
+//! - *Half-paired home scope (list)* — a `home_table` without `home_id` (or vice
+//!   versa) refuses with the service's own pair sentence, restated MCP-locally (the
+//!   wire client's list carries only scoped-or-unscoped, so the service guard could
+//!   not answer it) — carried face, never silently unscoped.
 //! - *The read ceiling* — a blob over the single-request threshold refuses
 //!   `invalid_params` naming the streaming doors: "this blob is N bytes against a
 //!   blob_read ceiling of M bytes — read it through the API (GET /api/blobs/{id}) or
@@ -134,11 +146,22 @@
 //!
 //! # The wire's own answer surfaces the direct binding hides
 //!
-//! - `internal_error` answers whose underlying cause is a Conflict (append wrong-seq,
-//!   finalize expectation mismatch) or the integrity class (finalize content hash) —
-//!   the four FLIPPED DELTAS above.
-//! - `get_artifact` / `get_shape` answer success text where the wire answers 404 — the
-//!   two FLIPPED DELTAS below.
+//! The declared-delta set, reconciled across the three sites (this header, the tool
+//! modules' headers, and the register's beat G4 row — they agree):
+//! - *finalize* — the expectation-mismatch Conflict renders the wire 409's
+//!   `invalid_params` with the server's sentence (was the direct catch-all's
+//!   `internal_error`); pinned at `ingest_finalize_wrong_expected_blocks_flips_at_the_swap`.
+//! - *get_artifact / get_shape* — the absent faces flip from the direct 200-text
+//!   postures to the flat route's 404 `invalid_params` with the server's sentence;
+//!   pinned at `get_artifact_refuses_garbage_and_answers_absent` /
+//!   `get_shape_absent_answers_the_not_found_posture`.
+//! - *blobs* — the not-found prefixes (`blob_commit: ` / `blob_relate: `) drop for
+//!   the server's bare sentence; pinned at `blob_commit_on_an_invisible_home_refuses_as_not_found`.
+//! - *blob read* — the result's `content_hash` is now the collected bytes' own hash
+//!   (the wire read carries no hash header); pinned at `blob_commit_then_read_round_trips_the_bytes`.
+//! - *append* — the occupied-seq face is NOT a delta: both sides refuse
+//!   `internal_error` (the route bridges the raise generically); pinned at
+//!   `ingest_append_occupied_seq_with_different_bytes_refuses_internal_error`.
 //! - A read on an invisible/absent resource (artifact list) answers `[]` on the direct
 //!   path — the wire's read route answers the same way, so this face is carried.
 //!

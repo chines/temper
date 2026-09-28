@@ -396,10 +396,37 @@ async fn list_blobs(
     input: BlobReadInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     const ACTION: &str = "blob_list";
+    // The home-scope pair is all-or-nothing: a half-specified scope must refuse, never
+    // silently unscope — the direct binding forwarded both options and the service's
+    // own guard refused ("home_table and home_id are a pair"); the wire client's list
+    // carries only the scoped or the unscoped shape, so the guard is restated here
+    // with the service's own sentence.
+    let home = match (input.home_table.as_deref(), input.home_id) {
+        (Some(table), Some(id)) => Some((table, id)),
+        (None, None) => None,
+        (Some(table), None) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "{ACTION}: home_table and home_id are a pair — got home_table {table} \
+                     and home_id <absent>"
+                ),
+                None,
+            ));
+        }
+        (None, Some(id)) => {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "{ACTION}: home_table and home_id are a pair — got home_table <absent> \
+                     and home_id {id}"
+                ),
+                None,
+            ));
+        }
+    };
     let rows = svc
         .relay_client(parts)?
         .blobs()
-        .list(input.home_table.as_deref().zip(input.home_id))
+        .list(home)
         .await
         .across_auth(|e| map_api_error(ACTION, e))?;
 
