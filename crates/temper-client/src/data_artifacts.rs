@@ -142,4 +142,36 @@ impl<'a> DataArtifactsClient<'a> {
             .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
+
+    /// The home-anchored shapes read, dispatched by the anchor's kind — the
+    /// parity door for MCP's home-type-keyed tool (its `home_type` is a
+    /// vocabulary, not a route).
+    pub async fn list_for(
+        &self,
+        home: temper_core::types::home::HomeAnchor,
+    ) -> Result<Vec<ShapeView>> {
+        match home {
+            temper_core::types::home::HomeAnchor::Context(id) => self.list_shapes(id.uuid()).await,
+            temper_core::types::home::HomeAnchor::Cogmap(id) => {
+                self.list_cogmap_shapes(id.uuid()).await
+            }
+        }
+    }
+
+    /// The home-anchored shape declare, dispatched by the anchor's kind — same
+    /// door as [`Self::list_for`].
+    pub async fn declare_for(
+        &self,
+        home: temper_core::types::home::HomeAnchor,
+        request: &ShapeDeclareRequest,
+    ) -> Result<ShapeView> {
+        match home {
+            temper_core::types::home::HomeAnchor::Context(id) => {
+                self.declare_shape(id.uuid(), request).await
+            }
+            temper_core::types::home::HomeAnchor::Cogmap(id) => {
+                self.declare_cogmap_shape(id.uuid(), request).await
+            }
+        }
+    }
 }

@@ -1,28 +1,49 @@
 //! Resource re-block tool — one bounded, resumable corpus re-blocking step.
 //!
-//! Mirrors the HTTP endpoint `POST /api/resources/reblock` (`temper-api/src/handlers/reblock.rs`)
-//! and dispatches through `DbBackend` — the same write path the HTTP handler uses, so the
-//! per-resource gate train and the deployment-wide `all` arm's system-admin gate live in the
-//! backend command, not here. The tool input is scope-discriminated (the unified `facet_set`
-//! naming shape): one `scope` discriminator plus the per-arm ref fields, mapped onto the wire
-//! request's [`ReblockScope`].
+//! Execution crosses the DEPLOYED API over the wire (beat G4 — the last direct
+//! cluster): the tool forwards to `POST /api/resources/reblock`
+//! (`temper-api/src/handlers/reblock.rs`) as a per-request temper-client relay built
+//! from the request's `Parts` and never touches the `DbBackend` directly. The wire
+//! request is built straight from the input, per the register's decided pattern;
+//! the route's per-row gate train and the deployment-wide `all` arm's system-admin
+//! gate live in the shared backend, unchanged.
+//!
+//! ONE in-process read is retained (declared, the G3d pattern pinned here): the
+//! `scope=context` arm resolves the `@me/…`/`+team/…` ref in-process
+//! (`context_anchor`) — the ref grammar is MCP-local input shaping and the wire
+//! request's `ReblockScope::Context` carries only a UUID. The resolver is
+//! visibility-gated exactly as before: claims and bearer derive from the ONE
+//! validated decode, so resolver and forwarded act cannot disagree on identity.
+//!
+//! # Declared parity deltas (per the register's G3c delta format)
+//!
+//! - **NotFound prefix drops**: the direct map prefixed `{action}: ` on the missing
+//!   resource/context arms; the door's `ClientError::NotFound` carries the server's
+//!   own sentence, and the door does not re-apply a prefix the direct tool applied.
+//!   Kind (`invalid_params`) and gate identical.
+//! - **Conflict arm added**: the direct map had no Conflict arm (it fell to the
+//!   internal_error catch-all, unreachable in practice); the door's 409 renders
+//!   `invalid_params` with the server's sentence, prefix and `Conflict: ` label
+//!   stripped by the shared `api_error_cause` strip.
+//!
+//! Every other arm maps arm-for-arm: `BadRequest` is `invalid_params` bare, the
+//! system-admin `Forbidden` arm keeps the tool's own system-administrator sentence
+//! under INVALID_REQUEST (the deployment-wide `all` scope's gate — the direct
+//! binding's own voice, preserved per the G3d delta-5 precedent), and the
+//! deployment's refusal kinds ride `AcrossAuth`.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+use temper_client::error::ClientError;
 use temper_core::context_ref::parse_context_ref;
-use temper_core::error::TemperError;
-use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::ids::ResourceId;
 use temper_core::types::reblock::{ReblockScope, DEFAULT_REBLOCK_LIMIT};
-use temper_services::backend::DbBackend;
 use temper_services::services::context_service::resolve_context_ref;
-use temper_workflow::operations::{Backend, ReblockResources, Surface};
 use uuid::Uuid;
 
-use temper_core::types::Profile;
-
-use crate::service::TemperMcpService;
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 // ── Input structs ──────────────────────────────────────────────────────────────
 
@@ -71,24 +92,52 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
+/// Resolve a context ref (`@me/<slug>`, `+<team>/<slug>`, or a UUID) to its anchor
+/// id — the ONE retained in-process read for this tool (the G3d contexts family's
+/// `context_anchor` idiom, pinned here per Pete's 2026-09-27 ruling adopting the
+/// pattern for reblock's context scope; the wire request takes a UUID only). The
+/// resolver's refusals — parse error, unresolvable ref — stay MCP-local, pre-wire;
+/// the resolver is visibility-gated, so an unresolvable ref is exactly the "absent
+/// to me" face.
+async fn context_anchor(
+    svc: &TemperMcpService,
+    parts: &axum::http::request::Parts,
+    context_ref: &str,
+) -> Result<Uuid, rmcp::ErrorData> {
+    let cref = parse_context_ref(context_ref)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid context ref: {e}"), None))?;
+    let profile = svc.ensure_profile_from_parts(parts).await?;
+    let context = resolve_context_ref(&svc.api_state.pool, profile.id.into(), &cref)
+        .await
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None))?;
+    Ok(*context)
+}
+
+/// Client errors into rmcp errors, in the G3c/G3d mapping idiom (see the module
+/// header for the declared deltas). `map_err` here is the direct binding's mapper
+/// rewired to the client's typed refusals.
+fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
-        TemperError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("{action}: {msg}"), None)
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        ClientError::Conflict { message } => {
+            rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None)
         }
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::new(
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            format!("{action}: {msg}"),
+            format!("{action}: {message}"),
             None,
         ),
         // The bare `Forbidden` that escapes the backend command is ONLY the deployment-wide
         // `all` arm's system-admin gate (`reblock_resources`'s scope seam) — per-row gate
-        // refusals arrive as `Denied` receipt rows inside the batch (`map_decline`), never as
-        // this error. Name the actual gate: the sibling text ("cannot modify this resource")
-        // names a resource no scope addressed and sends the agent on a false single-resource
-        // repair path.
-        TemperError::Forbidden => rmcp::ErrorData::new(
+        // refusals arrive as `Denied` receipt rows inside the batch, never as this error. The
+        // refusal keeps the direct binding's own sentence: it names the actual gate, because
+        // the sibling text ("cannot modify this resource") names a resource no scope addressed
+        // and sends the agent on a false single-resource repair path.
+        ClientError::Forbidden => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
             format!(
                 "{action}: the deployment-wide `all` scope requires system-administrator \
@@ -108,12 +157,9 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
 /// CLI equivalent: `temper admin reblock --resource|--context|--all`.
 pub async fn resource_reblock(
     svc: &TemperMcpService,
-    profile: Profile,
+    parts: &axum::http::request::Parts,
     input: ResourceReblockInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
-    let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
-
     // The tool's discriminator shape maps onto the wire request's scope enum; the per-arm
     // required fields are refused here, at the door, so an agent repairs in one round trip.
     let scope = match input.scope {
@@ -135,35 +181,27 @@ pub async fn resource_reblock(
                     None,
                 )
             })?;
-            let cref = parse_context_ref(&c).map_err(|e| {
-                rmcp::ErrorData::invalid_params(format!("invalid context ref: {e}"), None)
-            })?;
-            let context = resolve_context_ref(pool, profile_id, &cref)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(format!("context not found: {e}"), None)
-                })?;
-            ReblockScope::Context(Uuid::from(context))
+            ReblockScope::Context(context_anchor(svc, parts, &c).await?)
         }
         ReblockTarget::All => ReblockScope::All,
     };
 
-    let cmd = ReblockResources {
+    let request = temper_core::types::reblock::ReblockRequest {
         scope,
         dry_run: input.dry_run,
-        limit: input.limit.unwrap_or(DEFAULT_REBLOCK_LIMIT),
+        limit: Some(input.limit.unwrap_or(DEFAULT_REBLOCK_LIMIT)),
         after_id: input.after_id,
-        origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id);
-    let out = backend
-        .reblock_resources(cmd)
+    let out = svc
+        .relay_client(parts)?
+        .admin()
+        .reblock(&request)
         .await
-        .map_err(|e| map_err(e, "resource_reblock"))?;
+        .across_auth(|e| map_err(e, "resource_reblock"))?;
 
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(to_text(&out.value)),
+        rmcp::model::ContentBlock::text(to_text(&out)),
     ]))
 }
 
@@ -287,7 +325,7 @@ mod tests {
     /// FAILS IF: the `Forbidden` arm drifts back to the generic resource-modification wording.
     #[test]
     fn the_forbidden_mapper_names_the_system_administrator_gate() {
-        let err = map_err(TemperError::Forbidden, "resource_reblock");
+        let err = map_err(ClientError::Forbidden, "resource_reblock");
         assert!(
             err.message.contains("system-administrator"),
             "the refusal must name system-administrator standing, got: {}",
