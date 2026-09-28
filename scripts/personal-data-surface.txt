@@ -34,9 +34,13 @@
 #            CANDIDATES, never verdicts — which is exactly what this file is for.
 #
 # WHAT IS NOT COVERED, STATED SO NOBODY INFERS COVERAGE FROM SILENCE.
-# 150 `text`/`varchar` columns exist that no derivation above nominates. Free-text classification is
-# an open remainder, not a clean sheet. `named` skims the ones whose NAME betrays them; a column
-# called `note` that happens to hold a person's name is not found by anything here, and cannot be.
+# The `text`/`varchar` columns no derivation above nominates are NOT classified here. They are
+# declared in the sibling manifest, scripts/sensitivity-scan-surface.txt, which states their count
+# and adjudicates each as scan / structural / credential / out-of-scope. The two files PARTITION
+# every text/varchar column of a public base table (sensitivity_scan_surface_test.rs), so a column
+# is never in neither. That is a declaration, not a detection: a column called `note` that happens
+# to hold a person's name is found by no derivation here, and is reached only by the sensitivity
+# sweep reading what the sibling marks `scan`.
 #
 # FORMAT (line-oriented; `#` comments and blank lines ignored)
 #   <table>.<column> | <class> | <ceiling> | <note>
