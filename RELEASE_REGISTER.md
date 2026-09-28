@@ -50,7 +50,7 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   cost, and wire shape byte-identical; no openapi.json movement. Who observes:
   nobody — a caller that cannot hold the proof cannot compile the call, which is
   the point.
-pr: 972
+pr: self
 classes: behavioral
 surfaces: internal
 status: signal-only
