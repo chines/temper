@@ -454,13 +454,13 @@ const L0_KERNEL_COGMAP: CogmapId =
 /// of the box), because a NULL `gating_team_slug` makes the root-join branch return `Ok` for everyone.
 pub async fn require_cogmap_write_admin(
     pool: &PgPool,
-    profile_id: ProfileId,
+    authed: &AuthenticatedProfile,
     cogmap_id: CogmapId,
 ) -> ApiResult<()> {
     if !cogmap_write_requires_admin(pool, cogmap_id).await? {
         return Ok(()); // gate doesn't apply to non-reserved, non-root-team cogmaps
     }
-    if is_system_admin(pool, profile_id).await? {
+    if is_system_admin(pool, ProfileId::from(authed.profile().id)).await? {
         Ok(())
     } else {
         Err(ApiError::Forbidden)

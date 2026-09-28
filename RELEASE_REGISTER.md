@@ -23,6 +23,37 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **PR 2 of the single-ingress refactor: the Class F conditional write-gates and the Bare-site ledger consume the typed principal — signatures, not behavior**
+  Every site in PR 1's disclosed residual ledger flips from `Principal::Bare` to
+  `Principal::Proof` end-to-end: the fourteen production sites (connection_service
+  get_for_caller/provision/revoke/authorize_live/grant_reach/revoke_reach,
+  machine_client_service get_for_caller/revoke/rotate_secret, machine_authz
+  authorize_registration/contain_reach, cogmap_service bind_team/unbind_team),
+  with signatures cascading to the HTTP handlers, the sibling services
+  (machine_registration provision/issue, team create_team), and the test call
+  sites (proofs minted through `test_support::authenticated_profile_for`;
+  assertions, seeding, and expect-messages unmodified). The three Class F
+  conditional/composed gates keep their internal probes — `require_cogmap_write_admin`
+  and `create_team`'s auto_join arm take `&AuthenticatedProfile` with their
+  conditional shapes (the OR-arm, the field-conditional admin gate) preserved;
+  bind/unbind run the same `TwoSidedAuthority`. Class E: `reblock_resources`'s
+  deployment-wide arm now calls the new `auth::require_system_admin_by_id` — the
+  gate DEFINITION, with `require_system_admin` (the surface) and the seam its two
+  callers; genesis's positive admin question keeps calling the `is_system_admin`
+  owner directly (a refusal wrapper would swallow a DB error into "not an
+  admin"), with the seam parity named in a comment. `require_machine_principal`
+  consumes the `Principal` enum; the db_backend seam passes `Bare` — the bare-id
+  DB probe retained there, the one provenance re-derivation outside the seam now
+  typed. No `Principal::Bare` construction remains on an HTTP-reachable path
+  except the db_backend seam. The 5b.4 grant-axis escalation guard citation
+  (`authz/grant.rs`) is untouched. Every refusal dialect, probe ordering, probe
+  cost, and wire shape byte-identical; no openapi.json movement. Who observes:
+  nobody — a caller that cannot hold the proof cannot compile the call, which is
+  the point.
+pr: self
+classes: behavioral
+surfaces: internal
+status: signal-only
 - **PR 1 of the single-ingress refactor: the 13 Class A+B authz ladders and read-visibility services consume `&AuthenticatedProfile` — signatures, not behavior**
   The seven Class A `ScopedAuthority::resolve` ladder impls (authz grant, machine,
   read_gates ×2, two_sided, context_admin, subscription) and the six Class B

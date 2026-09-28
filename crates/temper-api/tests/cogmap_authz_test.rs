@@ -11,7 +11,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::ids::CogmapId;
 use temper_services::error::ApiError;
 use temper_services::services::access_service;
 
@@ -42,9 +42,12 @@ async fn l0_write_requires_system_admin(pool: PgPool) {
 
     // A non-admin profile (default system_access = 'none') is refused on the root-joined L0 map.
     let non_admin = common::fixtures::create_test_profile(&pool, "nonadmin@example.com").await;
-    let denied =
-        access_service::require_cogmap_write_admin(&pool, ProfileId::from(non_admin), L0_COGMAP)
-            .await;
+    let denied = access_service::require_cogmap_write_admin(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, non_admin).await,
+        L0_COGMAP,
+    )
+    .await;
     assert!(
         matches!(denied, Err(ApiError::Forbidden)),
         "non-admin must be Forbidden on the root-team-joined L0 map, got {denied:?}"
@@ -52,9 +55,13 @@ async fn l0_write_requires_system_admin(pool: PgPool) {
 
     // An admin (owner of temper-system) is allowed on the same map.
     let admin = admin_profile(&pool, "admin@example.com").await;
-    access_service::require_cogmap_write_admin(&pool, ProfileId::from(admin), L0_COGMAP)
-        .await
-        .expect("admin must pass the L0 write gate");
+    access_service::require_cogmap_write_admin(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, admin).await,
+        L0_COGMAP,
+    )
+    .await
+    .expect("admin must pass the L0 write gate");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -65,9 +72,12 @@ async fn l0_is_immutable_when_gating_unconfigured(pool: PgPool) {
     // (immutable) until an operator intentionally configures gating. Without the unconditional L0
     // branch this would be fail-OPEN (the NULL gating slug would make the root-join branch return Ok).
     let any_profile = common::fixtures::create_test_profile(&pool, "anyone@example.com").await;
-    let denied =
-        access_service::require_cogmap_write_admin(&pool, ProfileId::from(any_profile), L0_COGMAP)
-            .await;
+    let denied = access_service::require_cogmap_write_admin(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, any_profile).await,
+        L0_COGMAP,
+    )
+    .await;
     assert!(
         matches!(denied, Err(ApiError::Forbidden)),
         "L0 must be immutable (Forbidden to all) when gating is unconfigured, got {denied:?}"
@@ -82,7 +92,11 @@ async fn non_root_cogmap_is_ungated(pool: PgPool) {
     // access rules apply elsewhere, not this root-team write gate.
     let non_root_cogmap = CogmapId::new();
     let non_admin = common::fixtures::create_test_profile(&pool, "user@example.com").await;
-    access_service::require_cogmap_write_admin(&pool, ProfileId::from(non_admin), non_root_cogmap)
-        .await
-        .expect("the gate does not apply to a non-root-team cogmap");
+    access_service::require_cogmap_write_admin(
+        &pool,
+        &temper_services::test_support::authenticated_profile_for(&pool, non_admin).await,
+        non_root_cogmap,
+    )
+    .await
+    .expect("the gate does not apply to a non-root-team cogmap");
 }

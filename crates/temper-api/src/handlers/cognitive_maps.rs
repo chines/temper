@@ -65,12 +65,8 @@ pub async fn reconcile(
     Json(request): Json<ReconcileCogmapRequest>,
 ) -> ApiResult<Json<ReconcileOutcome>> {
     // Auth before writes (Global Constraints): the root-team-cogmap write gate.
-    access_service::require_cogmap_write_admin(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        CogmapId::from(cogmap_id),
-    )
-    .await?;
+    access_service::require_cogmap_write_admin(&state.pool, &auth.0, CogmapId::from(cogmap_id))
+        .await?;
 
     // The manifest body stays pure; authorship rides query params (reconcile uses only
     // `act.authorship` — its invocation is server-minted). Reassembled here, validated once.
@@ -356,13 +352,7 @@ pub async fn bind_team(
 ) -> ApiResult<Json<BindTeamOutcome>> {
     // Auth before writes lives in the service (`TwoSidedAuthority`), so the MCP
     // surface — which calls the service directly — is gated identically.
-    let outcome = cogmap_service::bind_team(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        cogmap_id,
-        &body,
-    )
-    .await?;
+    let outcome = cogmap_service::bind_team(&state.pool, &auth.0, cogmap_id, &body).await?;
     Ok(Json(outcome))
 }
 
@@ -386,13 +376,7 @@ pub async fn unbind_team(
     auth: AuthUser,
     Path((cogmap_id, team_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<Json<UnbindTeamOutcome>> {
-    let outcome = cogmap_service::unbind_team(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        cogmap_id,
-        team_id,
-    )
-    .await?;
+    let outcome = cogmap_service::unbind_team(&state.pool, &auth.0, cogmap_id, team_id).await?;
     Ok(Json(outcome))
 }
 

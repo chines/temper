@@ -17,7 +17,7 @@ use uuid::Uuid;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::machine::{MachineClient, ProvisionMachineRequest, RebindMachineRequest};
 
-use crate::auth::SystemAdmin;
+use crate::auth::{AuthenticatedProfile, SystemAdmin};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{insert_grant, InsertGrantParams};
 use crate::services::machine_authz::{self, AuthorizedReach};
@@ -196,15 +196,16 @@ fn map_duplicate_from_conflict(err: ApiError, client_id: &str) -> ApiError {
 /// Register a new machine principal, creating its agent profile. One transaction.
 pub async fn provision(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     req: &ProvisionMachineRequest,
 ) -> ApiResult<MachineClient> {
+    let caller = ProfileId::from(authed.profile().id);
     // Auth before writes: a rejected registration must leave the DB completely unchanged —
     // no orphaned agent profile, no partial enrollment. Resolving before the transaction is
     // what makes that assertable.
     let reach = machine_authz::authorize_registration(
         pool,
-        caller,
+        authed,
         req.owner_team_id,
         &req.teams,
         &req.grants,
@@ -300,14 +301,15 @@ pub async fn provision(
 /// transaction, exactly like `provision`, but with `issuer='temper'` and a `secret_hash`.
 pub async fn issue(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     req: &temper_core::types::machine::IssueMachineRequest,
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
+    let caller = ProfileId::from(authed.profile().id);
     // Auth before writes — same reasoning as `provision`: nothing is minted, and no profile
     // is created, unless the caller may confer this reach.
     let reach = machine_authz::authorize_registration(
         pool,
-        caller,
+        authed,
         req.owner_team_id,
         &req.teams,
         &req.grants,
@@ -643,9 +645,13 @@ mod tests {
 
         let mut request = req("outsider-agent");
         request.owner_team_id = Some(team);
-        let client = svc::provision(&pool, alice, &request)
-            .await
-            .expect("a team owner may provision for their own team");
+        let client = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &request,
+        )
+        .await
+        .expect("a team owner may provision for their own team");
 
         assert_eq!(
             gating_memberships(&pool, client.profile_id).await,
@@ -670,7 +676,7 @@ mod tests {
 
         let cred = svc::issue(
             &pool,
-            alice,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
             &IssueMachineRequest {
                 label: "sidekiq".to_string(),
                 owner_team_id: Some(team),
@@ -708,9 +714,13 @@ mod tests {
 
         let mut request = req("watcher-minted-agent");
         request.owner_team_id = Some(team);
-        let client = svc::provision(&pool, alice, &request)
-            .await
-            .expect("provision");
+        let client = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, alice.uuid()).await,
+            &request,
+        )
+        .await
+        .expect("provision");
 
         assert_eq!(
             gating_memberships(&pool, client.profile_id).await,
@@ -733,9 +743,13 @@ mod tests {
     async fn provision_creates_profile_link_emitters_and_registration(pool: PgPool) {
         let admin = seed_admin(&pool).await;
 
-        let client = svc::provision(&pool, admin, &req("acme-agent"))
-            .await
-            .expect("provision");
+        let client = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("acme-agent"),
+        )
+        .await
+        .expect("provision");
 
         assert_eq!(client.client_id, "acme-agent");
         assert_eq!(client.issuer, "auth0-m2m");
@@ -783,9 +797,13 @@ mod tests {
             .await
             .expect("configure the gating team");
 
-        let client = svc::provision(&pool, admin, &req("gated-agent"))
-            .await
-            .expect("provision");
+        let client = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("gated-agent"),
+        )
+        .await
+        .expect("provision");
 
         // D14 behavior preserved: provision enrolled the machine in the gating team explicitly,
         // not via the (invite_only-inert) auto-join trigger.
@@ -861,9 +879,13 @@ mod tests {
                 can_write: true,
             }],
         };
-        let client = svc::provision(&pool, admin, &request)
-            .await
-            .expect("provision");
+        let client = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &request,
+        )
+        .await
+        .expect("provision");
 
         assert_eq!(client.team_id, Some(team_id), "owner is recorded");
 
@@ -906,9 +928,13 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn rebind_preserves_the_agent_profile_and_revokes_the_old_client(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let old = svc::provision(&pool, admin, &req("old-client"))
-            .await
-            .expect("provision");
+        let old = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("old-client"),
+        )
+        .await
+        .expect("provision");
 
         let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
         let new = svc::rebind(
@@ -941,9 +967,13 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn rebind_with_keep_old_active_leaves_an_overlap_window(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let old = svc::provision(&pool, admin, &req("overlap-old"))
-            .await
-            .expect("provision");
+        let old = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("overlap-old"),
+        )
+        .await
+        .expect("provision");
 
         let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
         svc::rebind(
@@ -1002,9 +1032,13 @@ mod tests {
         // Admin provisions a machine owned by Alice's team.
         let mut provision_req = req("acme-agent-rb");
         provision_req.owner_team_id = Some(team);
-        let old = svc::provision(&pool, admin, &provision_req)
-            .await
-            .expect("provision");
+        let old = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &provision_req,
+        )
+        .await
+        .expect("provision");
 
         // Alice owns the machine's team — she can revoke it (tested elsewhere) — but she may NOT
         // rebind it onto a client_id she controls and inherit its identity. Post-enclosure the bar is
@@ -1034,13 +1068,21 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn rebind_refuses_a_revoked_source(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        let old = svc::provision(&pool, admin, &req("to-be-revoked"))
-            .await
-            .expect("provision");
+        let old = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("to-be-revoked"),
+        )
+        .await
+        .expect("provision");
 
-        crate::services::machine_client_service::revoke(&pool, old.id, admin)
-            .await
-            .expect("revoke");
+        crate::services::machine_client_service::revoke(
+            &pool,
+            old.id,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+        )
+        .await
+        .expect("revoke");
 
         let proof = crate::test_support::system_admin_proof_for(&pool, *admin).await;
         let err = svc::rebind(
@@ -1067,7 +1109,7 @@ mod tests {
 
         let cred = svc::issue(
             &pool,
-            admin,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
             &IssueMachineRequest {
                 label: "sidekiq".to_string(),
                 owner_team_id: None,
@@ -1115,12 +1157,20 @@ mod tests {
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn provisioning_a_duplicate_client_id_is_a_conflict(pool: PgPool) {
         let admin = seed_admin(&pool).await;
-        svc::provision(&pool, admin, &req("dupe"))
-            .await
-            .expect("first");
-        let err = svc::provision(&pool, admin, &req("dupe"))
-            .await
-            .expect_err("second must fail");
+        svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("dupe"),
+        )
+        .await
+        .expect("first");
+        let err = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("dupe"),
+        )
+        .await
+        .expect_err("second must fail");
         assert!(
             matches!(err, crate::error::ApiError::Conflict(_)),
             "got {err:?}"
@@ -1149,12 +1199,16 @@ mod tests {
 
         let admin = seed_admin(&pool).await;
 
-        let provisioned = svc::provision(&pool, admin, &req("attributed-agent"))
-            .await
-            .expect("provision");
+        let provisioned = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("attributed-agent"),
+        )
+        .await
+        .expect("provision");
         let issued = svc::issue(
             &pool,
-            admin,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
             &IssueMachineRequest {
                 label: "attributed-issue".to_string(),
                 owner_team_id: None,

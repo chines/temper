@@ -165,8 +165,16 @@ async fn is_machine_principal(pool: &PgPool, caller: ProfileId) -> ApiResult<boo
 /// `Forbidden`, not `NotFound`: there is no subject whose existence a refusal could confirm, and a
 /// 404 on a fixed route would just be a lie. The dialect argument that makes the other two gates
 /// `NotFound` (`ScopedAuthority::denial`, `mod.rs:86-95`) does not apply where nothing is named.
-pub(crate) async fn require_machine_principal(pool: &PgPool, caller: ProfileId) -> ApiResult<()> {
-    if is_machine_principal(pool, caller).await? {
+/// Takes the crate-internal [`Principal`] rather than a bare id: the gate consumes the typed
+/// principal wherever the caller path carries one, and the db_backend seam (its only production
+/// caller) passes `Bare` — no middleware exists above it, so the DB probe stays there. The Level-1
+/// ruling that moved the proof INTO signatures did not delete this probe; it named the one place
+/// it still re-derives provenance.
+pub(crate) async fn require_machine_principal(
+    pool: &PgPool,
+    caller: Principal<'_>,
+) -> ApiResult<()> {
+    if is_machine_principal(pool, caller.profile_id()).await? {
         return Ok(());
     }
     Err(ApiError::Forbidden)
@@ -957,14 +965,15 @@ mod tests {
     async fn only_a_registered_machine_may_run_the_dispatch_tick(pool: PgPool) {
         let s = seed(&pool).await;
         assert!(
-            require_machine_principal(&pool, ProfileId::from(s.auditor))
+            require_machine_principal(&pool, Principal::Bare(ProfileId::from(s.auditor)))
                 .await
                 .is_ok(),
             "the registered auditor ticks"
         );
-        let err = require_machine_principal(&pool, ProfileId::from(s.human_reader))
-            .await
-            .expect_err("an unregistered principal must not");
+        let err =
+            require_machine_principal(&pool, Principal::Bare(ProfileId::from(s.human_reader)))
+                .await
+                .expect_err("an unregistered principal must not");
         assert!(
             matches!(err, ApiError::Forbidden),
             "Forbidden, not NotFound: the tick names no subject whose existence a 404 could hide"

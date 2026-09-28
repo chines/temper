@@ -19,6 +19,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::auth::AuthenticatedProfile;
 use crate::authz::{Principal, TwoSidedAuthority, TwoSidedScope};
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::cognitive_maps::{
@@ -118,16 +119,16 @@ pub async fn show_visible(
 /// `bound: false` when the binding already existed.
 pub async fn bind_team(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     cogmap_id: Uuid,
     req: &BindTeamRequest,
 ) -> ApiResult<BindTeamOutcome> {
     // Auth before writes: system-admin, OR a team manager who administers the map (non-root team).
-    // Class F survivor: the conditional write-gate keeps its bare-id signature until its own PR;
-    // the gate receives the principal as `Bare` — exactly what it received before, unchanged.
+    // The gate consumes the typed principal (Class F, PR 2 of the single-ingress refactor): the
+    // conditional shape is unchanged — the gate itself decides, the proof only identifies.
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        Principal::Bare(caller),
+        Principal::Proof(authed),
         TwoSidedScope::cogmap(cogmap_id, req.team_id),
     )
     .await?;
@@ -169,17 +170,17 @@ pub async fn bind_team(
 /// existed.
 pub async fn unbind_team(
     pool: &PgPool,
-    caller: ProfileId,
+    authed: &AuthenticatedProfile,
     cogmap_id: Uuid,
     team_id: Uuid,
 ) -> ApiResult<UnbindTeamOutcome> {
     // Auth before writes: symmetric with bind — a principal who could bind may unbind. That
     // symmetry is exactly why the shared gate excludes the gating team (see `TwoSidedAuthority`):
     // it is unbinding a gating-team-joined map, not binding one, that would be an escalation.
-    // Class F survivor: `Bare` until this gate's own PR — unchanged from before.
+    // The gate consumes the typed principal (Class F, PR 2 of the single-ingress refactor).
     crate::authz::authorize::<TwoSidedAuthority>(
         pool,
-        Principal::Bare(caller),
+        Principal::Proof(authed),
         TwoSidedScope::cogmap(cogmap_id, team_id),
     )
     .await?;

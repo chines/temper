@@ -40,7 +40,7 @@ async fn create_for_owner(
 async fn create_team(pool: &PgPool, owner: Uuid, slug: &str) -> Uuid {
     team_service::create_team(
         pool,
-        ProfileId::from(owner),
+        &temper_services::test_support::authenticated_profile_for(pool, owner).await,
         &TeamCreateRequest {
             slug: slug.to_owned(),
             name: None,

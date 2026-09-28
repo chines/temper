@@ -54,8 +54,7 @@ pub async fn create(
     auth: AuthUser,
     Json(body): Json<TeamCreateRequest>,
 ) -> ApiResult<(StatusCode, Json<TeamRow>)> {
-    let row =
-        team_service::create_team(&state.pool, ProfileId::from(auth.0.profile().id), &body).await?;
+    let row = team_service::create_team(&state.pool, &auth.0, &body).await?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
