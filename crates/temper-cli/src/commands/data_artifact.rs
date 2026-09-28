@@ -174,6 +174,12 @@ pub async fn schema_list_remote(
     cogmap: Option<&str>,
     fmt: OutputFormat,
 ) -> crate::error::Result<()> {
+    if context.is_some() && cogmap.is_some() {
+        return Err(crate::error::TemperError::Project(
+            "schema list takes exactly one home: --context <ref> or --cogmap <ref>, not both"
+                .to_string(),
+        ));
+    }
     let shapes: Vec<ShapeView> = if let Some(cogmap_ref) = cogmap {
         let cogmap_id = parse_ref(cogmap_ref)?;
         client

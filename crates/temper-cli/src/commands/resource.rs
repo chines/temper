@@ -2623,10 +2623,12 @@ pub struct MetaSetParams<'a> {
     pub format: crate::format::OutputFormat,
 }
 
-/// `temper resource meta set <ref> --managed '<json>' --open '<json>'` — the meta-only PUT.
-/// BOTH tiers are stated in full (omitted keys cleared); no body revise, no re-chunk.
-/// Mirrors the MCP `update_resource_meta` sibling: the payload's resource_id/hash fields
-/// are vestigial wire baggage carried as named placeholders, not claims.
+/// `temper resource meta set <ref> --managed '<json>' --open '<json>'` — the metadata-only PUT.
+/// Both tiers named at once; the backend MERGES per key (named keys overwrite, omitted
+/// keys preserved — observed at the wire, not inherited from the route comment). No body
+/// revise, no re-chunk. Mirrors the MCP `update_resource_meta` sibling: the payload's
+/// resource_id/hash fields are vestigial wire baggage carried as named placeholders,
+/// not claims.
 pub fn meta_set(params: MetaSetParams<'_>) -> Result<()> {
     use temper_core::types::managed_meta::MetaUpdatePayload;
 

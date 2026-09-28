@@ -1000,23 +1000,24 @@ pub enum ResourceMetaAction {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,
     },
-    /// Replace a resource's frontmatter — PUT semantics, BOTH tiers stated in full.
+    /// Replace a resource's frontmatter — the metadata-only PUT, both tiers named at once.
     ///
-    /// A tier is replaced wholesale: keys you omit from `--managed`/`--open` are
-    /// cleared, not merged (the additive channel is `resource update --open-meta-add`).
-    /// No body revise, no re-chunk, no re-embed. 403 when the resource is readable
-    /// but not modifiable; 404 when absent or unreadable.
+    /// Merge semantics (observed at the backend, not inherited from the route's
+    /// comment): every key you name is overwritten, every key you omit is preserved —
+    /// a named open-tier key set to null reads back as absent. No body revise, no
+    /// re-chunk, no re-embed. 403 when the resource is readable but not modifiable;
+    /// 404 when absent or unreadable.
     Set {
         /// Resource ref: a UUID or the decorated `slug-<uuid>` form
         r#ref: String,
-        /// Managed (temper-*) frontmatter as a JSON object string — the closed
+        /// Managed (temper-) frontmatter as a JSON object string — the closed
         /// vocabulary only; an unknown temper-* key is refused client-side, there
-        /// is no catch-all. Stated in full: omitted keys are cleared.
+        /// is no catch-all. Named keys overwrite; omitted keys are preserved.
         #[arg(long, required = true)]
         managed: String,
-        /// Open (caller-defined) frontmatter as a JSON object string. Stated in
-        /// full: omitted keys are cleared — pass '{"tags":[]}' to keep tags empty
-        /// deliberately, not by omission.
+        /// Open (caller-defined) frontmatter as a JSON object string. Named keys
+        /// overwrite; omitted keys are preserved (the additive channel is
+        /// `resource update --open-meta-add`).
         #[arg(long, required = true)]
         open: String,
         /// Per-act authorship + invocation-correlation flags.
