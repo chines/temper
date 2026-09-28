@@ -149,6 +149,31 @@ pub fn materialize(cogmap_ref: &str, threshold: Option<i64>, fmt: OutputFormat) 
     Ok(())
 }
 
+/// `temper cogmap materialize-delta <cogmap_ref> [--threshold N]` — the read peer of
+/// [`materialize`]: how far formation has drifted since the map's last materialize.
+/// 404 when the map is absent or unreadable (uniform — no existence oracle).
+pub fn materialize_delta(
+    cogmap_ref: &str,
+    threshold: Option<i64>,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let cogmap_id = temper_workflow::operations::parse_ref(cogmap_ref)?.0;
+
+    let delta = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .cognitive_maps()
+                .materialize_delta(cogmap_id, threshold)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
+    let rendered = crate::format::render(&delta, fmt)?;
+    crate::output::plain(rendered);
+    Ok(())
+}
+
 /// `temper cogmap bind <cogmap_ref> <team>` — bind the map to a team (system-admin, or a team
 /// manager who administers the map).
 ///

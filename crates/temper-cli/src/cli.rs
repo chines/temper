@@ -1216,6 +1216,16 @@ pub enum ContextAction {
         #[arg(long)]
         threshold: Option<i64>,
     },
+    /// Read a context's formation drift since its last materialize — the read peer of
+    /// `context materialize`: how many formation events are pending, and whether the
+    /// threshold clears. Deny is 404 (absent and unreadable collapsed — no existence oracle).
+    MaterializeDelta {
+        /// Context ref: a UUID or `@me/slug` / `+team-slug/slug`.
+        context: String,
+        /// Threshold to gate the delta against; omit for the server default.
+        #[arg(long)]
+        threshold: Option<i64>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -2058,6 +2068,16 @@ pub enum CogmapCmd {
         /// The cognitive map, by ref (UUID or `slug-<uuid>`).
         cogmap: String,
         /// Minimum unmaterialized-event count required to trigger. Server default when omitted.
+        #[arg(long)]
+        threshold: Option<i64>,
+    },
+    /// Read a map's formation delta since its last materialize — the read peer of
+    /// `cogmap materialize`: how many formation events are pending, and whether the
+    /// threshold clears. 404 when the map is absent or unreadable (uniform — no oracle).
+    MaterializeDelta {
+        /// The cognitive map, by ref (UUID or `slug-<uuid>`).
+        cogmap: String,
+        /// Threshold to gate the delta against. Server default when omitted.
         #[arg(long)]
         threshold: Option<i64>,
     },
