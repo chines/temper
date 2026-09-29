@@ -93,10 +93,7 @@ pub async fn steward_advance_watermark(
         origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(
-        svc.api_state.pool.clone(),
-        ProfileId::from(authed.profile().id),
-    );
+    let backend = DbBackend::with_proof(svc.api_state.pool.clone(), &authed);
     let out = backend
         .advance_steward_watermark(cmd)
         .await

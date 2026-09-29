@@ -48,7 +48,7 @@ pub async fn set_facet(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend.set_facet(cmd).await.map_err(ApiError::from)?;
     Ok(Json(FacetAck {
         property_ids: out.value.into_iter().map(Uuid::from).collect(),
@@ -108,7 +108,7 @@ pub async fn set_edge_facet(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend.set_facet(cmd).await.map_err(ApiError::from)?;
     Ok(Json(FacetAck {
         property_ids: out.value.into_iter().map(Uuid::from).collect(),
@@ -161,7 +161,7 @@ pub async fn retract_edge_facet(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     backend.retract_facet(cmd).await.map_err(ApiError::from)?;
     Ok(Json(FacetRetractAck { property_id }))
 }

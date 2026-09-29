@@ -693,7 +693,7 @@ async fn native_resource_identity(
 // timestamps, no fabrication" property this function carried is a property of the columns, not of
 // the projection, and survives its removal.
 
-/// The Postgres-backed backend. Holds a pool + the caller profile. The caller's profile id is the
+/// The Postgres-backed backend. Holds a pool + the caller principal. The caller's profile id is the
 /// substrate principal directly (synthesis preserves profile ids verbatim, WS2); reads/writes are
 /// visibility-scoped through `resources_visible_to` / `can_modify_resource`.
 pub struct DbBackend {
@@ -701,6 +701,12 @@ pub struct DbBackend {
     /// The caller profile — the substrate principal directly (a preserved profile id). Reads scope
     /// through `resources_visible_to`; writes gate through `can_modify_resource` (WS2).
     profile_id: ProfileId,
+    /// The Level-1 proof the caller held at its surface, when one exists. `Some` on every
+    /// HTTP/MCP-constructed backend; `None` on the CLI/operator path, where no middleware exists
+    /// above the frame and `new` is the honest spelling. The gated callsites dispatch through
+    /// [`Self::principal`], which renders this arm-for-arm — a proof-holding caller passes
+    /// `Principal::Proof`, exactly the arm its middleware minted.
+    authenticated: Option<crate::auth::AuthenticatedProfile>,
 }
 
 /// The invariant attribution carried through every reconcile phase: which cognitive map, on whose
@@ -720,10 +726,51 @@ struct ReconcileCtx {
 impl DbBackend {
     /// `profile_id` MUST be middleware-resolved (the HTTP handlers pass the authenticated
     /// caller's own id) or the CLI operator's — the type carries no proof of that, which is
-    /// the Class E residue this seam accepts: the bare id is the caller's own identity, and
-    /// the gates below re-probe it. A future PR may let proof-holding callers pass the proof.
+    /// the Class E residue this constructor accepts: the bare id is the caller's own identity,
+    /// and the gates below re-probe it. This is the CLI/operator path's spelling — no middleware
+    /// exists above that frame, so there is genuinely no proof to pass, and every gate this
+    /// backend dispatches then runs under `Principal::Bare`, the arm that admitted the bare id
+    /// before the refactor and admits nothing new. HTTP/MCP callers that DO hold a resolved
+    /// proof construct through [`Self::with_proof`], which routes the same gates through the
+    /// `Principal::Proof` arm instead of silently demoting them to `Bare`.
     pub fn new(pool: PgPool, profile_id: ProfileId) -> Self {
-        Self { pool, profile_id }
+        Self {
+            pool,
+            profile_id,
+            authenticated: None,
+        }
+    }
+
+    /// Construct a backend from a caller whose surface already resolved Level 1 — the
+    /// HTTP handlers and the MCP tools, which receive an `AuthenticatedProfile` from
+    /// their middleware. The seam's Principal-consuming gates dispatch the `Proof` arm
+    /// the middleware minted instead of re-deriving a bare id from the proof's own
+    /// profile: the caller passes the proof it already holds, rather than having the
+    /// seam re-probe over it ([`Self::new`]'s Class E spelling).
+    ///
+    /// Takes the proof by reference and stores a clone, so a handler can keep reading
+    /// its `AuthUser` after handing the proof in.
+    pub fn with_proof(pool: PgPool, authenticated: &crate::auth::AuthenticatedProfile) -> Self {
+        Self {
+            pool,
+            profile_id: ProfileId::from(authenticated.profile().id),
+            authenticated: Some(authenticated.clone()),
+        }
+    }
+
+    /// The caller principal the seam's scoped-authority gates dispatch under.
+    ///
+    /// `Some` proof ⇒ the `Principal::Proof` arm — the exact proof the surface's middleware minted,
+    /// so a proof-holding caller's gates run under the same arm every Class A/B service gate
+    /// above it runs under. `None` ⇒ the `Principal::Bare` arm — the CLI/operator path, the one arm
+    /// that genuinely holds no middleware-resolved proof. NEVER `Proof`-rendered from a `None`:
+    /// the two spellings stay the one gate definition's two honest callers, per the
+    /// `Principal` doc's "arms that admit `Bare` are exactly the arms that admitted the bare id".
+    fn principal(&self) -> Principal<'_> {
+        match &self.authenticated {
+            Some(authed) => Principal::Proof(authed),
+            None => Principal::Bare(self.profile_id),
+        }
     }
 
     /// Auth-before-writes gate (WS2): the caller (`self.profile_id`, the substrate principal directly)
@@ -2930,11 +2977,11 @@ impl Backend for DbBackend {
         //    `From<ApiError>` carries through as `TemperError::NotFound` (`error.rs:158-168`) — no
         //    existence oracle beside the leak-safe evidence read.
         let subject = citation_subject(&self.pool, cmd.block, source_id).await?;
-        // Class E survivor — the CLI/backend seam has no Level-1 proof to pass; the gate receives
-        // the bare id exactly as before (`Principal::Bare`), unchanged in behavior.
-        let proof =
-            authorize::<AuditAuthority>(&self.pool, Principal::Bare(self.profile_id), subject)
-                .await?;
+        // The gate dispatches the caller principal arm-for-arm: `Principal::Proof` when the
+        // surface held a resolved proof (`with_proof`), `Principal::Bare` on the CLI/operator
+        // path (`new`) — the bare-id arm admitting exactly what it always did. Same gate,
+        // one spelling, the caller's own arm.
+        let proof = authorize::<AuditAuthority>(&self.pool, self.principal(), subject).await?;
         // 2. Correlation integrity — additive to the authorization above, before any mutation.
         self.check_act_invocation(cmd.act.invocation).await?;
 
@@ -3754,9 +3801,10 @@ impl Backend for DbBackend {
         use crate::services::{auditor_service, workflow_job_service};
         use temper_core::types::workflow_job::{clamp_auditor_cap, DEFAULT_AUDITOR_LEASE_SECONDS};
 
-        // 0. AUTH BEFORE ANY WRITE. `reap` below mutates rows, so the gate precedes it. `Bare` is the
-        // seam's door — no proof exists above this frame (Class E); the gate's DB probe stays here.
-        require_machine_principal(&self.pool, Principal::Bare(self.profile_id)).await?;
+        // 0. AUTH BEFORE ANY WRITE. `reap` below mutates rows, so the gate precedes it. Dispatches
+        // the caller principal arm-for-arm — `Proof` when the surface held a resolved proof,
+        // `Bare` on the CLI/operator path (no middleware exists above that frame).
+        require_machine_principal(&self.pool, self.principal()).await?;
 
         // 1. Reap stale leases (crashed runs → retry/dead) before claiming. Shared with the steward
         //    tick — the reaper is persona-agnostic, exactly as the queue is.
@@ -3842,13 +3890,11 @@ impl Backend for DbBackend {
         &self,
         cmd: CompleteAuditorJob,
     ) -> Result<CommandOutput<Option<uuid::Uuid>>, TemperError> {
-        // Class E survivor — the bare-id seam, unchanged in behavior (`Principal::Bare`).
-        let proof = authorize::<AuditorJobAuthority>(
-            &self.pool,
-            Principal::Bare(self.profile_id),
-            cmd.cogmap,
-        )
-        .await?;
+        // The gate dispatches the caller principal arm-for-arm (`self.principal()`): `Proof`
+        // when the surface held a resolved proof, `Bare` on the CLI/operator path — unchanged
+        // in behavior there, the bare-id seam's original spelling.
+        let proof =
+            authorize::<AuditorJobAuthority>(&self.pool, self.principal(), cmd.cogmap).await?;
 
         let completed = crate::services::workflow_job_service::complete_claimed(
             &self.pool,

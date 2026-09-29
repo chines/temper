@@ -1,7 +1,7 @@
 //! HTTP handlers for the segmented (multi-block) ingest surface: append one segment, finalize
 //! the session, and read the currently-landed set back (the resume/progress query).
 //!
-//! Thin handlers only: `AuthUser` extractor → `DbBackend::new` → dispatch the `Backend` trait
+//! Thin handlers only: `AuthUser` extractor → `DbBackend::with_proof` → dispatch the `Backend` trait
 //! method (Task 2.2) → map errors via `ApiError`. The auth-before-write gate
 //! (`can_modify_resource`) lives in the `DbBackend` methods, not here — mirrors
 //! `handlers::ingest`.
@@ -20,7 +20,7 @@ use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::state::AppState;
 
-use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::ids::ResourceId;
 use temper_core::types::ingest::{AppendBlockPayload, BlocksResponse, FinalizePayload};
 use temper_workflow::operations::Backend;
 
@@ -46,7 +46,7 @@ pub async fn append_block_handler(
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<AppendBlockPayload>,
 ) -> ApiResult<Json<BlocksResponse>> {
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .append_block(ResourceId::from(resource_id), payload, surface)
         .await
@@ -76,7 +76,7 @@ pub async fn finalize_handler(
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<FinalizePayload>,
 ) -> ApiResult<StatusCode> {
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     backend
         .finalize_ingest(ResourceId::from(resource_id), payload, surface)
         .await
@@ -102,7 +102,7 @@ pub async fn list_blocks_handler(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<BlocksResponse>> {
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .list_blocks(ResourceId::from(resource_id))
         .await

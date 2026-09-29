@@ -142,7 +142,7 @@ pub async fn create(
         origin: surface,
     };
 
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
 
     let Some(seg) = segmented else {
         // Unchanged one-shot path — no new round-trips, no regression (design §5/§13).
@@ -229,7 +229,7 @@ pub async fn update(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }

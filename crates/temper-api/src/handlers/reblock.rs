@@ -15,7 +15,6 @@ use axum::Json;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
-use temper_core::types::ids::ProfileId;
 use temper_core::types::reblock::{ReblockReceipt, ReblockRequest, DEFAULT_REBLOCK_LIMIT};
 use temper_services::backend::DbBackend;
 use temper_services::error::{ApiError, ApiResult, ErrorBody};
@@ -69,7 +68,7 @@ pub async fn reblock(
         after_id: req.after_id,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .reblock_resources(cmd)
         .await

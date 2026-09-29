@@ -166,10 +166,11 @@ async fn is_machine_principal(pool: &PgPool, caller: ProfileId) -> ApiResult<boo
 /// 404 on a fixed route would just be a lie. The dialect argument that makes the other two gates
 /// `NotFound` (`ScopedAuthority::denial`, `mod.rs:86-95`) does not apply where nothing is named.
 /// Takes the crate-internal [`Principal`] rather than a bare id: the gate consumes the typed
-/// principal wherever the caller path carries one, and the db_backend seam (its only production
-/// caller) passes `Bare` — no middleware exists above it, so the DB probe stays there. The Level-1
-/// ruling that moved the proof INTO signatures did not delete this probe; it named the one place
-/// it still re-derives provenance.
+/// principal wherever the caller path carries one. The db_backend seam's `principal()` routes
+/// here arm-for-arm — `Proof` from HTTP/MCP call paths that hold the middleware-resolved proof,
+/// `Bare` from the CLI/operator path (no middleware above it, so the DB probe stays there).
+/// The Level-1 ruling that moved the proof INTO signatures did not delete this probe; it named
+/// the one place the Bare arm still re-derives provenance.
 pub(crate) async fn require_machine_principal(
     pool: &PgPool,
     caller: Principal<'_>,
