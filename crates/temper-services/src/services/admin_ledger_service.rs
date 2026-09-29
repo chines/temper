@@ -80,6 +80,13 @@ const ADMIN_EVENT_TYPES: &[&str] = &[
     // default keeps both types admin-only until a ruling says otherwise.
     "principal_erased",
     "principal_erasure_refused",
+    // Resource erasure's admin vocabulary (spec 2026-09-28): the same posture as the principal
+    // pair above — the record IS the operator's audit, admin-only, no subject-axis arm. A
+    // resource has no subject to notify; the holders who still have standing learn through the
+    // `410 resource_erased` read, not through this door.
+    "resource_erased",
+    "resource_erasure_refused",
+    "block_history_scrubbed",
 ];
 
 /// The §5 table, evaluated for one subject. Returns the event types `caller` may read about

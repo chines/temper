@@ -66,6 +66,13 @@ event_types:
   - principal_erased
   - principal_erasure_refused
   - blob_erased
+  # Resource erasure's admin vocabulary (spec 2026-09-28), added by migration 20260929000010 —
+  # TYPED with committed payload snapshots, `admin` (payloads::ADMIN_EVENT_NAMES), NULL-anchored.
+  # A reset+seed_system system MUST register them or the act, and the replay of any ledger that
+  # carries one, fails "event_type resource_erased not seeded".
+  - resource_erased
+  - resource_erasure_refused
+  - block_history_scrubbed
   # The key-grain property delete verb (2026-09-21), added by migration 20260921000010 — a
   # later migration than the canonical seed, TYPED-struct but permissive (NULL payload_schema,
   # the property_set / property_retracted precedent, so no snapshot fixture); a

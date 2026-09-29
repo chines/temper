@@ -1618,6 +1618,123 @@ pub struct PrincipalErasureRefused {
     pub detail: Option<String>,
 }
 
+// ── resource erasure (spec 2026-09-28, D1/D5/D11/D12) ─────────────────────────
+
+/// The ledger paths of one event: redacted (`redacted_fields`) or named-and-unreached
+/// (`ledger_remainder`). ONE shape for both, so the cut-2 completion pass derives what it redacts
+/// from what cut 1 recorded without translating (resource erasure spec D12). The event is keyed
+/// `event`, never `event_id` — no trail join-key shape rides an admin payload (D1). Paths only,
+/// never values: the record of a redaction must not carry what was redacted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct RedactedEventFields {
+    pub event: EventId,
+    /// JSON paths within that event's `payload` (or `metadata`), e.g. `title`, `origin_uri`.
+    pub paths: Vec<String>,
+}
+
+/// `resource_erased` — the ONE admin event of a completed resource erasure (resource erasure
+/// spec D1).
+///
+/// The subject is keyed `subject_table` / `subject_id`, NEVER `resource_id`:
+/// `element_trail_node` joins on `payload->>'resource_id'`, and an admin payload never carries a
+/// trail join-key shape, so the category firewall is not the only layer. The same rule keys
+/// `folded_edges` (not `edge_id`) and `RedactedEventFields::event` (not `event_id`).
+///
+/// Two remainders, deliberately separate: `remainder` names what the act leaves untouched by
+/// design (related blobs, derivers, cross-resource ledger text, shared remote-source URLs — D8),
+/// and `ledger_remainder` names the resource's OWN ledger paths the act has not yet reached (D12:
+/// every one of them before sanctioned field redaction ships, none after it). The completion pass
+/// reads `ledger_remainder`, never `remainder`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ResourceErased {
+    /// Always `kb_resources`.
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    /// The acting system admin. `None` only where no actor exists to name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    /// The ledger paths this act redacted to their sentinels (D3). Empty until sanctioned field
+    /// redaction ships (D12).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub redacted_fields: Vec<RedactedEventFields>,
+    /// The edges this act ended, each by its own `relationship_folded` event under the act's
+    /// correlation id (D1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folded_edges: Vec<EdgeId>,
+    /// Per-target outcomes, the principal act's template.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<ErasureTargetOutcome>,
+    /// What the act names but does not touch, by design (D8). Never silent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remainder: Vec<ErasureTargetOutcome>,
+    /// The resource's own ledger paths the act has not reached yet (D12), in exactly the shape
+    /// `redacted_fields` uses. The completion pass re-derives against the live ledger rather than
+    /// trusting this list blindly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ledger_remainder: Vec<RedactedEventFields>,
+    /// `true` iff the `410 resource_erased` signal exists for clients (D7): the signal exists,
+    /// not that every client obeyed it.
+    #[serde(default)]
+    pub propagated_to_clients: bool,
+}
+
+/// The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceErasureRefusalReason {
+    /// The caller is not a system admin.
+    Unauthorized,
+    /// A cogmap's telos/charter resource: map-grain erasure is its own act, named in `detail`.
+    CharterResource,
+    /// `ingest_state` is not `complete`: finalize or abandon the ingest first.
+    IngestInFlight,
+    /// The resource is already erased. Recorded by the block history scrub, which has nothing to
+    /// scrub on an erased resource; the erasure act itself answers an already-erased resource
+    /// idempotently and records nothing.
+    AlreadyErased,
+}
+
+/// `resource_erasure_refused` — the negative face of resource erasure and of the block history
+/// scrub (resource erasure spec D5, D11). Keyed on the resource, spelled as [`ResourceErased`]
+/// spells it: every reason is a fact about the resource, whichever act was refused.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ResourceErasureRefused {
+    /// Always `kb_resources`.
+    pub subject_table: AnchorTable,
+    pub subject_id: Uuid,
+    /// Who attempted the act.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    pub reason: ResourceErasureRefusalReason,
+    /// The reason's evidence, e.g. the task that owns map-grain charter erasure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// `block_history_scrubbed` — the remedy lighter than erasure (resource erasure spec D11): every
+/// revision of each block but its current one, and every non-current chunk, emptied, on a LIVE
+/// resource. CAS-only; it touches no ledger payload.
+///
+/// Keyed `subject_table` (`kb_content_blocks`) / `subject_ids`, never `block_id`:
+/// `element_trail_node` joins on `payload->>'block_id'` (the D1 join-key rule).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct BlockHistoryScrubbed {
+    /// Always `kb_content_blocks`.
+    pub subject_table: AnchorTable,
+    pub subject_ids: Vec<Uuid>,
+    /// The acting system admin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<ProfileId>,
+    /// Per-block outcomes (revisions and chunks emptied).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<ErasureTargetOutcome>,
+}
+
 /// `subscription_delivery_disposed` — a steward's judgment on one routed event (S2 chunk C).
 ///
 /// The disposition is an **act**, not a column write. `acted` cites what was authored; `declined`
@@ -1804,7 +1921,7 @@ impl FoldDisposition {
 }
 
 /// The 30 typed event names — the registry-stamping and snapshot surfaces iterate this.
-pub const TYPED_EVENT_NAMES: [&str; 30] = [
+pub const TYPED_EVENT_NAMES: [&str; 33] = [
     "cogmap_seeded",
     "resource_created",
     "relationship_asserted",
@@ -1835,6 +1952,9 @@ pub const TYPED_EVENT_NAMES: [&str; 30] = [
     "blob_erased",
     "principal_erased",
     "principal_erasure_refused",
+    "resource_erased",
+    "resource_erasure_refused",
+    "block_history_scrubbed",
 ];
 
 /// FOREIGN event names — registered permissive (NULL `payload_schema`) because their body is a
@@ -1854,7 +1974,7 @@ pub const FOREIGN_EVENT_NAMES: [&str; 1] = ["webhook_received"];
 /// `20260718000020`). The migration stamps these on an existing registry; this const is what
 /// re-stamps them on a path that rebuilds the registry from scratch (`bootseed::seed_system` after
 /// a `reset_schema` truncate), so the classification cannot be lost to a reseed.
-pub const ADMIN_EVENT_NAMES: [&str; 8] = [
+pub const ADMIN_EVENT_NAMES: [&str; 11] = [
     "admin_ledger_opened",
     "grant_created",
     "grant_revoked",
@@ -1863,6 +1983,9 @@ pub const ADMIN_EVENT_NAMES: [&str; 8] = [
     "principal_governance_changed",
     "principal_erased",
     "principal_erasure_refused",
+    "resource_erased",
+    "resource_erasure_refused",
+    "block_history_scrubbed",
 ];
 
 /// The event names classified `kb_event_types.category = 'system'` — configuration acts, which are
@@ -1971,6 +2094,19 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 "principal_erasure_refused" => {
                     serde_json::from_value::<PrincipalErasureRefused>(r.payload.clone())?;
+                }
+                // Resource erasure's admin vocabulary (resource erasure spec D1/D5/D11). No write
+                // path emits these yet (the act lands in a later build); the arms are here now so
+                // the typed contract is checked from the first really-emitted payload, not from
+                // whenever someone remembers to add them.
+                "resource_erased" => {
+                    serde_json::from_value::<ResourceErased>(r.payload.clone())?;
+                }
+                "resource_erasure_refused" => {
+                    serde_json::from_value::<ResourceErasureRefused>(r.payload.clone())?;
+                }
+                "block_history_scrubbed" => {
+                    serde_json::from_value::<BlockHistoryScrubbed>(r.payload.clone())?;
                 }
                 // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
                 // not roundtripped here; add an arm when a write path begins emitting one.
@@ -2106,6 +2242,97 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<PrincipalErasureRefused>(v).unwrap(),
             refused
+        );
+    }
+
+    /// Resource erasure's admin vocabulary (spec 2026-09-28, D1/D5/D11/D12). Beyond the round
+    /// trip, this pins the join-key rule: no payload carries `resource_id`, `block_id`, `edge_id`
+    /// or `event_id` as a key, because `element_trail_node` / `_edge` join on exactly those, and an
+    /// admin payload must not match a trail even if the category firewall were removed.
+    #[test]
+    fn resource_erasure_payloads_roundtrip_and_carry_no_trail_join_key() {
+        const TRAIL_KEYS: [&str; 4] = ["resource_id", "block_id", "edge_id", "event_id"];
+        let no_trail_key = |v: &serde_json::Value, name: &str| {
+            let text = v.to_string();
+            for key in TRAIL_KEYS {
+                assert!(
+                    !text.contains(&format!("\"{key}\"")),
+                    "{name} carries the trail join key {key:?}"
+                );
+            }
+        };
+
+        let fields = RedactedEventFields {
+            event: EventId::from(Uuid::now_v7()),
+            paths: vec!["title".into(), "origin_uri".into()],
+        };
+        let erased = ResourceErased {
+            subject_table: AnchorTable::Resources,
+            subject_id: Uuid::now_v7(),
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            redacted_fields: vec![],
+            folded_edges: vec![EdgeId::from(Uuid::now_v7())],
+            targets: vec![ErasureTargetOutcome {
+                target: "kb_block_content.content".into(),
+                outcome: "emptied".into(),
+            }],
+            remainder: vec![ErasureTargetOutcome {
+                target: "kb_blobs".into(),
+                outcome: "named, not struck".into(),
+            }],
+            ledger_remainder: vec![fields.clone()],
+            propagated_to_clients: true,
+        };
+        let v = serde_json::to_value(&erased).unwrap();
+        assert_eq!(v["subject_table"], "kb_resources");
+        assert!(
+            v.get("redacted_fields").is_none(),
+            "an empty redaction set is omitted, as cut 1 emits it"
+        );
+        assert_eq!(v["ledger_remainder"][0]["paths"][1], "origin_uri");
+        no_trail_key(&v, "resource_erased");
+        assert_eq!(serde_json::from_value::<ResourceErased>(v).unwrap(), erased);
+
+        // The completion pass's input and output share one shape (D12).
+        let completion = ResourceErased {
+            redacted_fields: vec![fields],
+            ledger_remainder: vec![],
+            ..erased
+        };
+        let v = serde_json::to_value(&completion).unwrap();
+        no_trail_key(&v, "resource_erased (completion)");
+        assert_eq!(
+            serde_json::from_value::<ResourceErased>(v).unwrap(),
+            completion
+        );
+
+        let refused = ResourceErasureRefused {
+            subject_table: AnchorTable::Resources,
+            subject_id: Uuid::now_v7(),
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            reason: ResourceErasureRefusalReason::CharterResource,
+            detail: Some("map-grain erasure: task 01a0e960-0ca2-7f42-b33e-1ed19b024e6b".into()),
+        };
+        let v = serde_json::to_value(&refused).unwrap();
+        assert_eq!(v["reason"], "charter_resource");
+        no_trail_key(&v, "resource_erasure_refused");
+        assert_eq!(
+            serde_json::from_value::<ResourceErasureRefused>(v).unwrap(),
+            refused
+        );
+
+        let scrubbed = BlockHistoryScrubbed {
+            subject_table: AnchorTable::ContentBlocks,
+            subject_ids: vec![Uuid::now_v7(), Uuid::now_v7()],
+            actor: Some(ProfileId::from(Uuid::now_v7())),
+            targets: vec![],
+        };
+        let v = serde_json::to_value(&scrubbed).unwrap();
+        assert_eq!(v["subject_table"], "kb_content_blocks");
+        no_trail_key(&v, "block_history_scrubbed");
+        assert_eq!(
+            serde_json::from_value::<BlockHistoryScrubbed>(v).unwrap(),
+            scrubbed
         );
     }
 
