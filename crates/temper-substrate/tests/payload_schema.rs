@@ -55,6 +55,9 @@ fn payload_schemas_match_snapshots() {
     check::<p::BlobErased>("blob_erased");
     check::<p::PrincipalErased>("principal_erased");
     check::<p::PrincipalErasureRefused>("principal_erasure_refused");
+    check::<p::ResourceErased>("resource_erased");
+    check::<p::ResourceErasureRefused>("resource_erasure_refused");
+    check::<p::BlockHistoryScrubbed>("block_history_scrubbed");
 }
 
 #[test]
@@ -100,6 +103,14 @@ fn the_migration_literal_matches_the_committed_fixture() {
                 "principal_erased.v1.schema.json",
                 "principal_erasure_refused.v1.schema.json",
                 "blob_erased.v1.schema.json",
+            ],
+        ),
+        (
+            "20260929000010_resource_erasure_vocabulary.sql",
+            &[
+                "resource_erased.v1.schema.json",
+                "resource_erasure_refused.v1.schema.json",
+                "block_history_scrubbed.v1.schema.json",
             ],
         ),
     ] {

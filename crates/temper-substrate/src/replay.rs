@@ -286,6 +286,12 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             // walk arm at the event's position.
             | EventKind::PrincipalErased
             | EventKind::PrincipalErasureRefused
+            // Resource erasure's admin vocabulary (spec 2026-09-28): the same NULL-anchored,
+            // content-free posture. None carries content, so none has a sidecar; what they empty
+            // reproduces through the walk arms at their ledger positions.
+            | EventKind::ResourceErased
+            | EventKind::ResourceErasureRefused
+            | EventKind::BlockHistoryScrubbed
             // A delivery disposition (S2 chunk C) carries reasoning and confidence, not content:
             // no blocks, no chunks, no sidecar. A received webhook (S2 chunk B) carries the
             // remote's verbatim body — foreign content temper did not author and does not chunk.
@@ -893,6 +899,14 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // NOTHING by design — one reason-code event, and the refusal set must not admit
             // it. The walk stays a no-op; `PrincipalErased` graduated above.
             | EventKind::PrincipalErasureRefused
+            // Resource erasure's admin vocabulary (spec 2026-09-28). A no-op for now, and
+            // honestly so: nothing emits these yet (the vocabulary lands before the act, because
+            // an event category is one-shot). `ResourceErased` and `BlockHistoryScrubbed` graduate
+            // to real arms with the act, calling the ONE redaction definition at the event's
+            // ledger position (D2 step 9, D11); the refusal stays a no-op by design.
+            | EventKind::ResourceErased
+            | EventKind::ResourceErasureRefused
+            | EventKind::BlockHistoryScrubbed
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this
             // arm `replay()` errored with "no projector for event type webhook_received" against
