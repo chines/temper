@@ -612,32 +612,33 @@ async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
     );
 
     // a charter resource (a cogmap's telos) refuses — the map-grain act is another task
-    let telos = writes::create_resource_with(
-        &pool,
-        CreateParams {
-            idempotency_key: None,
-            title: "telos-for-refusal",
-            origin_uri: "test://telos-refusal",
-            body: "the map's charter",
-            doc_type: "telos",
-            home: AnchorRef::context(home),
-            owner,
-            originator: owner,
-            emitter,
-            properties: &[],
-            chunks: None,
-            sources: vec![],
-        },
-        EventContext::default(),
-    )
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ($1, $2)")
-        .bind("refusal-map")
-        .bind(telos.uuid())
-        .execute(&pool)
+    // Genesis the map through the REAL cogmap-genesis path (the earlier raw
+    // `INSERT INTO kb_cogmaps` produced a table row with NO ledger event, so replay
+    // dropped the map and the dump diff diverged — a projection with no event behind it).
+    // Genesis MINTS the telos resource itself — a pre-created one at the same id
+    // collides (`kb_resources_pkey`), because the projector owns both inserts.
+    let refusal_map = {
+        let mut conn = pool.acquire().await.unwrap();
+        fire(
+            &mut conn,
+            SeedAction::CogmapGenesis {
+                name: "refusal-map",
+                telos_title: "telos-for-refusal",
+                charter: &[],
+                cogmap_id: None,
+                telos_resource_id: None,
+                owner,
+                emitter,
+            },
+        )
         .await
-        .unwrap();
+        .unwrap()
+        .cogmap_genesis()
+        .unwrap()
+        .1
+    };
+    let telos = refusal_map;
+    let _ = refusal_map;
     let charter =
         sqlx::query_scalar::<sqlx::Postgres, Uuid>("SELECT resource_erasure_execute($1,$2,$3,$4)")
             .bind(telos.uuid())
@@ -740,7 +741,7 @@ async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
     .await
     .unwrap();
     // The act COMPLETES: a tombstone is not a refusal state.
-    let tomb_event = execute_act(&pool, tombstone.uuid()).await;
+    let _tomb_event = execute_act(&pool, tombstone.uuid()).await;
     let (t_active, t_erased): (bool, Option<chrono::DateTime<chrono::Utc>>) =
         sqlx::query_as("SELECT is_active, erased_at FROM kb_resources WHERE id = $1")
             .bind(tombstone.uuid())
@@ -765,7 +766,23 @@ async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
         tomb_prose, 0,
         "the tombstone's content is gone — soft delete hid it, the act ended it"
     );
-    let _ = tomb_event;
+
+    // The tombstone-then-erased ledger must REPLAY byte-identically: the `resource_deleted`
+    // event is in trail scope, `resource_created`'s `resource_updated`-style is_active flip
+    // rides the delete, and the erasure arm overwrites at its position. This is the exact
+    // silent-divergence class the review flagged — a ledger whose tombstone lands BETWEEN
+    // create and erase.
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+    for ((ta, a), (_tb, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(
+            a, b,
+            "projection table {ta} diverged under replay of a tombstone-then-erased erasure"
+        );
+    }
 
     // execute refuses a plan that names an ALREADY-FOLDED edge — the act completes on
     // live edges only now, so this exercises the live-only enumeration (the witness
