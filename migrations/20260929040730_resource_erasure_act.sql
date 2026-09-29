@@ -654,7 +654,6 @@ DECLARE
     v_ingest  text;
     v_erased  boolean;
     v_erased_ts timestamptz;
-    v_active  boolean;
     v_found   boolean;
     v_id      uuid;
     v_ev      uuid;
@@ -679,8 +678,8 @@ BEGIN
     --    advisory lock (taken first below): two concurrent executes must serialize so the
     --    loser re-reads `erased_at` AFTER the winner's commit and refuses as
     --    already-erased, rather than both passing the unlocked reads and double-completing.
-    --    A soft-deleted (tombstoned) resource gets its OWN message — PR 2's service parses
-    --    these strings into refusal vocabulary and must not read a tombstone as missing. ──
+    --    PR 2's service parses these strings into refusal vocabulary; see the tombstone
+    --    paragraph below the ingest arm for the one overrule this file carries. ──
     SELECT count(*) > 0 INTO v_found FROM kb_resources r WHERE r.id = p_resource;
     IF NOT v_found THEN
         RAISE EXCEPTION 'resource_erasure_execute: resource % not found', p_resource;
@@ -701,10 +700,18 @@ BEGIN
     IF v_ingest <> 'complete' THEN
         RAISE EXCEPTION 'resource_erasure_execute: ingest % in flight; finalize or abandon first', v_ingest;
     END IF;
-    SELECT is_active INTO v_active FROM kb_resources WHERE id = p_resource;
-    IF NOT v_active THEN
-        RAISE EXCEPTION 'resource_erasure_execute: resource % soft-deleted (tombstone, not erasable)', p_resource;
-    END IF;
+    -- A TOMBSTONE IS ERASABLE — arguably the flow's most common shape: the content was
+    -- soft-deleted ("realized I shouldn't have persisted this"), and then the compliance
+    -- need arrives that demands it not exist at all. The principal act has no tombstone
+    -- refusal (it tombstones VIA the act, 20260909000025), F4's write floor makes
+    -- is_active=false already permanent, and no restore verb exists (the spec's F4 —
+    -- "un-modifiable on every axis"), so the only escape from a tombstone was always
+    -- erasure. The act completes over one mechanically: is_active is already false, the
+    -- CHECK is satisfied, and COALESCE keeps erased_at stable. D6's ruling ("a
+    -- soft-deleted resource must never be mistaken for an erased one") is a PROJECTION
+    -- honesty rule — erased_at is NULL until this act sets it — not a refusal on the
+    -- negative face. An earlier draft refused tombstones here; Pete overruled (compliance
+    -- erasure of soft-deleted resources is the PII-audit flow's main use). ──
 
 
     -- ── The ONE computation (D10). No re-enumeration of the remainder, block counts, artifact

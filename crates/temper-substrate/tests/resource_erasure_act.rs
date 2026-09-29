@@ -12,7 +12,10 @@
 //!     it; `kb_erased_content` gains no row.
 //!   * **3** — history reached: the superseded chunk and the prior revision's bytes end empty.
 //!   * **6** — the edge folds through `relationship_folded` under the act's correlation id.
-//!   * **8** — a soft-deleted resource is not erased (`erased_at IS NULL`, content intact).
+//!   * **8** — soft delete is not YET erasure (`erased_at IS NULL`, content intact) — and a
+//!     tombstone IS erasable: the act completes over one (compliance erasure of a
+//!     soft-deleted resource is the flow's main shape; ruled by Pete over the draft's
+//!     refusal).
 //!   * **9** — the property surface (Q3): values sentineled; a set→set→unset→set key maps to ONE
 //!     `erased-key-<n>`; replay reproduces it.
 //!   * **11 (SQL half)** — the closed refusals RAISE (already-erased, charter, ingest); the
@@ -703,9 +706,11 @@ async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
             .await;
     assert!(pending.is_err(), "a nil resource cannot execute");
 
-    // a soft-deleted (tombstoned, never erased) resource gets its OWN message — the
-    // service parses these strings into refusal vocabulary and must not read a
-    // tombstone as missing.
+    // a TOMBSTONE IS ERASABLE — the compliance flow's main shape: the content was
+    // soft-deleted because it should never have been persisted, then the compliance need
+    // arrives demanding it not exist at all. The act completes over one; the earlier
+    // refusal was Pete's overrule in review (the principal act has no tombstone refusal
+    // either — it tombstones VIA the act).
     let tombstone = writes::create_resource_with(
         &pool,
         CreateParams {
@@ -734,18 +739,33 @@ async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    let tomb =
-        sqlx::query_scalar::<sqlx::Postgres, Uuid>("SELECT resource_erasure_execute($1,$2,$3,$4)")
+    // The act COMPLETES: a tombstone is not a refusal state.
+    let tomb_event = execute_act(&pool, tombstone.uuid()).await;
+    let (t_active, t_erased): (bool, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as("SELECT is_active, erased_at FROM kb_resources WHERE id = $1")
             .bind(tombstone.uuid())
-            .bind(owner.uuid())
-            .bind(emitter)
-            .bind(Uuid::now_v7())
             .fetch_one(&pool)
-            .await;
+            .await
+            .unwrap();
     assert!(
-        tomb.unwrap_err().to_string().contains("soft-deleted"),
-        "the tombstone refusal is distinct from not-found"
+        !t_active && t_erased.is_some(),
+        "the tombstone became a husk; got is_active={t_active} erased_at={t_erased:?}"
     );
+    let tomb_prose: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks c \
+           JOIN kb_content_blocks b ON b.id = c.block_id \
+           JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
+          WHERE b.resource_id = $1 AND cc.content <> ''",
+    )
+    .bind(tombstone.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        tomb_prose, 0,
+        "the tombstone's content is gone — soft delete hid it, the act ended it"
+    );
+    let _ = tomb_event;
 
     // execute refuses a plan that names an ALREADY-FOLDED edge — the act completes on
     // live edges only now, so this exercises the live-only enumeration (the witness
