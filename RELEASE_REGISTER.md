@@ -41,6 +41,12 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   drives the same caller through BOTH spellings and demands the identical admission.
   Who observes: nobody — same gate, same predicates, same profile id; the proofs the gates
   receive are now the ones the surfaces minted.
+  Review amendment (2026-09-29, RG-1/RG-2 passes on 9326cf09): the "all HTTP handlers
+  construct through it" claim overshot by one site — the `genesis` handler still built
+  `DbBackend::new` (behaviorally inert — `create_cognitive_map`'s admin probe reads
+  `self.profile_id` directly, not through `principal()` — but falsifying the coverage
+  claim). Fixed in the review-fixes commit: genesis now constructs `with_proof`, and the
+  routing pin gained a second witness on the `complete_auditor_job` door.
 pr: self
 classes: behavioral
 surfaces: http,mcp
