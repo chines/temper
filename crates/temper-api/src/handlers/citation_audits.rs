@@ -67,7 +67,7 @@ pub async fn record(
     };
     let audit_id = citation_audit_service::record_citation_audit(
         &state.pool,
-        ProfileId::from(auth.0.profile().id),
+        &auth.0,
         ResourceId::from(resource_id),
         cmd,
     )
@@ -137,7 +137,7 @@ pub async fn record_for_block(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let audit_id = backend
         .record_citation_audit(cmd)
         .await

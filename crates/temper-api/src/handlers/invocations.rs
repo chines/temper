@@ -61,7 +61,7 @@ pub async fn open(
         parent_cogmap: req.parent_cogmap.map(CogmapId::from),
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend.open_invocation(cmd).await.map_err(ApiError::from)?;
     Ok(Json(InvocationAck {
         id: out.value,
@@ -98,7 +98,7 @@ pub async fn close(
         outcome: req.outcome,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     backend
         .close_invocation(cmd)
         .await

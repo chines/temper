@@ -91,7 +91,7 @@ pub async fn advance(
         boundary_fingerprint: req.boundary_fingerprint,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .advance_steward_watermark(cmd)
         .await
@@ -201,7 +201,7 @@ pub async fn dispatch(
         correlation,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .steward_dispatch_tick(cmd)
         .await

@@ -23,6 +23,28 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **Single-ingress follow-on: HTTP-constructed `DbBackend` sites pass the proof they already hold — signatures, not behavior**
+  The seam's constructor splits by what the caller genuinely holds: `DbBackend::with_proof`
+  takes the surface's middleware-minted `AuthenticatedProfile` (the HTTP handlers, the
+  citation-audit service signature, and the MCP steward tool construct through it), while
+  `DbBackend::new` stays the CLI/operator Class E spelling — no middleware exists above that
+  frame, so no proof exists to pass. The seam's three Principal-consuming gate sites
+  (`record_citation_audit`'s `authorize::<AuditAuthority>`, `auditor_dispatch_tick`'s
+  `require_machine_principal`, `complete_auditor_job`'s `authorize::<AuditorJobAuthority>`)
+  dispatch through `DbBackend::principal`, which routes `Proof` for proof-holding callers and
+  `Bare` for the CLI path — the same gate definitions, one shared spelling, the caller's own
+  arm. `citation_audit_service::record_citation_audit`'s signature takes the resolved proof
+  rather than a bare id. No SQL moved, no predicate reordered, no probe widened: for any
+  caller the gate binds the same profile id into the same predicates it always did —
+  `Bare` admits exactly what it admitted before, and a caller that cannot hold the proof
+  never compiles the `Proof` path. The routing pin (`db_backend_principal_routing_test`)
+  drives the same caller through BOTH spellings and demands the identical admission.
+  Who observes: nobody — same gate, same predicates, same profile id; the proofs the gates
+  receive are now the ones the surfaces minted.
+pr: self
+classes: behavioral
+surfaces: http,mcp
+status: signal-only
 - **PR 3 of the single-ingress refactor: routes.rs collapses to a declarative route table — the audit scripts assert the table**
   A pure route-wiring refactor, declared because the wire-touched path moved: the twelve
   sub-router functions in `routes.rs` (1,226 lines) become per-group files under

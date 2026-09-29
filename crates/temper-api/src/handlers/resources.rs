@@ -275,7 +275,7 @@ pub async fn annotate(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .annotate_resource(cmd)
         .await
@@ -342,7 +342,7 @@ pub async fn create(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
@@ -442,7 +442,7 @@ pub async fn update(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
@@ -481,7 +481,7 @@ pub async fn delete(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     backend.delete_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(DeleteResponse { deleted: true }))
 }

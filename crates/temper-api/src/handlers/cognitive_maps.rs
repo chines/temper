@@ -78,7 +78,7 @@ pub async fn reconcile(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .reconcile_cognitive_map(cmd)
         .await
@@ -264,7 +264,7 @@ pub async fn materialize(
         threshold: req.threshold,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .materialize_on_threshold(cmd)
         .await

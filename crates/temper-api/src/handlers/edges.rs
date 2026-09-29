@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
-use temper_core::types::ids::{EdgeId, ProfileId};
+use temper_core::types::ids::EdgeId;
 use temper_core::types::lineage::ResourceLineage;
 use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
@@ -149,7 +149,7 @@ pub async fn assert(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .assert_relationship(cmd)
         .await
@@ -190,7 +190,7 @@ pub async fn retype(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .retype_relationship(cmd)
         .await
@@ -230,7 +230,7 @@ pub async fn reweight(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .reweight_relationship(cmd)
         .await
@@ -270,7 +270,7 @@ pub async fn fold(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .fold_relationship(cmd)
         .await

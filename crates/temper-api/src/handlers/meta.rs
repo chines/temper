@@ -83,7 +83,7 @@ pub async fn update_meta(
         act,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile().id));
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     // The trait's `ResourceView` IS this endpoint's response — no narrowing, and the same shape
     // `GET /api/resources/{id}/meta` above answers in.

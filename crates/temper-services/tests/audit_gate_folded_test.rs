@@ -231,6 +231,18 @@ async fn grant_read(pool: &PgPool, finding: Uuid, reader: ProfileId, author: Pro
     .unwrap();
 }
 
+/// Mint a real Level-1 proof for an already-seeded profile: the exact `AuthenticatedProfile`
+/// the HTTP middleware would hand this principal. Runs the actual `gate_resolved_profile`
+/// ladder (public fields are sealed), so the proof is honest — a fixture helper, not a forgery.
+/// Needed because `citation_audit_service::record_citation_audit` now takes the caller's
+/// resolved proof rather than a bare id.
+async fn temperament_minted(
+    pool: &PgPool,
+    auditor: ProfileId,
+) -> temper_services::auth::AuthenticatedProfile {
+    temper_services::test_support::authenticated_profile_for(pool, auditor.uuid()).await
+}
+
 fn audit_cmd(block: Uuid, source: Uuid, value: f64) -> RecordCitationAudit {
     RecordCitationAudit {
         block: BlockId::from(block),
@@ -266,6 +278,7 @@ async fn an_audit_of_a_folded_citation_is_refused_as_not_found(pool: sqlx::PgPoo
     .await;
     let (cited_block, _) = blocks_of(&pool, finding).await[0];
     let auditor = seed_auditor(&pool).await;
+    let auditor_authed = temperament_minted(&pool, auditor).await;
     grant_read(&pool, finding.uuid(), auditor, author).await;
 
     // Fold the cited block (filler-append geometry: A's section re-creates, the incumbent
@@ -305,7 +318,7 @@ async fn an_audit_of_a_folded_citation_is_refused_as_not_found(pool: sqlx::PgPoo
 
     let err = citation_audit_service::record_citation_audit(
         &pool,
-        auditor,
+        &auditor_authed,
         finding,
         audit_cmd(cited_block, source, -1.0),
     )
@@ -340,11 +353,12 @@ async fn an_audit_of_a_live_citation_proceeds(pool: sqlx::PgPool) {
     .await;
     let (cited_block, _) = blocks_of(&pool, finding).await[0];
     let auditor = seed_auditor(&pool).await;
+    let auditor_authed = temperament_minted(&pool, auditor).await;
     grant_read(&pool, finding.uuid(), auditor, author).await;
 
     let audit_id = citation_audit_service::record_citation_audit(
         &pool,
-        auditor,
+        &auditor_authed,
         finding,
         audit_cmd(cited_block, source, 0.5),
     )
