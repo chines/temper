@@ -31,14 +31,16 @@ use sqlx::PgPool;
 use temper_core::types::ids::EntityId;
 use temper_core::types::property_owner::PropertyOwner;
 use temper_substrate::affinity::EdgeKind;
+use temper_substrate::blob_store::InMemoryBlobStore;
 use temper_substrate::content::IncomingChunk;
 use temper_substrate::events::{fire, EdgeHome, EventContext, SeedAction};
-use temper_substrate::ids::{ContextId, EdgeId, ProfileId, ResourceId};
+use temper_substrate::ids::{BlobId, ContextId, EdgeId, ProfileId, ResourceId};
 use temper_substrate::payloads::EdgePolarity;
 use temper_substrate::payloads::{
     self, AnchorRef, ArtifactIntent, Incorporation, KindOwner, ProvenanceSource,
 };
 use temper_substrate::replay;
+use temper_substrate::writes::CommitBlobParams;
 use temper_substrate::writes::{self, CommitDataArtifactParams, CreateParams, UpdateParams};
 use temper_substrate::writes::{AssertParams, CreateMode};
 use uuid::Uuid;
@@ -1136,10 +1138,12 @@ async fn a_pre_existing_folded_edge_does_not_abort_the_act(pool: sqlx::PgPool) {
     execute_act(&pool, a.uuid()).await;
 
     // The folded edge was NOT re-listed as this act's work: exactly one fold of it
-    // exists in the record (the history's own), and the act completed.
+    // exists in the record (the history's own), and the act completed. The act's fold
+    // events carry the payload FLAT (edge_id at the top level) — a regression that
+    // re-folded a pre-folded edge would show up here.
     let act_folds: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-          WHERE t.name = 'relationship_folded' AND (e.payload->'payload'->>'edge_id')::uuid = $1 \
+          WHERE t.name = 'relationship_folded' AND (e.payload->>'edge_id')::uuid = $1 \
             AND e.payload->>'reason' = 'resource_erased'",
     )
     .bind(edge)
@@ -1173,58 +1177,53 @@ async fn the_operator_listed_blob_strike_verifies_and_strikes(pool: sqlx::PgPool
     )
     .await;
 
-    // The relation edge the survey walks to find related blobs (the survey names related
-    // blobs; the operator answers with the subset to strike).
-    let blob = Uuid::now_v7();
-    let hash = chunk_hash("blob bytes under erasure");
-    let pathname = format!("strike-blob/{}", &hash[..16.min(hash.len())]);
-    let blob_event: Uuid = sqlx::query_scalar(
-        "SELECT _event_append('blob_committed', $1, 'kb_contexts', $2, \
-                jsonb_build_object('blob_id', $3))",
+    // The blob + its relation edge, through the REAL write paths (an earlier raw-INSERT
+    // fixture carried the same "projection with no event behind it" defect the refusal-map
+    // genesis fix was made for): commit_blob stores + emits `blob_committed`, and the
+    // relation is an ordinary edge — `AnchorRef::blob` is a lawful source (D3).
+    let bytes = b"blob bytes under erasure".to_vec();
+    let hash = {
+        use sha2::Digest as _;
+        format!("{:x}", sha2::Sha256::digest(&bytes))
+    };
+    let pathname = temper_substrate::blob_store::blob_pathname(&hash);
+    let store = InMemoryBlobStore::default().with_object(pathname.clone());
+    let blob = writes::commit_blob(
+        &pool,
+        &store,
+        CommitBlobParams {
+            id: BlobId::from(Uuid::now_v7()),
+            home: AnchorRef::context(home),
+            owner,
+            originator: None,
+            content_hash: hash.clone(),
+            content_type: "image/png".to_owned(),
+            content_bytes: bytes.len() as i64,
+            max_bytes: 10 * 1024 * 1024,
+            allowlist: &["image/png".to_owned()][..],
+            emitter,
+        },
     )
-    .bind(emitter)
-    .bind(home)
-    .bind(blob)
-    .fetch_one(&pool)
     .await
-    .expect("seed blob event");
-    sqlx::query(
-        "INSERT INTO kb_blobs (id, content_hash, blob_pathname, content_type, \
-                 content_bytes, home_table, home_id, owner_profile_id, originator_profile_id, \
-                 asserted_by_event_id, last_event_id) \
-         VALUES ($1, $2, $3, 'image/png', 10, 'kb_contexts', $4, $5, $5, $6, $6)",
-    )
-    .bind(blob)
-    .bind(&hash)
-    .bind(&pathname)
-    .bind(home)
-    .bind(owner)
-    .bind(blob_event)
-    .execute(&pool)
-    .await
-    .expect("seed blob row");
-    let edge_event: Uuid = sqlx::query_scalar(
-        "SELECT _event_append('relationship_asserted', $1, 'kb_contexts', $2, \
-                jsonb_build_object('edge_id', $3, 'kind', 'contains'))",
-    )
-    .bind(emitter)
-    .bind(home)
-    .bind(blob)
-    .fetch_one(&pool)
-    .await
-    .expect("seed edge assertion event");
-    sqlx::query(
-        "INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, \
-                 home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
-         VALUES ('kb_blobs', $1, 'kb_resources', $2, 'contains', 'kb_contexts', $3, $4, $4)",
-    )
-    .bind(blob)
-    .bind(leak.resource.uuid())
-    .bind(home)
-    .bind(edge_event)
-    .execute(&pool)
-    .await
-    .expect("seed blob-resource edge");
+    .expect("the blob commits through the real path");
+    {
+        let mut conn = pool.acquire().await.unwrap();
+        fire(
+            &mut conn,
+            SeedAction::RelationshipAssert {
+                src: payloads::AnchorRef::blob(blob),
+                tgt: payloads::AnchorRef::resource(leak.resource),
+                kind: EdgeKind::Contains,
+                polarity: EdgePolarity::Forward,
+                label: Some("derived-from"),
+                weight: 1.0,
+                home: EdgeHome::Context(home),
+                emitter,
+            },
+        )
+        .await
+        .expect("the blob-resource relation asserts through the real path");
+    }
 
     // SURVEY: the plan names the blob in the related-blob remainder.
     let survey: serde_json::Value = sqlx::query_scalar("SELECT resource_erasure_survey($1)")
