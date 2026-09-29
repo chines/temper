@@ -82,14 +82,24 @@ run_test "real routes module: passes" "$REAL_ROUTES" 0
 # The gated tier losing require_auth: every gated group on BOTH builders would authenticate nobody.
 FIX="${FIXTURE_DIR}/no_require_auth"
 copy_module "$FIX"
-sed -i '' '/auth::require_auth/d' "$FIX/mod.rs"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = [l for l in open(p).readlines() if "auth::require_auth" not in l]
+open(p, "w").writelines(lines)
+PYEOF
 run_test "require_auth dropped from apply_tier: fails" "$FIX" 1 \
     "'auth::require_auth' not applied by apply_tier"
 
 # The reconcile signature lost: internal_routes serves its HMAC group ungated.
 FIX="${FIXTURE_DIR}/no_internal_signature"
 copy_module "$FIX"
-sed -i '' '/require_internal_signature/d' "$FIX/mod.rs"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = [l for l in open(p).readlines() if "require_internal_signature" not in l]
+open(p, "w").writelines(lines)
+PYEOF
 run_test "require_internal_signature dropped from apply_tier: fails" "$FIX" 1 \
     "'require_internal_signature' not applied by apply_tier"
 
@@ -98,7 +108,15 @@ run_test "require_internal_signature dropped from apply_tier: fails" "$FIX" 1 \
 # per-builder grep could not see either; the row pin is what makes it visible.
 FIX="${FIXTURE_DIR}/tier_flip"
 copy_module "$FIX"
-sed -i '' 's/key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile)/key: "internal_routes", tier: Tier::SelfGated/' "$FIX/mod.rs"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace(
+    'key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile)',
+    'key: "internal_routes", tier: Tier::SelfGated')
+open(p, "w").write(s)
+PYEOF
 run_test "internal_routes tier flipped to SelfGated: fails" "$FIX" 1 \
     "table row changed"
 
@@ -123,7 +141,13 @@ run_test "create_internal_app not mounting from the table: fails" "$FIX" 1 \
 # --- (e) a renamed/removed app builder is caught rather than silently skipped ---
 FIX="${FIXTURE_DIR}/renamed_builder"
 copy_module "$FIX"
-sed -i '' 's/^pub fn create_internal_app(/pub fn create_system_app(/' "$FIX/mod.rs"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("pub fn create_internal_app(", "pub fn create_system_app(", 1)
+open(p, "w").write(s)
+PYEOF
 run_test "create_internal_app renamed: fails loudly" "$FIX" 1 \
     "does not mount from the route table"
 
@@ -149,7 +173,15 @@ run_test "gated row's build fn swapped to public_routes: fails" "$FIX" 1 \
 # deployed Vercel function with zero signal; the reverse flip un-serves a signature group.
 FIX="${FIXTURE_DIR}/serves_flip"
 copy_module "$FIX"
-sed -i '' 's/key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly/key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::BothBuilders/' "$FIX/mod.rs"
+python3 - "$FIX/mod.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace(
+    'key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::AppOnly',
+    'key: "webhook_intake_routes", tier: Tier::SelfGated, build: Undocumented(webhook_intake_routes), body_limit: None, serves: Serves::BothBuilders')
+open(p, "w").write(s)
+PYEOF
 run_test "webhook row's serves flipped to BothBuilders: fails" "$FIX" 1 \
     "table row changed"
 
