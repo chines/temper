@@ -27,7 +27,7 @@
 
 use sqlx::PgPool;
 use temper_core::types::authorship::ActContext;
-use temper_core::types::ids::{BlockId, EntityId, ProfileId, ResourceId};
+use temper_core::types::ids::{BlockId, CogmapId, EntityId, ProfileId, ResourceId};
 use temper_core::types::provenance::ProvenanceSource;
 use temper_services::auth::AuthenticatedProfile;
 use temper_services::backend::DbBackend;
@@ -190,6 +190,126 @@ fn audit_cmd(block: Uuid, source: Uuid) -> RecordCitationAudit {
         act: ActContext::default(),
         origin: Surface::ApiHttp,
     }
+}
+
+/// A cogmap the auditor can read, with its own citation-audit job in flight, claimed by the
+/// auditor. Fixture-shaped (raw INSERTs, the reach the machinery needs, no provisioning side
+/// effects): team membership is what `anchor_readable_by_profile` reads (so
+/// `AuditorJobAuthority` admits the caller as `Auditor`), and the claim's reach scope
+/// (`steward_candidate_cogmaps` → readable cogmaps) is what let the auditor enqueue+claim the
+/// row it completes. The machine-conjunct row itself is seeded by the test — one allowlist row,
+/// per `standing_clock_test.rs`'s fixture spelling.
+async fn seed_auditor_job(pool: &PgPool, auditor_profile: ProfileId) -> CogmapId {
+    use temper_core::types::workflow_job::{DispatchType, Persona};
+    use temper_services::services::workflow_job_service;
+
+    let telos: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ('telos', '') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let cogmap: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('routing-pin-map', $1) RETURNING id",
+    )
+    .bind(telos)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let team: Uuid =
+        sqlx::query_scalar("INSERT INTO kb_teams (slug, name) VALUES ($1, $1) RETURNING id")
+            .bind(format!("job-team-{}", &cogmap.simple().to_string()[..8]))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "INSERT INTO kb_team_members (team_id, profile_id, role) VALUES ($1, $2, 'member')",
+    )
+    .bind(team)
+    .bind(auditor_profile.uuid())
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES ($1, $2)")
+        .bind(cogmap)
+        .bind(team)
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // One job for the cogmap, claimed by the auditor — `complete_claimed` transitions only a row
+    // this principal claimed, so the completion below is that row's own owner completing it.
+    workflow_job_service::enqueue(
+        pool,
+        cogmap,
+        Persona::Auditor.as_str(),
+        DispatchType::CitationAudit.as_str(),
+    )
+    .await
+    .unwrap();
+    let claimed = workflow_job_service::claim(
+        pool,
+        Persona::Auditor.as_str(),
+        DispatchType::CitationAudit.as_str(),
+        10,
+        600,
+        None,
+        auditor_profile,
+    )
+    .await
+    .unwrap();
+    assert_eq!(claimed.len(), 1, "the auditor claims its own enqueued job");
+    CogmapId::from(cogmap)
+}
+
+/// THE SECOND ROUTING PIN, on the machine-principal job door (`complete_auditor_job`): the same
+/// caller, both constructor spellings — the `Proof` arm its middleware minted and the `Bare` arm
+/// the CLI path re-derives. The completion must land under both, and the ledger-row count forbids
+/// either spelling from widening or demoting the gate's answer for this caller.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn proof_holding_and_bare_spellings_complete_the_same_auditor_job(pool: sqlx::PgPool) {
+    use temper_workflow::operations::CompleteAuditorJob;
+
+    bootseed::seed_system(&pool).await.unwrap();
+    let auditor = seeded_authed(&pool, "routing-job-auditor").await;
+    // The machine-conjunct registration: without it both spellings refuse as NotMachine, which
+    // would pin the refusal, not the routing.
+    sqlx::query(
+        "INSERT INTO kb_machine_clients (client_id, label, profile_id, registered_by_profile_id) \
+         VALUES ($1, $1, $2, $2)",
+    )
+    .bind(format!("routing-pin-{}", Uuid::now_v7()))
+    .bind(auditor.profile().id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cogmap = seed_auditor_job(&pool, ProfileId::from(auditor.profile().id)).await;
+    let complete_cmd = CompleteAuditorJob {
+        cogmap,
+        origin: Surface::ApiHttp,
+    };
+
+    // Arm 1 — the proof-holding spelling (what every HTTP handler and MCP tool builds).
+    let proof_backend = DbBackend::with_proof(pool.clone(), &auditor);
+    proof_backend
+        .complete_auditor_job(complete_cmd.clone())
+        .await
+        .expect("the proof-holding caller's gate dispatch completes its job");
+
+    // Arm 2 — the SAME caller through the CLI/operator spelling (`new`): the `Bare` arm keeps
+    // the gate's identical admission. The first call already finished the caller's only job
+    // (`workflow_job_complete_claimed` is single-flight), so this exercises the gate's ADMIT
+    // and the no-op `None` return — both spellings must pass the gate identically rather than
+    // one being refused where the other was admitted.
+    let bare_backend = DbBackend::new(pool.clone(), ProfileId::from(auditor.profile().id));
+    let second = bare_backend
+        .complete_auditor_job(complete_cmd)
+        .await
+        .expect("the same caller through the bare spelling is admitted by the same gate");
+    assert!(
+        second.value.is_none(),
+        "the bare spelling is admissible but owns nothing left in flight — the gate, not the queue, is under test"
+    );
 }
 
 /// Mint a real Level-1 proof for a seeded profile — the exact thing `with_proof` accepts and

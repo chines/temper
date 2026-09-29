@@ -1,7 +1,7 @@
 //! HTTP handlers for the segmented (multi-block) ingest surface: append one segment, finalize
 //! the session, and read the currently-landed set back (the resume/progress query).
 //!
-//! Thin handlers only: `AuthUser` extractor → `DbBackend::new` → dispatch the `Backend` trait
+//! Thin handlers only: `AuthUser` extractor → `DbBackend::with_proof` → dispatch the `Backend` trait
 //! method (Task 2.2) → map errors via `ApiError`. The auth-before-write gate
 //! (`can_modify_resource`) lives in the `DbBackend` methods, not here — mirrors
 //! `handlers::ingest`.

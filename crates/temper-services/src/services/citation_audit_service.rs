@@ -67,7 +67,7 @@ use crate::backend::DbBackend;
 use crate::error::{ApiError, ApiResult};
 use temper_core::error::TemperError;
 use temper_core::types::citation_audit::CitationAuditRow;
-use temper_core::types::ids::ResourceId;
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_substrate::readback;
 use temper_workflow::operations::{Backend, RecordCitationAudit};
 
@@ -131,7 +131,7 @@ pub async fn record_citation_audit(
 /// axes summed; this function only maps the substrate-local record to the wire type.
 pub async fn list_citation_audits(
     pool: &PgPool,
-    profile_id: temper_core::types::ids::ProfileId,
+    profile_id: ProfileId,
     finding: ResourceId,
 ) -> ApiResult<Vec<CitationAuditRow>> {
     let readable = readback::is_resource_visible(pool, profile_id, finding)

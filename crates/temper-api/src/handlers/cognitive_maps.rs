@@ -108,13 +108,11 @@ pub async fn genesis(
     // Genesis is open to any authenticated profile. The reserved-id guard and the creator-grant live
     // in the backend command (`create_cognitive_map`): a caller-supplied id is honored only for a
     // system-admin, and the creator is granted read+write+grant on the new map.
-    let profile_id = ProfileId::from(auth.0.profile().id);
-
     let cmd = CreateCognitiveMap {
         request,
         origin: surface,
     };
-    let backend = DbBackend::new(state.pool.clone(), profile_id);
+    let backend = DbBackend::with_proof(state.pool.clone(), &auth.0);
     let out = backend
         .create_cognitive_map(cmd)
         .await
