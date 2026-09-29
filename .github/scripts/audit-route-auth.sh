@@ -261,16 +261,20 @@ require_order() {
     BEGIN { n = split(names, arr, " ") }
     { body = body $0 "\n" }
     END {
+      # No `next`/`continue` here: gawk fatally rejects `next` in an END action, and the
+      # macOS awk that accepted it is not the awk CI runs.
       cursor = 1; bad = 0
       for (i = 1; i <= n; i++) {
         # Sequential search: each name must first occur AFTER the previous one, so a name
         # reused across match arms (auth::require_auth is in AuthOnly AND Gated) resolves to
         # THIS arm occurrence, not the first one in the file.
         idx = index(substr(body, cursor), arr[i])
-        if (idx == 0) { print "audit-route-auth: FAIL — order pin: \x27" arr[i] "\x27 not found in " fn "'"'"'s body (after offset " cursor-1 ")" > "/dev/stderr"; bad = 1; next }
-        abs = cursor + idx - 1
-        if (abs < cursor) { print "audit-route-auth: FAIL — order pin: \x27" arr[i] "\x27 out of addition order in " fn > "/dev/stderr"; bad = 1 }
-        cursor = abs + length(arr[i])
+        if (idx == 0) {
+          print "audit-route-auth: FAIL — order pin: \x27" arr[i] "\x27 not found in " fn "'"'"'s body (after offset " cursor-1 ")" > "/dev/stderr"
+          bad = 1
+        } else {
+          cursor = cursor + idx - 1 + length(arr[i])
+        }
       }
       exit bad
     }' || fail=1
