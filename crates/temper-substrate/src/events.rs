@@ -146,6 +146,16 @@ pub enum EventKind {
     /// the payload. Same `admin` / NULL-anchored posture. TYPED; execution lands with the
     /// erasure build.
     PrincipalErasureRefused,
+    /// Resource erasure's completion event (spec 2026-09-28, D1): one admin event per erasure,
+    /// beside one `relationship_folded` per ended edge. Category `admin`, NULL-anchored. TYPED;
+    /// registered by `20260929000010`, executed by a later build.
+    ResourceErased,
+    /// Resource erasure's refusal face (spec 2026-09-28, D5), shared with the block history
+    /// scrub (D11). Same `admin` / NULL-anchored posture.
+    ResourceErasureRefused,
+    /// The block history scrub (spec 2026-09-28, D11): prior revisions and non-current chunks of
+    /// a live resource's blocks emptied. Same `admin` / NULL-anchored posture.
+    BlockHistoryScrubbed,
     /// An auditor's signed verdict on one `(block, source)` citation (Set 5, spec §4.1-4.2).
     /// Append-only — fires `citation_audited`, projected by `_project_citation_audited` into
     /// `kb_citation_audits` with no supersession. Registered permissive (NULL `payload_schema`),
@@ -233,6 +243,9 @@ impl EventKind {
             EventKind::PrincipalGovernanceChanged => "principal_governance_changed",
             EventKind::PrincipalErased => "principal_erased",
             EventKind::PrincipalErasureRefused => "principal_erasure_refused",
+            EventKind::ResourceErased => "resource_erased",
+            EventKind::ResourceErasureRefused => "resource_erasure_refused",
+            EventKind::BlockHistoryScrubbed => "block_history_scrubbed",
             EventKind::CitationAudited => "citation_audited",
             EventKind::BlobCommitted => "blob_committed",
             EventKind::ResourceReblocked => "resource_reblocked",
@@ -289,6 +302,9 @@ impl EventKind {
             "principal_governance_changed" => EventKind::PrincipalGovernanceChanged,
             "principal_erased" => EventKind::PrincipalErased,
             "principal_erasure_refused" => EventKind::PrincipalErasureRefused,
+            "resource_erased" => EventKind::ResourceErased,
+            "resource_erasure_refused" => EventKind::ResourceErasureRefused,
+            "block_history_scrubbed" => EventKind::BlockHistoryScrubbed,
             "citation_audited" => EventKind::CitationAudited,
             "blob_committed" => EventKind::BlobCommitted,
             "resource_reblocked" => EventKind::ResourceReblocked,

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BlockHistoryScrubbed",
+  "description": "`block_history_scrubbed` — the remedy lighter than erasure (resource erasure spec D11): every\nrevision of each block but its current one, and every non-current chunk, emptied, on a LIVE\nresource. CAS-only; it touches no ledger payload.\n\nKeyed `subject_table` (`kb_content_blocks`) / `subject_ids`, never `block_id`:\n`element_trail_node` joins on `payload->>'block_id'` (the D1 join-key rule).",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "description": "The acting system admin.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "subject_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "subject_table": {
+      "description": "Always `kb_content_blocks`.",
+      "$ref": "#/$defs/AnchorTable"
+    },
+    "targets": {
+      "description": "Per-block outcomes (revisions and chunks emptied).",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ErasureTargetOutcome"
+      }
+    }
+  },
+  "required": [
+    "subject_table",
+    "subject_ids"
+  ],
+  "$defs": {
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles",
+        "kb_connections",
+        "kb_machine_clients",
+        "kb_blobs",
+        "kb_events"
+      ]
+    },
+    "ErasureTargetOutcome": {
+      "description": "One target of a completed erasure and what happened to it (erasure spec, \"per-target\noutcomes\"). The target names itself the way the personal-data manifest does — `table` or\n`table.column`; the outcome is the act's own record of what redaction applied. Deliberately\nopen-textured in v1: ceilings are DATA, not types (D1), and the per-target vocabulary is the\nexecution build's to pin. `unhonourable_scope` outcomes land here, never silent.",
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "description": "What the act did to it (erased / sentinel-scrubbed / accepted-in-part / …).",
+          "type": "string"
+        },
+        "target": {
+          "description": "Manifest identity of the target (`kb_profiles.display_name`, `kb_teams.slug`, …).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "outcome"
+      ]
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles.id` value.",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}
