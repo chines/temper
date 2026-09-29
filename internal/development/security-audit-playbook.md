@@ -38,12 +38,14 @@ encodes the method used in the 2026-07-18 audit
 For every entry point, produce a row: `route | mechanism | enforcement site (file:line) |
 verdict`. Entry points to enumerate:
 
-- **temper-api** — `crates/temper-api/src/routes.rs`. Each sub-router and its `.layer(...)`:
-  `public` (health only), `auth_only` (`require_auth`), `gated` (`require_auth` +
-  `require_system_access`), `internal`/`slack_link_internal` (HMAC), `slack_link_public`
-  (PKCE+state), `embed_internal` (self-gated secret). Confirm `require_auth` is the **outermost**
-  layer on gated routes and that it **survives `split_for_parts()`** (empirically proven by
-  e2e `no_auth_returns_401` hitting a gated route — keep that test).
+- **temper-api** — `crates/temper-api/src/routes/` — the route table in `mod.rs` maps every
+  group to its tier, and the tier's middleware stack is applied in one place (`apply_tier`).
+  Per-group route declarations live in the sibling files: `public` (health only), `auth_only`
+  (`require_auth`), `gated` (`require_auth` + `require_system_access`), `internal`/
+  `slack_link_internal` (HMAC), `slack_link_public` (PKCE+state), `embed_internal` (self-gated
+  secret). Confirm `require_auth` rides the gated tier and that it **survives
+  `split_for_parts()`** (empirically proven by e2e `no_auth_returns_401` hitting a gated route —
+  keep that test).
 - **temper-mcp** — `crates/temper-mcp/src/router.rs` (which routes carry `require_mcp_auth`) and
   `service.rs` (every `#[tool]` must call the `ensure_profile_from_parts` chokepoint →
   `authenticate_token` + `require_system_access` as its first line). **Count `#[tool(` vs

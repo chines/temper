@@ -478,7 +478,7 @@ default for everyone.
 > if they do not:** switch each cron `path` to a segment form (`/api/embed/dispatch/0` … `/3`). Note a
 > Vercel `dest` only *selects the function* — it does not rewrite the path the Axum router matches on —
 > and the internal router registers the handler at the **exact** path `/api/embed/dispatch`
-> (`crates/temper-api/src/routes.rs`), so `/api/embed/dispatch/0` would 404 unmatched. Two ways to make
+> (`crates/temper-api/src/routes/embed_internal.rs`), so `/api/embed/dispatch/0` would 404 unmatched. Two ways to make
 > the segment form work: **(a) config-only** — a Vercel rewrite back to the canonical query form,
 > `{ "src": "/api/embed/dispatch/(\\d+)", "dest": "/api/embed/dispatch?shard=$1" }` (the existing
 > `{ "src": "/api/embed/dispatch", "dest": "/api/internal" }` then matches the rewritten path); **or

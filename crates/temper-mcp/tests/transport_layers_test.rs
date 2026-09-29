@@ -7,7 +7,7 @@
 //!   - **request decompression** — a `Content-Encoding: gzip` body reached the JSON extractor still
 //!     compressed and was rejected as malformed. This also orphaned a piece of reasoning written as
 //!     though it held everywhere: the webhook body limit's doc comment
-//!     (`temper-api/src/routes.rs`) explains that it "bounds the body axum's extractor sees, which
+//!     (`temper-api/src/routes/`) explains that it "bounds the body axum's extractor sees, which
 //!     is *after* the app-wide `RequestDecompressionLayer` — so it bounds decompressed bytes". On
 //!     MCP there was no such layer for that sentence to be true about.
 //!   - **the fallback handler** — an unmatched path got axum's bare 404 with an empty body instead
@@ -29,7 +29,7 @@ mod common;
 /// `[added — 2026-08-28, found in review]` `/mcp` is mounted with `nest_service`, whose target is a
 /// raw tower service — no axum extractor runs, so `DefaultBodyLimit` is not merely unset here, it is
 /// inapplicable. rmcp's `expect_json` reads with a bare `.collect()`, so this door buffered an
-/// arbitrarily large body while the sibling reasoning in `temper-api/src/routes.rs` read as though
+/// arbitrarily large body while the sibling reasoning in `temper-api/src/routes/` read as though
 /// every surface were bounded.
 ///
 /// **The under-limit half is what makes this a witness rather than a tautology.** A test that only

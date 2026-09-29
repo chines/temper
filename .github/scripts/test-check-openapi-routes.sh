@@ -10,7 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CHECK_SCRIPT="${SCRIPT_DIR}/check-openapi-routes.sh"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-REAL_ROUTES="${REPO_ROOT}/crates/temper-api/src/routes.rs"
+REAL_ROUTES="${REPO_ROOT}/crates/temper-api/src/routes"
 PASS=0
 FAIL=0
 
@@ -43,8 +43,10 @@ run_test() {
 echo "Running check-openapi-routes.sh tests..."
 echo ""
 
-# --- (a) the real routes.rs passes (only allowlisted plain .route() mounts) ---
-run_test "real routes.rs: passes" "$REAL_ROUTES" 0
+# --- (a) the real routes module passes (only allowlisted plain .route() mounts).
+# The real case runs with NO argument — the checker's default is the whole routes
+# module directory, which is exactly what CI scans. ---
+run_test "real routes module: passes" "" 0
 
 # --- (b) an off-allowlist plain .route() fails ---
 OFF_ALLOWLIST="${FIXTURE_DIR}/off_allowlist.rs"
