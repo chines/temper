@@ -312,6 +312,11 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 #     or deleting a declaration outright — with the test that checks it never
 #     running. Verified before the entry was added: DOCS_ONLY=true,
 #     SKIP_ALL=true.
+#   scripts/sensitivity-scan-surface.txt — `include_str!`d by
+#     sensitivity_scan_surface_test.rs, which asserts it and the manifest above
+#     PARTITION every text/varchar column of the live catalog. The same shape and
+#     the same hole: a lone edit re-dispositioning a column (or deleting its line)
+#     would skip the test that checks it.
 #   docs/reference/** — the committed projection of the BUILT CLI's `--help` tree
 #     (and, next to it, of TemperConfig). All `.md` under `docs/`, so it scoped as
 #     docs-only and turned rust-quality OFF — leaving a hand-edit to a GENERATED
@@ -339,7 +344,7 @@ RUST_INERT_ROOTS='^packages/temper-cloud/|^packages/temper-ui/|^packages/agent-w
 # `assert_every_compiled_in_doc_is_vetoed` in test-detect-ci-scope.sh guards —
 # it derives the set from the source rather than trusting this list to stay
 # complete.
-RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^scripts/personal-data-surface\.txt$|^docs/reference/'
+RUST_COUPLED='^packages/temper-ui/src/lib/types/generated/|^packages/agent-workflows/mention/agent/generated/|^skills/|^openapi\.json$|^tests/contracts/|^crates/temper-cli/skill-content/|^scripts/install/containment-corpus\.txt$|^scripts/migration-declaration-corpus\.txt$|^scripts/personal-data-surface\.txt$|^scripts/sensitivity-scan-surface\.txt$|^docs/reference/'
 
 HAS_RUST_COUPLED=false
 if changes_match "$RUST_COUPLED"; then
