@@ -135,14 +135,16 @@ BEGIN
             WHERE r.home_anchor_table = 'kb_cogmaps' AND NOT r.is_folded
               AND mem.member_table = 'kb_resources' AND mem.member_id = p_resource);
 
-    -- ── (8) Workflow jobs scoped to the resource (D2 step 7): pending rows cancelled, payload
-    --     excerpts emptied. Not replay inputs; excerpt carriers on the personal-data surface. ───
+    -- ── (8) Workflow jobs scoped to the resource (D2 step 7): pending/in-flight rows
+    --     deaded, payload excerpts emptied. Not replay inputs; excerpt carriers on the
+    --     personal-data surface. `in_progress` is reached deliberately: a leased job's
+    --     payload quotes R's content and would survive the act alive until lease expiry. ──
     UPDATE kb_workflow_jobs j
        SET status     = 'dead',
            payload    = '{}'::jsonb,
            last_error = NULL
      WHERE j.resource_id = p_resource
-       AND j.status IN ('pending', 'waiting_for_retry');
+       AND j.status IN ('pending', 'waiting_for_retry', 'in_progress');
 
     -- ── (9) PROJECTION-SIDE SENTINELS, applied inside the same body at the caller's event
     --     position (D2 step 9, D4's projection side). Before cut 2 ships, step (9a) is what keeps
@@ -197,7 +199,8 @@ BEGIN
           FROM kb_properties p
          WHERE p.owner_table = 'kb_resources' AND p.owner_id = p_resource
     ), ranked AS (
-        SELECT property_key, row_number() OVER (ORDER BY first_seen) AS n FROM family
+        SELECT property_key, row_number() OVER (ORDER BY first_seen, property_key) AS n
+          FROM family
     )
     UPDATE kb_properties p
        SET property_key   = 'erased-key-' || ranked.n::text,
@@ -358,19 +361,24 @@ BEGIN
     SELECT count(*) INTO v_n_chunks FROM kb_chunks WHERE resource_id = p_resource;
     SELECT count(*) INTO v_n_artifacts FROM kb_data_artifacts WHERE resource_id = p_resource;
     SELECT count(*) INTO v_n_edges FROM kb_edges e
-     WHERE (e.source_table = 'kb_resources' AND e.source_id = p_resource)
-        OR (e.target_table = 'kb_resources' AND e.target_id = p_resource);
+      WHERE NOT e.is_folded
+        AND ((e.source_table = 'kb_resources' AND e.source_id = p_resource)
+          OR (e.target_table = 'kb_resources' AND e.target_id = p_resource));
 
     -- ── The edges the act folds, each listed so the record's `folded_edges` and the per-edge
-    --     events agree. ──────────────────────────────────────────────────────────────────────
+    --     events agree. LIVE edges only: an edge already folded by history is the fold's
+    --     business, not this act's — enumerating it would abort execute against a lawful
+    --     state. Folded edges stay in `folded_edges`? No — only what THIS act folds is
+    --     listed; the pre-existing fold already carries its own event. ──────────────────
     FOR v_row IN
-        SELECT e.id, e.label, e.edge_kind
+        SELECT e.id
           FROM kb_edges e
-         WHERE (e.source_table = 'kb_resources' AND e.source_id = p_resource)
-            OR (e.target_table = 'kb_resources' AND e.target_id = p_resource)
-         ORDER BY e.id
+          WHERE NOT e.is_folded
+            AND ((e.source_table = 'kb_resources' AND e.source_id = p_resource)
+              OR (e.target_table = 'kb_resources' AND e.target_id = p_resource))
+          ORDER BY e.id
     LOOP
-        v_edges := v_edges || jsonb_build_object('edge_id', v_row.id, 'kind', v_row.edge_kind);
+        v_edges := v_edges || to_jsonb(v_row.id);
     END LOOP;
 
     -- ── THE REFUSAL FACE (D5), computed here so execute consumes the verdict rather than
@@ -500,8 +508,10 @@ BEGIN
       FROM (
         SELECT t.event_id,
                CASE t.event_type
-                   WHEN 'resource_created'           THEN '["title","origin_uri"]'::jsonb
+                   WHEN 'resource_created'           THEN '["title","origin_uri","blocks[*].incorporated[*].source.value"]'::jsonb
                    WHEN 'resource_updated'           THEN '["title","origin_uri"]'::jsonb
+                   WHEN 'block_created'              THEN '["block.incorporated[*].source.value"]'::jsonb
+                   WHEN 'block_mutated'              THEN '["incorporated[*].source.value"]'::jsonb
                    WHEN 'block_folded'               THEN '["reason"]'::jsonb
                    WHEN 'citation_audited'           THEN '["reason"]'::jsonb
                    WHEN 'relationship_asserted'      THEN '["label"]'::jsonb
@@ -643,6 +653,8 @@ DECLARE
     v_charter uuid;
     v_ingest  text;
     v_erased  boolean;
+    v_erased_ts timestamptz;
+    v_active  boolean;
     v_found   boolean;
     v_id      uuid;
     v_ev      uuid;
@@ -663,23 +675,35 @@ BEGIN
     --    never silently widens the negative face to a partial act (and never appends a refusal
     --    event itself: _event_append's emitter is the OPERATOR and a refused attempt at SQL
     --    grain would attribute wrongly). The verdict reads happen before anything mutates. ──
+    --    convention. The verdict reads happen before anything mutates, and under the
+    --    advisory lock (taken first below): two concurrent executes must serialize so the
+    --    loser re-reads `erased_at` AFTER the winner's commit and refuses as
+    --    already-erased, rather than both passing the unlocked reads and double-completing.
+    --    A soft-deleted (tombstoned) resource gets its OWN message — PR 2's service parses
+    --    these strings into refusal vocabulary and must not read a tombstone as missing. ──
+    SELECT count(*) > 0 INTO v_found FROM kb_resources r WHERE r.id = p_resource;
+    IF NOT v_found THEN
+        RAISE EXCEPTION 'resource_erasure_execute: resource % not found', p_resource;
+    END IF;
+    PERFORM pg_advisory_xact_lock(hashtext('kb_resources'),
+                                  hashtext(p_resource::text));
     SELECT c.telos_resource_id INTO v_charter FROM kb_cogmaps c WHERE c.telos_resource_id = p_resource;
-    SELECT r.ingest_state, r.erased_at IS NOT NULL
-      INTO v_ingest, v_erased
+    SELECT r.ingest_state, r.erased_at INTO v_ingest, v_erased_ts
       FROM kb_resources r WHERE r.id = p_resource;
-    SELECT count(*) > 0 INTO v_found FROM kb_resources r WHERE r.id = p_resource AND r.is_active;
+    v_erased := v_erased_ts IS NOT NULL;
 
     IF v_charter IS NOT NULL THEN
         RAISE EXCEPTION 'resource_erasure_execute: charter resource (map-grain erasure is filed task 01a0e960-0ca2-7f42-b33e-1ed19b024e6b)';
     END IF;
-    IF v_ingest <> 'complete' THEN
-        RAISE EXCEPTION 'resource_erasure_execute: ingest % in flight; finalize or abandon first', v_ingest;
-    END IF;
     IF v_erased THEN
         RAISE EXCEPTION 'resource_erasure_execute: already erased';
     END IF;
-    IF NOT v_found THEN
-        RAISE EXCEPTION 'resource_erasure_execute: resource % not found', p_resource;
+    IF v_ingest <> 'complete' THEN
+        RAISE EXCEPTION 'resource_erasure_execute: ingest % in flight; finalize or abandon first', v_ingest;
+    END IF;
+    SELECT is_active INTO v_active FROM kb_resources WHERE id = p_resource;
+    IF NOT v_active THEN
+        RAISE EXCEPTION 'resource_erasure_execute: resource % soft-deleted (tombstone, not erasable)', p_resource;
     END IF;
 
 
@@ -730,7 +754,7 @@ BEGIN
     --    the fold events agree in the same transaction.
     v_edges := v_plan->'edges';
     FOR v_i IN 0 .. jsonb_array_length(v_edges) - 1 LOOP
-        v_eid := (v_edges->v_i->>'edge_id')::uuid;
+        v_eid := (v_edges->>v_i)::uuid;
         SELECT id INTO v_id FROM kb_edges WHERE id = v_eid AND NOT is_folded;
         IF v_id IS NULL THEN
             RAISE EXCEPTION 'resource_erasure_execute: edge % missing or already folded', v_eid;

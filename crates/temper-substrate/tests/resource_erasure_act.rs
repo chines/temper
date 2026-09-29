@@ -33,10 +33,11 @@ use temper_substrate::events::{fire, EdgeHome, EventContext, SeedAction};
 use temper_substrate::ids::{ContextId, EdgeId, ProfileId, ResourceId};
 use temper_substrate::payloads::EdgePolarity;
 use temper_substrate::payloads::{
-    AnchorRef, ArtifactIntent, Incorporation, KindOwner, ProvenanceSource,
+    self, AnchorRef, ArtifactIntent, Incorporation, KindOwner, ProvenanceSource,
 };
 use temper_substrate::replay;
 use temper_substrate::writes::{self, CommitDataArtifactParams, CreateParams, UpdateParams};
+use temper_substrate::writes::{AssertParams, CreateMode};
 use uuid::Uuid;
 
 /// The leaked prose and the clean replacement, one pair per file. `chunk_hash` is the chunker's
@@ -607,7 +608,91 @@ async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
         "the repeat refusal says why; got {msg}"
     );
 
-    // an ingest in flight refuses finalize-or-abandon
+    // a charter resource (a cogmap's telos) refuses — the map-grain act is another task
+    let telos = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "telos-for-refusal",
+            origin_uri: "test://telos-refusal",
+            body: "the map's charter",
+            doc_type: "telos",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ($1, $2)")
+        .bind("refusal-map")
+        .bind(telos.uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let charter =
+        sqlx::query_scalar::<sqlx::Postgres, Uuid>("SELECT resource_erasure_execute($1,$2,$3,$4)")
+            .bind(telos.uuid())
+            .bind(owner.uuid())
+            .bind(emitter)
+            .bind(Uuid::now_v7())
+            .fetch_one(&pool)
+            .await;
+    assert!(
+        charter
+            .unwrap_err()
+            .to_string()
+            .contains("charter resource"),
+        "the charter refusal names itself"
+    );
+
+    // an ingest in flight refuses (a segmented-ingest resource, not yet finalized)
+    let in_flight = writes::create_resource_with_mode(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "mid-ingest",
+            origin_uri: "test://mid-ingest",
+            body: "block zero",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+        CreateMode {
+            defer: false,
+            segmented: true,
+        },
+    )
+    .await
+    .unwrap();
+    let flight =
+        sqlx::query_scalar::<sqlx::Postgres, Uuid>("SELECT resource_erasure_execute($1,$2,$3,$4)")
+            .bind(in_flight.uuid())
+            .bind(owner.uuid())
+            .bind(emitter)
+            .bind(Uuid::now_v7())
+            .fetch_one(&pool)
+            .await;
+    assert!(
+        flight
+            .unwrap_err()
+            .to_string()
+            .contains("in flight; finalize or abandon first"),
+        "the ingest-in-flight refusal says so"
+    );
+
+    // a nil resource cannot execute (not-found)
     let pending =
         sqlx::query_scalar::<sqlx::Postgres, Uuid>("SELECT resource_erasure_execute($1,$2,$3,$4)")
             .bind(Uuid::nil())
@@ -617,6 +702,54 @@ async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
             .fetch_one(&pool)
             .await;
     assert!(pending.is_err(), "a nil resource cannot execute");
+
+    // a soft-deleted (tombstoned, never erased) resource gets its OWN message — the
+    // service parses these strings into refusal vocabulary and must not read a
+    // tombstone as missing.
+    let tombstone = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "tombstoned",
+            origin_uri: "test://tombstone",
+            body: "gone from the estate",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE kb_resources SET is_active = false \
+          WHERE id = $1 AND ingest_state = 'complete' AND erased_at IS NULL",
+    )
+    .bind(tombstone.uuid())
+    .execute(&pool)
+    .await
+    .unwrap();
+    let tomb =
+        sqlx::query_scalar::<sqlx::Postgres, Uuid>("SELECT resource_erasure_execute($1,$2,$3,$4)")
+            .bind(tombstone.uuid())
+            .bind(owner.uuid())
+            .bind(emitter)
+            .bind(Uuid::now_v7())
+            .fetch_one(&pool)
+            .await;
+    assert!(
+        tomb.unwrap_err().to_string().contains("soft-deleted"),
+        "the tombstone refusal is distinct from not-found"
+    );
+
+    // execute refuses a plan that names an ALREADY-FOLDED edge — the act completes on
+    // live edges only now, so this exercises the live-only enumeration (the witness
+    // the reviews asked for and the diff's own defect class).
 }
 
 /// (1, the twin half) A sibling with identical bytes in ANOTHER home keeps its content AND its
@@ -736,7 +869,7 @@ async fn a_reset_key_maps_to_one_sentinel_key(pool: sqlx::PgPool) {
             owner,
             originator: owner,
             emitter,
-            properties: &[("notes".into(), serde_json::json!("alpha"))],
+            properties: &[("alpha-key".into(), serde_json::json!("beta"))],
             chunks: None,
             sources: vec![],
         },
@@ -745,7 +878,9 @@ async fn a_reset_key_maps_to_one_sentinel_key(pool: sqlx::PgPool) {
     .await
     .unwrap();
 
-    // unset → set again: the SAME original key, three property events.
+    // THE SAME original key, set → unset → re-set: three property events, ONE family
+    // position. (The earlier draft used two different keys touched once each — that
+    // exercised nothing about the numbering.)
     unset_via_update(&pool, resource, emitter).await.unwrap();
     writes::set_property(
         &pool,
@@ -759,9 +894,10 @@ async fn a_reset_key_maps_to_one_sentinel_key(pool: sqlx::PgPool) {
 
     execute_act(&pool, resource.uuid()).await;
 
-    // Every property event that named the key now names ONE sentineled form: replay reproduces
-    // the same mapping because it is a pure function of ledger order.
-    let keys: Vec<(String,)> = sqlx::query_as(
+    // Every property event that named the key now names ONE sentineled form: the
+    // whole family collapses to exactly one `erased-key-<n>`, asserted exactly —
+    // a `.all(starts_with)` would pass even if a regression split the family in two.
+    let mut keys: Vec<String> = sqlx::query_scalar(
         "SELECT distinct property_key FROM kb_properties \
           WHERE owner_table='kb_resources' AND owner_id=$1",
     )
@@ -769,10 +905,19 @@ async fn a_reset_key_maps_to_one_sentinel_key(pool: sqlx::PgPool) {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert!(
-        keys.iter().all(|(k,)| k.starts_with("erased-key-")),
-        "the reset key's whole family is ONE erased-key-<n>; distinct keys now: {keys:?}"
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec!["erased-key-1".to_owned(), "erased-key-2".to_owned()],
+        // key-1 is the resource's birth `doc_type` (earliest first_seen, and the
+        // (first_seen, property_key) tie-break makes the numbering total); key-2 is
+        // the alpha-key family. TWO keys, each ONE — that is the whole assertion.
+        "the reset key's family maps ONE erased-key-<n> per key; distinct keys now: {keys:?}"
     );
+
+    // The typed roundtrip contract is what catches a payload-shape drift like a
+    // wrapped `{"edge_id": …}` item instead of a bare uuid — add it to the walk.
+    payloads::verify_ledger_roundtrip(&pool).await.unwrap();
 }
 
 /// (9, the facet half) Two live rows of ONE key — the facet shape `facet_set` exists for — must
@@ -873,4 +1018,262 @@ async fn two_live_rows_of_one_key_sentinel_without_colliding(pool: sqlx::PgPool)
             "projection table {ta} diverged under replay of a facet-sentineled erasure"
         );
     }
+}
+
+/// (13) A resource whose history carries an ALREADY-FOLDED edge is a lawful state — the
+/// act must complete on the LIVE edges and record only what it folds. The first draft
+/// enumerated every edge regardless of fold state and aborted execute on the pre-existing
+/// fold; this witness was the defect's pin.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_pre_existing_folded_edge_does_not_abort_the_act(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "prefold-home").await;
+    let other = make_home(&pool, owner, "prefold-other").await;
+
+    let a = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "with-history",
+            origin_uri: "test://with-history",
+            body: "history carries an ended edge",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    let b = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "other party",
+            origin_uri: "test://other-party",
+            body: "b",
+            doc_type: "research",
+            home: AnchorRef::context(other),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+
+    let edge = writes::assert_relationship(
+        &pool,
+        AssertParams {
+            src: a,
+            tgt: b,
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("superseded-by"),
+            weight: 1.0,
+            home,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+
+    // History folds it lawfully, for its own reason — before the erasure is ever asked.
+    writes::fold_relationship(&pool, edge, Some("superseded"), emitter)
+        .await
+        .unwrap();
+
+    execute_act(&pool, a.uuid()).await;
+
+    // The folded edge was NOT re-listed as this act's work: exactly one fold of it
+    // exists in the record (the history's own), and the act completed.
+    let act_folds: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'relationship_folded' AND (e.payload->'payload'->>'edge_id')::uuid = $1 \
+            AND e.payload->>'reason' = 'resource_erased'",
+    )
+    .bind(edge)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        act_folds, 0,
+        "the act folds only LIVE edges; the pre-existing fold keeps its own history"
+    );
+}
+
+/// (14) THE BLOB STRIKE ARM + its list-verification fence, previously unwitnessed: a
+/// listed live blob is struck through `blob_delete('blob_erased', …)` (released verdict;
+/// the row's outcome prose is the fence template byte-parsed downstream), an operator
+/// widening the plan mid-act is REFUSED, and the struck blob is named in `targets`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_operator_listed_blob_strike_verifies_and_strikes(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "strike-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "strike-twin").await,
+    )
+    .await;
+
+    // The relation edge the survey walks to find related blobs (the survey names related
+    // blobs; the operator answers with the subset to strike).
+    let blob = Uuid::now_v7();
+    let hash = chunk_hash("blob bytes under erasure");
+    let pathname = format!("strike-blob/{}", &hash[..16.min(hash.len())]);
+    let blob_event: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('blob_committed', $1, 'kb_contexts', $2, \
+                jsonb_build_object('blob_id', $3))",
+    )
+    .bind(emitter)
+    .bind(home)
+    .bind(blob)
+    .fetch_one(&pool)
+    .await
+    .expect("seed blob event");
+    sqlx::query(
+        "INSERT INTO kb_blobs (id, content_hash, blob_pathname, content_type, \
+                 content_bytes, home_table, home_id, owner_profile_id, originator_profile_id, \
+                 asserted_by_event_id, last_event_id) \
+         VALUES ($1, $2, $3, 'image/png', 10, 'kb_contexts', $4, $5, $5, $6, $6)",
+    )
+    .bind(blob)
+    .bind(&hash)
+    .bind(&pathname)
+    .bind(home)
+    .bind(owner)
+    .bind(blob_event)
+    .execute(&pool)
+    .await
+    .expect("seed blob row");
+    let edge_event: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('relationship_asserted', $1, 'kb_contexts', $2, \
+                jsonb_build_object('edge_id', $3, 'kind', 'contains'))",
+    )
+    .bind(emitter)
+    .bind(home)
+    .bind(blob)
+    .fetch_one(&pool)
+    .await
+    .expect("seed edge assertion event");
+    sqlx::query(
+        "INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, \
+                 home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
+         VALUES ('kb_blobs', $1, 'kb_resources', $2, 'contains', 'kb_contexts', $3, $4, $4)",
+    )
+    .bind(blob)
+    .bind(leak.resource.uuid())
+    .bind(home)
+    .bind(edge_event)
+    .execute(&pool)
+    .await
+    .expect("seed blob-resource edge");
+
+    // SURVEY: the plan names the blob in the related-blob remainder.
+    let survey: serde_json::Value = sqlx::query_scalar("SELECT resource_erasure_survey($1)")
+        .bind(leak.resource.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let remainder_blob_named = survey
+        .get("remainder")
+        .and_then(|r| r.as_array())
+        .map(|a| {
+            a.iter().any(|e| {
+                e.get("target").and_then(|t| t.as_str()) == Some("kb_blobs")
+                    && e.get("outcome")
+                        .and_then(|o| o.as_str())
+                        .map(|o| o.contains(&format!("blob {blob};")))
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false);
+    assert!(
+        remainder_blob_named,
+        "the survey names the related blob: {survey}"
+    );
+
+    // EXECUTE with the operator's list: the strike runs, released=true, and the
+    // byte-delete fence prose is recorded for the fence to parse.
+    let (_, operator_entity) = system_actor(&pool).await;
+    let outcome: serde_json::Value =
+        sqlx::query_scalar("SELECT resource_erasure_execute($1,$2,$3,$4,$5)")
+            .bind(leak.resource.uuid())
+            .bind(operator_entity)
+            .bind(operator_entity)
+            .bind(Uuid::now_v7())
+            .bind(vec![blob])
+            .fetch_one(&pool)
+            .await
+            .expect("the act completes with the listed strike");
+    let struck = outcome
+        .get("targets")
+        .and_then(|t| t.as_array())
+        .map(|a| {
+            a.iter()
+                .any(|e| e.get("target").and_then(|t| t.as_str()) == Some("kb_blobs"))
+        })
+        .unwrap_or(false);
+    assert!(struck, "the record names the blob strike; got {outcome}");
+
+    // Widening the plan mid-act: a SECOND resource with its own related blob; the
+    // operator offers a blob in NO relation to it, and is refused rather than
+    // silently struck.
+    let resource2 = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "strike-target-two",
+            origin_uri: "test://strike-two",
+            body: "second erasure target",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    let widened = sqlx::query_scalar::<sqlx::Postgres, Uuid>(
+        "SELECT (resource_erasure_execute($1,$2,$3,$4,$5)->>'event_id')::text",
+    )
+    .bind(resource2.uuid())
+    .bind(operator_entity)
+    .bind(operator_entity)
+    .bind(Uuid::now_v7())
+    .bind(vec![blob])
+    .fetch_one(&pool)
+    .await;
+    assert!(
+        widened
+            .unwrap_err()
+            .to_string()
+            .contains("related-blob remainder; strike refused"),
+        "a listed blob the plan did NOT name is refused, not silently struck"
+    );
 }

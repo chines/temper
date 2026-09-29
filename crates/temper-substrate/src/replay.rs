@@ -61,7 +61,8 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         // for them and they compare on the rest.
         "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'id' - 'source_id' - 'created') || jsonb_build_object('source_key', \
               CASE WHEN qrn.id IS NOT NULL THEN qrn.uri_normalized ELSE (to_jsonb(t.source_id) #>> '{}') END)
-             ORDER BY t.block_id, t.accretion_seq), '[]'::jsonb) \
+             ORDER BY t.block_id, t.accretion_seq, t.source_kind,
+                      CASE WHEN qrn.id IS NOT NULL THEN qrn.uri_normalized ELSE (t.source_id)::text END), '[]'::jsonb) \
            FROM kb_block_provenance t \
            LEFT JOIN kb_remote_sources qrn ON qrn.id = t.source_id AND t.source_kind = 'remote'",
     ),
