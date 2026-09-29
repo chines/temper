@@ -42,6 +42,36 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         // projection (that table masks its own id for the same reason), so it differs fire-vs-replay.
         "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'current_revision_id') ORDER BY t.id), '[]'::jsonb) FROM kb_content_blocks t",
     ),
+    // The provenance rows and their resolved remote-source rows: added with resource erasure (spec
+    // 2026-09-28 D4's build check). Both were ABSENT here, which was a silent-diff hole: the act
+    // re-points kb_block_provenance rows to sentinel remote-source rows (upsert-then-update) and
+    // deletes exclusively-cited originals, and replay of the redacted payloads reproduces exactly
+    // that — but with neither table in the dumps, a divergence between the live act and the walk
+    // arm would pass the byte-identity diff SILENTLY. Both are fully payload-derivable: a
+    // kb_block_provenance row's (block, source, event) triple rides the payloads, and
+    // kb_remote_sources rows are minted deterministically by `_upsert_remote_source` on the
+    // normalized URI (uri_normalized UNIQUE), so ids match fire-vs-replay and nothing is masked.
+    (
+        "kb_block_provenance",
+        // mask id AND source_id: source_id on a 'remote' row is a kb_remote_sources id minted by
+        // uuid_generate_v7() at first-mint time — live and replay mint at different clocks, exactly
+        // why kb_content_blocks masks current_revision_id. The (block, kind, normalized-URI,
+        // contributing event) grain is the equivalable state; join the URI in rather than the id.
+        // 'resource'/'event' sources carry a stable id as the value itself; the join surfaces NULL
+        // for them and they compare on the rest.
+        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'id' - 'source_id' - 'created') || jsonb_build_object('source_key', \
+              CASE WHEN qrn.id IS NOT NULL THEN qrn.uri_normalized ELSE (to_jsonb(t.source_id) #>> '{}') END)
+             ORDER BY t.block_id, t.accretion_seq), '[]'::jsonb) \
+           FROM kb_block_provenance t \
+           LEFT JOIN kb_remote_sources qrn ON qrn.id = t.source_id AND t.source_kind = 'remote'",
+    ),
+    (
+        "kb_remote_sources",
+        // mask id AND first_seen: the id is a clock-minted uuid at first insert, and first_seen is a
+        // now() default — neither is replay-stable. The URI pair is the identity (uri_normalized is
+        // UNIQUE), so ordering and equivalence ride the URIs.
+        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'id' - 'first_seen') ORDER BY t.uri_normalized), '[]'::jsonb) FROM kb_remote_sources t",
+    ),
     (
         "kb_chunks",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_chunks t",
@@ -899,14 +929,48 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // NOTHING by design — one reason-code event, and the refusal set must not admit
             // it. The walk stays a no-op; `PrincipalErased` graduated above.
             | EventKind::PrincipalErasureRefused
-            // Resource erasure's admin vocabulary (spec 2026-09-28). A no-op for now, and
-            // honestly so: nothing emits these yet (the vocabulary lands before the act, because
-            // an event category is one-shot). `ResourceErased` and `BlockHistoryScrubbed` graduate
-            // to real arms with the act, calling the ONE redaction definition at the event's
-            // ledger position (D2 step 9, D11); the refusal stays a no-op by design.
-            | EventKind::ResourceErased
+            // Resource erasure's admin vocabulary (spec 2026-09-28). The refusal and the block
+            // history scrub stay no-ops by DESIGN: the refusal mutates nothing (the record's
+            // rule), and the scrub's arm lands with 2e, which narrows the same redaction
+            // definition to a block set. `ResourceErased` graduated with the act (build order
+            // 2b, migration 20260929040730): its arm follows.
             | EventKind::ResourceErasureRefused
-            | EventKind::BlockHistoryScrubbed
+            | EventKind::BlockHistoryScrubbed => {}
+            // The act's completion (spec 2026-09-28, D2/D12). "Apply at the event's position",
+            // the PrincipalErased arm's reconciliation: the walk is ORDER BY e.id, so a trailing
+            // pass would wrongly redact what later events lawfully wrote. The set here needs no
+            // read-ahead scan — the payload names the resource, and the redaction body joins the
+            // projection by THAT id, so the idempotent call at the event's position reproduces
+            // exactly what the live act left (the step-9 sentinels are the load-bearing half
+            // before cut 2; the content empties are belt-and-braces idempotent no-ops against
+            // the snapshot's post-erasure sidecars). It calls THE ONE definition — re-implement
+            // any of it here and there are two erasures that drift.
+            EventKind::ResourceErased => {
+                // "Apply at the event's position", the PrincipalErased arm's reconciliation:
+                // the walk is ORDER BY e.id, so a trailing pass would wrongly redact what later
+                // events lawfully wrote. The set here needs no read-ahead scan — the payload
+                // names the resource, and the redaction body joins the projection by THAT id,
+                // so the idempotent call at the event's position reproduces exactly what the
+                // live act left (the sentinels in step 9 are the load-bearing half before cut
+                // 2; the content empties are belt-and-braces idempotent no-ops against the
+                // snapshot's post-erasure sidecars). It calls THE ONE definition — re-implement
+                // any of it here and there are two erasures that drift.
+                let subject: Uuid = payload["subject_id"]
+                    .as_str()
+                    .context("resource_erased payload missing subject_id")?
+                    .parse()
+                    .context("resource_erased subject_id is not a uuid")?;
+                // Macro form, like the PrincipalErased arm: a fixed function call with bound
+                // parameters — the audit's `dynamic-table` reason does not cover it, so it
+                // converts and gains a `.sqlx` entry.
+                sqlx::query!(
+                    "SELECT _resource_erasure_apply_redaction($1,$2)",
+                    subject,
+                    id
+                )
+                .fetch_one(pool)
+                .await?;
+            }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this
             // arm `replay()` errored with "no projector for event type webhook_received" against
