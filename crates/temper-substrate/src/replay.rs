@@ -318,8 +318,10 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
             | EventKind::PrincipalErased
             | EventKind::PrincipalErasureRefused
             // Resource erasure's admin vocabulary (spec 2026-09-28): the same NULL-anchored,
-            // content-free posture. None carries content, so none has a sidecar; what they empty
-            // reproduces through the walk arms at their ledger positions.
+            // content-free posture. None carries content, so none has a sidecar. What
+            // `resource_erased` empties reproduces through its walk arm, which runs after the last
+            // event of the act's own transaction (the deferral in `replay`, D14); the other
+            // two change nothing in the walk.
             | EventKind::ResourceErased
             | EventKind::ResourceErasureRefused
             | EventKind::BlockHistoryScrubbed
