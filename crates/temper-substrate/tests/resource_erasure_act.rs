@@ -25,6 +25,10 @@
 //!     the act wait and is erased; a property set arriving while the act holds R's row refuses;
 //!     the embed write-back after the act writes nothing and the drain finds nothing stale on
 //!     the husk; replay byte-identical after each race.
+//!   * **22** — the remote-source re-point holds (D4): two sources at one seq in one event get
+//!     distinct `erased:<block_id>:<n>` sentinels; a pre-minted look-alike sentinel does not stop
+//!     the re-point; a block citing its own sentinel literal still erases; a concurrent citer
+//!     keeps its remote source and its provenance stays readable; a shared source is named in the remainder by id, never by URL.
 //!
 //! The doors (Rust) land in PR 2; this file pins the SQL behavior the doors consume.
 
@@ -248,6 +252,18 @@ async fn seed_leak(
     }
 }
 
+/// Re-register `block_provenance_annotated`: migration 20260710000001 inserts it; `reset_schema` truncates it.
+async fn register_block_provenance_annotated(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+         VALUES ('block_provenance_annotated', NULL, 1, 'domain') \
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .execute(pool)
+    .await
+    .expect("re-register block_provenance_annotated");
+}
+
 /// The one act invocation every witness uses — the boot-seeded system actor is the operator
 /// (the service gate is PR 2's concern; here SQL executes as the operator), a fresh request
 /// reference per act. Returns the `resource_erased` event id.
@@ -294,10 +310,32 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
     temper_substrate::scenario::bootseed::seed_system(&pool)
         .await
         .unwrap();
+    register_block_provenance_annotated(&pool).await;
     let (owner, emitter) = system_actor(&pool).await;
     let home = make_home(&pool, owner, "leak-home").await;
     let twin_home = make_home(&pool, owner, "twin-home").await;
     let leak = seed_leak(&pool, owner, emitter, home, twin_home).await;
+    // The twin also cites URL, so URL's remote-source row is shared: it survives the act and the
+    // remainder names it (D4, D8).
+    writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: leak.twin,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Remote(URL.to_owned()),
+                seq: 0,
+            }],
+            content_block: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("the twin cites URL too");
+    let url_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE uri = $1")
+        .bind(URL)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
     let event_id = execute_act(&pool, leak.resource.uuid()).await;
 
@@ -322,6 +360,30 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
     assert!(
         !remainder_text.contains("harmless twin"),
         "the twin's identity never rides the record; got {remainder_text}"
+    );
+    // The shared remote source is named by its kb_remote_sources id, never by its URL: the
+    // record is an admin event outside the trail scope, so nothing could redact a URL in it.
+    for fragment in [URL, "leak.example", "jane-smith"] {
+        assert!(
+            !remainder_text.contains(fragment),
+            "the record carries no part of the URL ({fragment}); got {remainder_text}"
+        );
+    }
+    assert!(
+        remainder_text.contains(&format!(
+            "shared remote source {url_id}; another resource's block still cites it; named, kept"
+        )),
+        "the remainder names the shared remote source by id; got {remainder_text}"
+    );
+    let url_survives: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_remote_sources WHERE id = $1")
+            .bind(url_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        url_survives, 1,
+        "a remote source the twin still cites stays"
     );
 
     // 2 (custody-never-bytes) BEFORE replay: the twin's content, embedding and search vector
@@ -1724,4 +1786,513 @@ async fn after_the_act_the_embed_drain_finds_nothing_stale(pool: sqlx::PgPool) {
         progress.is_complete(),
         "the drain reports nothing remaining, so its job completes; got {progress:?}"
     );
+}
+
+// ── Witness 22: the remote-source re-point holds (D4) ──────────────────────────────────────
+//
+// Every remote provenance row of R's blocks re-points to `erased:<block_id>:<n>`, n numbered
+// per block in ledger order of first appearance; the re-point goes by the id the upsert
+// returns; the delete considers only R's captured originals, each locked before the check.
+
+/// A second resource in its own home, carrying no sources — the "another resource" the D4
+/// witnesses cite from.
+async fn other_resource(
+    pool: &PgPool,
+    owner: ProfileId,
+    emitter: EntityId,
+    slug: &str,
+) -> ResourceId {
+    let home = make_home(pool, owner, slug).await;
+    writes::create_resource_with(
+        pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "another resource",
+            origin_uri: "test://another",
+            body: CLEAN,
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: Some(vec![chunk(CLEAN, "")]),
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("seed another resource through the create path")
+}
+
+/// (22, collision half) Two distinct remote sources cited in ONE annotate event at ONE seq get
+/// distinct sentinels — `erased:<block>:<seq>` gave both the same row, and the second re-point
+/// violated the provenance unique key (block_id, source_kind, source_id, contributed_by_event_id).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn two_remote_sources_at_one_seq_erase_without_collision(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    register_block_provenance_annotated(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "two-at-one-seq-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "two-at-one-seq-twin").await,
+    )
+    .await;
+    let block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    const FIRST: &str = "https://first.example/cited-at-seq-1";
+    const SECOND: &str = "https://second.example/cited-at-seq-1";
+    writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: leak.resource,
+            sources: vec![
+                Incorporation {
+                    source: ProvenanceSource::Remote(FIRST.to_owned()),
+                    seq: 1,
+                },
+                Incorporation {
+                    source: ProvenanceSource::Remote(SECOND.to_owned()),
+                    seq: 1,
+                },
+            ],
+            content_block: Some(block),
+            emitter,
+        },
+    )
+    .await
+    .expect("one annotate event cites both sources at seq 1");
+
+    // The two provenance rows the annotate wrote, by row id — the act re-points them in place.
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT bp.id FROM kb_block_provenance bp \
+           JOIN kb_remote_sources rs ON rs.id = bp.source_id \
+          WHERE bp.block_id = $1 AND bp.source_kind = 'remote' AND rs.uri = ANY($2) \
+          ORDER BY bp.id",
+    )
+    .bind(block)
+    .bind(vec![FIRST.to_owned(), SECOND.to_owned()])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "setup: both sources projected a provenance row"
+    );
+    let row_ids: Vec<Uuid> = rows.into_iter().map(|(id,)| id).collect();
+
+    execute_act(&pool, leak.resource.uuid()).await;
+
+    let after: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT bp.source_id, rs.uri FROM kb_block_provenance bp \
+           JOIN kb_remote_sources rs ON rs.id = bp.source_id \
+          WHERE bp.id = ANY($1) ORDER BY bp.id",
+    )
+    .bind(&row_ids)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        after.len(),
+        2,
+        "both rows still resolve to a remote-source row"
+    );
+    assert_ne!(
+        after[0].0, after[1].0,
+        "the two sources point at DISTINCT sentinel rows; got {after:?}"
+    );
+    let prefix = format!("erased:{block}:");
+    assert!(
+        after.iter().all(|(_, uri)| uri.starts_with(&prefix)),
+        "each row resolves to an erased:<block>:<n> sentinel; got {after:?}"
+    );
+    let originals_left: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_remote_sources WHERE uri = ANY($1)")
+            .bind(vec![FIRST.to_owned(), SECOND.to_owned()])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        originals_left, 0,
+        "R cited both exclusively, so neither original row survives"
+    );
+
+    assert_replay_byte_identical(&pool, "of two remote sources at one seq").await;
+}
+
+/// (22, look-alike half) A row another resource minted in advance whose NORMALIZED uri equals
+/// R's sentinel (`' erased:<block>:1'`, leading space; `normalize_remote_uri` trims it) is the
+/// row `_upsert_remote_source` returns for the sentinel. Re-pointing by that returned id lands
+/// R's provenance on it; matching on `uri` text missed it and left R on the original URL.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_pre_minted_look_alike_sentinel_does_not_stop_the_re_point(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    register_block_provenance_annotated(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "look-alike-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "look-alike-twin").await,
+    )
+    .await;
+    let other = other_resource(&pool, owner, emitter, "look-alike-other").await;
+
+    // Every block of R that cites URL. Each cites URL as its only remote source, so URL is n = 1
+    // on each and its sentinel is erased:<block>:1.
+    let blocks: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT bp.block_id FROM kb_block_provenance bp \
+           JOIN kb_content_blocks b ON b.id = bp.block_id \
+           JOIN kb_remote_sources rs ON rs.id = bp.source_id \
+          WHERE b.resource_id = $1 AND bp.source_kind = 'remote' AND rs.uri = $2 \
+          ORDER BY bp.block_id",
+    )
+    .bind(leak.resource.uuid())
+    .bind(URL)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(!blocks.is_empty(), "setup: R's blocks cite URL");
+    let one_source_each: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT (bp.block_id, bp.source_id)) FROM kb_block_provenance bp \
+          WHERE bp.block_id = ANY($1) AND bp.source_kind = 'remote'",
+    )
+    .bind(&blocks)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        one_source_each,
+        blocks.len() as i64,
+        "setup: each of those blocks cites exactly one remote source, so URL is its n = 1"
+    );
+
+    // The other resource mints a look-alike of each sentinel first.
+    writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: other,
+            sources: blocks
+                .iter()
+                .enumerate()
+                .map(|(i, b)| Incorporation {
+                    source: ProvenanceSource::Remote(format!(" erased:{b}:1")),
+                    seq: i as i32,
+                })
+                .collect(),
+            content_block: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("another resource cites the look-alikes");
+    let look_alikes: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, uri FROM kb_remote_sources WHERE uri LIKE ' erased:%' ORDER BY uri",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        look_alikes.len(),
+        blocks.len(),
+        "setup: one look-alike row per block"
+    );
+
+    execute_act(&pool, leak.resource.uuid()).await;
+
+    let on_url: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_block_provenance bp \
+           JOIN kb_content_blocks b ON b.id = bp.block_id \
+           JOIN kb_remote_sources rs ON rs.id = bp.source_id \
+          WHERE b.resource_id = $1 AND bp.source_kind = 'remote' \
+            AND rs.uri_normalized = normalize_remote_uri($2)",
+    )
+    .bind(leak.resource.uuid())
+    .bind(URL)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        on_url, 0,
+        "none of R's provenance rows resolves to R's original URL"
+    );
+    for block in &blocks {
+        let expected = format!(" erased:{block}:1");
+        let look_alike_id = look_alikes
+            .iter()
+            .find(|(_, uri)| *uri == expected)
+            .map(|(id, _)| *id)
+            .expect("the look-alike for this block exists");
+        let pointed: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT DISTINCT source_id FROM kb_block_provenance \
+              WHERE block_id = $1 AND source_kind = 'remote'",
+        )
+        .bind(block)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            pointed,
+            vec![look_alike_id],
+            "block {block}'s rows point at the id the sentinel upsert returned — the look-alike"
+        );
+    }
+    let url_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_remote_sources WHERE uri = $1")
+        .bind(URL)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        url_rows, 0,
+        "R cited URL exclusively, so its row is deleted"
+    );
+
+    assert_replay_byte_identical(&pool, "of a re-point onto a look-alike").await;
+}
+
+/// (22, concurrent-citer half) R exclusively cites URL. Another resource's annotate of URL
+/// holds its transaction — its `_upsert_remote_source` holds URL's row lock — while the act
+/// runs; the act's FOR UPDATE on that row waits, and the separate existence check after it sees
+/// the committed citer and keeps the row. The other resource's provenance stays readable: its
+/// whole-body update reads attributions (`read_attributions`), which fails on a remote row with
+/// no `kb_remote_sources` uri.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_concurrent_citer_keeps_its_remote_source(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    register_block_provenance_annotated(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "citer-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "citer-twin").await,
+    )
+    .await;
+    let other = other_resource(&pool, owner, emitter, "citer-other").await;
+    let url_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE uri = $1")
+        .bind(URL)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // The citer: annotate the other resource's block with URL, NOT committed.
+    let mut citer = pool.begin().await.unwrap();
+    writes::annotate_block_sources_in_tx(
+        &mut citer,
+        writes::AnnotateParams {
+            resource: other,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Remote(URL.to_owned()),
+                seq: 0,
+            }],
+            content_block: None,
+            emitter,
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("the concurrent annotate writes inside its open transaction");
+
+    let pool_for_act = pool.clone();
+    let resource = leak.resource.uuid();
+    let mut act = tokio::spawn(async move { execute_act(&pool_for_act, resource).await });
+    let finished_within_window =
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut act).await;
+    assert!(
+        finished_within_window.is_err(),
+        "the act completed while a citer held URL's row — its FOR UPDATE did not wait"
+    );
+
+    citer.commit().await.unwrap();
+    act.await.expect("the act task must not panic");
+
+    let survivor: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE id = $1")
+            .bind(url_id)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        survivor,
+        Some(url_id),
+        "URL's row survives: a citer committed while the act waited on it"
+    );
+    let other_uris: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT rs.uri FROM kb_block_provenance bp \
+           JOIN kb_content_blocks b ON b.id = bp.block_id \
+           LEFT JOIN kb_remote_sources rs ON rs.id = bp.source_id \
+          WHERE b.resource_id = $1 AND bp.source_kind = 'remote'",
+    )
+    .bind(other.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        other_uris,
+        vec![Some(URL.to_owned())],
+        "the other resource's provenance resolves to URL's row"
+    );
+    let r_on_url: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_block_provenance bp \
+           JOIN kb_content_blocks b ON b.id = bp.block_id \
+          WHERE b.resource_id = $1 AND bp.source_kind = 'remote' AND bp.source_id = $2",
+    )
+    .bind(resource)
+    .bind(url_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(r_on_url, 0, "R's own provenance was re-pointed off URL");
+
+    writes::update_resource(
+        &pool,
+        UpdateParams {
+            resource: other,
+            body: Some(RACED),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            unset_keys: &[],
+            chunks: Some(vec![chunk(RACED, "")]),
+            sources: vec![],
+            content_block: None,
+            rehome_to: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("the other resource's whole-body update reads its attributions and succeeds");
+
+    assert_replay_byte_identical(&pool, "of a citer that committed while the act waited").await;
+}
+
+/// (22, self-sentinel half) An author cannot make their own resource un-erasable. One annotate
+/// event on R's block cites a real URL (numbered 1) and the literal `erased:<that block>:1`
+/// (numbered 2). The URL's sentinel upsert returns the literal's own row, while the literal
+/// moves on to `erased:<block>:2`. The act parks every captured row before placing any, so it
+/// completes, and the event keeps one row per original, each on its own sentinel — the state
+/// replay of the redacted payloads lands on. The literal's row stays: R still cites it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_block_citing_its_own_sentinel_literal_still_erases(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    register_block_provenance_annotated(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let resource = other_resource(&pool, owner, emitter, "self-sentinel-home").await;
+    let block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    const REAL: &str = "https://real.example/cited-beside-its-sentinel";
+    let literal_1 = format!("erased:{block}:1");
+    let literal_2 = format!("erased:{block}:2");
+    writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource,
+            sources: vec![
+                Incorporation {
+                    source: ProvenanceSource::Remote(REAL.to_owned()),
+                    seq: 1,
+                },
+                Incorporation {
+                    source: ProvenanceSource::Remote(literal_1.clone()),
+                    seq: 1,
+                },
+            ],
+            content_block: Some(block),
+            emitter,
+        },
+    )
+    .await
+    .expect("one annotate event cites the URL and the block's own sentinel literal");
+
+    let event: Uuid = sqlx::query_scalar(
+        "SELECT DISTINCT bp.contributed_by_event_id FROM kb_block_provenance bp \
+           JOIN kb_remote_sources rs ON rs.id = bp.source_id \
+          WHERE bp.block_id = $1 AND bp.source_kind = 'remote' AND rs.uri = $2",
+    )
+    .bind(block)
+    .bind(REAL)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let literal_row: Uuid = sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE uri = $1")
+        .bind(&literal_1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    execute_act(&pool, resource.uuid()).await;
+
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT bp.source_id, rs.uri FROM kb_block_provenance bp \
+           JOIN kb_remote_sources rs ON rs.id = bp.source_id \
+          WHERE bp.block_id = $1 AND bp.contributed_by_event_id = $2 \
+            AND bp.source_kind = 'remote' \
+          ORDER BY rs.uri",
+    )
+    .bind(block)
+    .bind(event)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2, "the event keeps two rows; got {rows:?}");
+    assert_eq!(
+        rows,
+        vec![
+            (literal_row, literal_1.clone()),
+            (rows[1].0, literal_2.clone())
+        ],
+        "the event keeps one row per original: the URL's on the literal's own row \
+         (erased:<block>:1), the literal's on erased:<block>:2"
+    );
+    assert_ne!(
+        rows[0].0, rows[1].0,
+        "the two rows sit on distinct sentinel rows"
+    );
+    let real_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_remote_sources WHERE uri = $1")
+            .bind(REAL)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        real_rows, 0,
+        "R cited the URL exclusively, so its row is deleted"
+    );
+
+    assert_replay_byte_identical(&pool, "of a block citing its own sentinel literal").await;
 }

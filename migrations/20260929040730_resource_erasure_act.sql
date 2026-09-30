@@ -402,8 +402,14 @@ $function$;
 CREATE FUNCTION _resource_erasure_apply_redaction(p_resource uuid, p_event uuid, p_blocks uuid[] DEFAULT NULL)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-    v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
-    v_key text;
+    v_occurred      timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+    v_orig_blocks   uuid[];
+    v_orig_sources  uuid[];
+    v_orig_ns       integer[];
+    v_i             integer;
+    v_sentinel      uuid;
+    v_source        uuid;
+    v_parked        jsonb;
 BEGIN
     IF p_blocks IS NOT NULL THEN
         RAISE EXCEPTION '_resource_erasure_apply_redaction: a block-set scope lands with build order 2e (block history scrub); cut 1 accepts only the whole resource (p_blocks NULL)';
@@ -588,43 +594,89 @@ BEGIN
     --      lifecycle event, and step (9b)'s resource-owned surface is the only surface this body
     --      sentinels in place.
 
-    -- (9e) The remote-source re-pointing (D4): every remote provenance row of R's blocks re-points
-    --      to the SAME sentinel row replay's redacted incorporated[*].source.value would upsert —
-    --      sentinel URI 'erased:<block_id>:<seq>', constant per class. Upsert-then-update: mint or
-    --      find the sentinel row, then UPDATE the provenance rows to point at it. The ORIGINAL
-    --      remote row either has another live citer and stays (the remainder names it), or has
-    --      none and is dropped-by-replay — the act deletes it when nothing else cites it, because
-    --      replay of the redacted ledger never mints it.
-    FOR v_key IN
-        SELECT DISTINCT 'erased:' || v_b.block_id::text || ':' || v_b.accretion_seq
-          FROM (SELECT b.id AS block_id, v_bp.accretion_seq
-                  FROM kb_content_blocks b
-                  JOIN kb_block_provenance v_bp ON v_bp.block_id = b.id
-                 WHERE b.resource_id = p_resource
-                   AND v_bp.source_kind = 'remote') v_b
-    LOOP
-        PERFORM _upsert_remote_source(v_key);
+    -- (9e) The remote-source re-pointing (D4). Every remote provenance row of R's blocks
+    --      re-points to the sentinel row replay's redacted incorporated[*].source.value upserts:
+    --      'erased:<block_id>:<n>', where n numbers the distinct original remote sources on
+    --      that block in ledger order of first appearance. The key is unique per (block,
+    --      original source), so two sources cited in one event at one accretion seq never share
+    --      a sentinel and the provenance unique key (block_id, source_kind, source_id,
+    --      contributed_by_event_id) cannot collide. It carries nothing of the URL.
+    --
+    --      Capture: R's original remote sources, numbered, read ONCE through
+    --      _resource_erasure_remote_originals (Section 0c, the same capture the survey reads)
+    --      before anything below changes a provenance row. The captured ids are the whole of
+    --      what the delete at the end may consider.
+    SELECT coalesce(array_agg(o.block_id  ORDER BY o.block_id, o.n), '{}'),
+           coalesce(array_agg(o.source_id ORDER BY o.block_id, o.n), '{}'),
+           coalesce(array_agg(o.n         ORDER BY o.block_id, o.n), '{}')
+      INTO v_orig_blocks, v_orig_sources, v_orig_ns
+      FROM _resource_erasure_remote_originals(p_resource) o;
+
+    --      Upsert, then re-point BY THE ID the upsert returns. _upsert_remote_source deduplicates
+    --      on uri_normalized and keeps the first writer's spelling, so the row it returns may be
+    --      a look-alike someone minted first (' erased:<block>:1', leading space); matching on
+    --      `uri` text would miss it and leave the provenance on the original URL.
+    --
+    --      The re-point runs in two passes, park then place. The returned sentinel row can
+    --      itself be one of the block's originals: a block that cites the literal
+    --      'erased:<block>:1' beside a URL numbered 1 gets that literal's row back as the URL's
+    --      sentinel, while the literal, numbered 2, moves on to 'erased:<block>:2'. Moving the
+    --      URL's row first would duplicate the literal's row on the provenance unique key
+    --      (block_id, source_kind, source_id, contributed_by_event_id) before the literal's row
+    --      moves away, and a non-deferrable unique check raises on that intermediate state. So
+    --      the park pass sets each captured row's source_id to the row's own id, which no other
+    --      row holds, and records row id → sentinel id. The place pass then sets every parked row
+    --      to its sentinel in one statement. The final state cannot collide: each original on a
+    --      block has its own n, distinct n give distinct uri_normalized and so distinct sentinel
+    --      rows, and an event contributes at most one row per original per block. It is the
+    --      state replay of the redacted payloads lands on, one row per original per event,
+    --      each on its own sentinel.
+    v_parked := '{}'::jsonb;
+    FOR v_i IN 1 .. coalesce(array_length(v_orig_blocks, 1), 0) LOOP
+        v_sentinel := _upsert_remote_source(
+            'erased:' || v_orig_blocks[v_i]::text || ':' || v_orig_ns[v_i]::text);
+        WITH parked AS (
+            UPDATE kb_block_provenance bp
+               SET source_id = bp.id
+             WHERE bp.block_id = v_orig_blocks[v_i]
+               AND bp.source_kind = 'remote'
+               AND bp.source_id = v_orig_sources[v_i]
+            RETURNING bp.id)
+        SELECT v_parked || coalesce(jsonb_object_agg(parked.id::text, v_sentinel), '{}'::jsonb)
+          INTO v_parked
+          FROM parked;
     END LOOP;
 
     UPDATE kb_block_provenance bp
-       SET source_id = sentinel.id
-      FROM kb_remote_sources sentinel
-     WHERE sentinel.uri = 'erased:' || bp.block_id::text || ':' || bp.accretion_seq
-       AND bp.source_kind = 'remote'
-       AND EXISTS (SELECT 1 FROM kb_content_blocks b
-                    WHERE b.id = bp.block_id AND b.resource_id = p_resource);
+       SET source_id = (v_parked ->> bp.id::text)::uuid
+     WHERE bp.block_id = ANY(v_orig_blocks)
+       AND v_parked ? bp.id::text;
 
-    -- The original remote rows R exclusively cited: deleted ONLY when nothing else cites them —
-    -- replay of the redacted payloads never mints them, and a deleted row is the exact
-    -- projection replay lands on. A row with another live citer STAYS, and the remainder names it
-    -- (D4, D8: "a URL others cite"). The upsert-then-update above made replay and the live act
-    -- agree on the destination before this sweep.
-    -- After the re-pointing UPDATE above, R's blocks' provenance rows no longer point at the
-    -- originals; a row is deleted ONLY when NOTHING cites it any more — replay of the redacted
-    -- payloads never mints it, and a dropped row is the exact projection replay lands on. A row
-    -- with another live citer STAYS, and the remainder names it (D4, D8: "a URL others cite").
-    DELETE FROM kb_remote_sources r
-     WHERE NOT EXISTS (SELECT 1 FROM kb_block_provenance q WHERE q.source_kind = 'remote' AND q.source_id = r.id);
+    --      Delete, scoped and locked. A captured original that nothing cites any more is deleted:
+    --      replay of the redacted payloads never mints it. One that another resource's block
+    --      still cites stays, and the survey names it by id (D8). Only the captured originals
+    --      are considered — the act never deletes a remote source it did not orphan. Each one
+    --      is locked FOR UPDATE in its own
+    --      statement, and "does anything still cite it?" is asked in a SEPARATE, later
+    --      statement. Under READ COMMITTED each statement of this VOLATILE function reads a
+    --      fresh snapshot, and a concurrent citer's _upsert_remote_source holds this row's lock
+    --      (ON CONFLICT DO UPDATE) until it commits. So the lock waits for that citer, and the
+    --      existence check that follows sees its committed provenance row and keeps the source.
+    --      A single `DELETE … WHERE NOT EXISTS (…)` evaluates its subquery against the
+    --      statement's own snapshot, taken before the lock wait, and would delete a row a
+    --      citer committed during that wait. A citer that arrives after the lock waits on it;
+    --      if the row is deleted, its upsert re-inserts the URL as a fresh row. Ids are locked
+    --      in uuid order, so two acts whose resources share originals take those locks in one
+    --      order and cannot deadlock on them.
+    FOR v_source IN
+        SELECT DISTINCT s.id FROM unnest(v_orig_sources) AS s(id) ORDER BY s.id
+    LOOP
+        PERFORM 1 FROM kb_remote_sources r WHERE r.id = v_source FOR UPDATE;
+        IF NOT EXISTS (SELECT 1 FROM kb_block_provenance q
+                        WHERE q.source_kind = 'remote' AND q.source_id = v_source) THEN
+            DELETE FROM kb_remote_sources r WHERE r.id = v_source;
+        END IF;
+    END LOOP;
 
     RETURN;
 END;
@@ -685,6 +737,87 @@ one arm the trail lacks — property events whose owner IS an edge touching the 
 properties ride the 20260727000030 edge-facet shape, and the trail''s edge_id arm does not reach
 owner-shaped payloads). Every consumer — the survey''s ledger remainder, cut 2''s completion pass,
 any operator audit — walks THIS predicate, never a second derivation.';
+
+-- ---------------------------------------------------------------------------
+-- Section 0c. R's original remote sources, numbered (D4): one row per (block,
+-- original remote source) R's blocks cite, with the sentinel number n and
+-- whether another resource's block also cites that source. The redaction
+-- body's step (9e) re-points and deletes from it; the survey plan names the
+-- shared ones and counts from it. n is computed here and nowhere else.
+--
+-- n numbers a block's distinct original sources in ledger order of first
+-- appearance: the first contributing event's (occurred_at, id), then the
+-- element's seq (kb_block_provenance.accretion_seq, which _insert_block_provenance
+-- copies from the element's `seq`), then the element's position in that
+-- event's list for this block. The list lives at a per-event-type path:
+--   * `incorporated` — block_mutated, block_provenance_annotated;
+--   * `block.incorporated` — block_created;
+--   * `blocks[*].incorporated`, the entry whose block_id is this block — resource_created;
+--   * `created[*].attribution` / `kept[*].attribution`, the entry whose block_id
+--     is this block — resource_reblocked.
+-- Position is needed because reblock carries sources forward with their
+-- original seq, so two elements of one list can share it. The element is
+-- matched to the source row by normalize_remote_uri(source.value) =
+-- uri_normalized — the same normalization _upsert_remote_source keyed the
+-- row on. The URL text is never an ordering term. cogmap_seeded and
+-- charter_set also project blocks with provenance, but only onto a charter
+-- resource, which the act refuses (D5); their lists are not read here.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION _resource_erasure_remote_originals(p_resource uuid)
+RETURNS TABLE (block_id uuid, source_id uuid, n integer, shared boolean)
+LANGUAGE sql STABLE AS $$
+    WITH cited AS (
+        SELECT bp.block_id, bp.source_id, bp.accretion_seq,
+               ev.occurred_at, ev.id AS event_id, et.name AS event_type, ev.payload,
+               rs.uri_normalized
+          FROM kb_block_provenance bp
+          JOIN kb_content_blocks b ON b.id = bp.block_id
+          JOIN kb_events ev ON ev.id = bp.contributed_by_event_id
+          JOIN kb_event_types et ON et.id = ev.event_type_id
+          LEFT JOIN kb_remote_sources rs ON rs.id = bp.source_id
+         WHERE b.resource_id = p_resource
+           AND bp.source_kind = 'remote'
+    ), first_appearance AS (
+        SELECT DISTINCT ON (c.block_id, c.source_id)
+               c.block_id, c.source_id, c.occurred_at, c.event_id, c.accretion_seq,
+               (SELECT min(el.ord)
+                  FROM jsonb_array_elements(
+                         CASE c.event_type
+                           WHEN 'block_mutated'              THEN c.payload -> 'incorporated'
+                           WHEN 'block_provenance_annotated' THEN c.payload -> 'incorporated'
+                           WHEN 'block_created'              THEN c.payload #> '{block,incorporated}'
+                           WHEN 'resource_created' THEN
+                               (SELECT x -> 'incorporated'
+                                  FROM jsonb_array_elements(c.payload -> 'blocks') x
+                                 WHERE (x ->> 'block_id')::uuid = c.block_id)
+                           WHEN 'resource_reblocked' THEN
+                               (SELECT x -> 'attribution'
+                                  FROM jsonb_array_elements(coalesce(c.payload -> 'created', '[]'::jsonb)
+                                                            || coalesce(c.payload -> 'kept', '[]'::jsonb)) x
+                                 WHERE (x ->> 'block_id')::uuid = c.block_id)
+                         END) WITH ORDINALITY AS el(v, ord)
+                 WHERE el.v #>> '{source,kind}' = 'remote'
+                   AND normalize_remote_uri(el.v #>> '{source,value}') = c.uri_normalized) AS pos
+          FROM cited c
+         ORDER BY c.block_id, c.source_id, c.occurred_at, c.event_id
+    )
+    SELECT f.block_id, f.source_id,
+           (row_number() OVER (PARTITION BY f.block_id
+                                   ORDER BY f.occurred_at, f.event_id, f.accretion_seq, f.pos))::integer,
+           EXISTS (SELECT 1 FROM kb_block_provenance o
+                     JOIN kb_content_blocks ob ON ob.id = o.block_id
+                    WHERE o.source_kind = 'remote' AND o.source_id = f.source_id
+                      AND ob.resource_id <> p_resource)
+      FROM first_appearance f;
+$$;
+
+COMMENT ON FUNCTION _resource_erasure_remote_originals(uuid) IS
+'R''s original remote sources, numbered (spec 2026-09-28 D4): one row per (block_id, source_id)
+R''s blocks cite with source_kind remote; n is the block''s sentinel number erased:<block_id>:<n>
+in ledger order of first appearance (first contributing event''s occurred_at and id, the
+element''s seq, the element''s position in that event''s per-type list); shared is true when
+another resource''s block also cites source_id. The ONE capture: the redaction body''s step (9e)
+re-points and deletes from it, and the survey plan names shared sources by id and counts from it.';
 
 -- ---------------------------------------------------------------------------
 -- Section 1. THE shared computation (D10): blocks, revisions, chunks, artifacts,
@@ -831,27 +964,24 @@ BEGIN
                        || ') may quote the resource; listed only (Q1), never redacted');
     END LOOP;
 
-    -- 4. Shared remote-source URLs: kb_remote_sources rows R's blocks cite that ANOTHER
-    --    resource's block also cites (live or folded — the row is shared either way). A URL
-    --    R exclusively cites is NOT here: the act's re-pointing sweep (2·(9e)) deletes it, and
-    --    replay of the redacted payloads never mints it, so the projection agrees by
-    --    construction. A shared one stays and is named (D4, D8: "a URL others cite").
+    -- 4. Shared remote sources: kb_remote_sources rows R's blocks cite that ANOTHER
+    --    resource's block also cites (live or folded — the row is shared either way), read from
+    --    the ONE capture the act's step (9e) re-points from (_resource_erasure_remote_originals).
+    --    A source R exclusively cites is NOT here: step (9e) deletes it, and replay of the
+    --    redacted payloads never mints it, so the projection agrees by construction. A shared
+    --    one stays and is named by its kb_remote_sources id, never by its URL (D4, D8): the
+    --    record is an admin event outside the trail scope, so nothing could ever redact a URL
+    --    written into it.
     FOR v_row IN
-        SELECT DISTINCT rs.uri
-          FROM kb_remote_sources rs
-          JOIN kb_block_provenance q ON q.source_kind = 'remote' AND q.source_id = rs.id
-          JOIN kb_content_blocks b ON b.id = q.block_id
-         WHERE b.resource_id = p_resource
-           AND EXISTS (
-               SELECT 1 FROM kb_block_provenance other
-                 JOIN kb_content_blocks ob ON ob.id = other.block_id
-                WHERE other.source_kind = 'remote' AND other.source_id = rs.id
-                  AND ob.resource_id <> p_resource)
+        SELECT DISTINCT o.source_id
+          FROM _resource_erasure_remote_originals(p_resource) o
+         WHERE o.shared
+         ORDER BY o.source_id
     LOOP
         v_remainder := v_remainder || jsonb_build_object(
-            'target', 'kb_remote_sources.uri',
-            'outcome', 'shared URL ' || v_row.uri
-                       || ' ; another resource''s block still cites it; named, kept');
+            'target', 'kb_remote_sources.id',
+            'outcome', 'shared remote source ' || v_row.source_id::text
+                       || '; another resource''s block still cites it; named, kept');
     END LOOP;
 
     -- ── THE LEDGER REMAINDER (D12): the resource's OWN ledger free-text paths the act has not
