@@ -159,7 +159,8 @@ async fn seed_from_ledger(pool: &PgPool) -> ApiResult<SeedScan> {
                e.occurred_at  AS "occurred_at!: DateTime<Utc>",
                e.payload->'targets' AS "targets!: serde_json::Value"
           FROM kb_events e
-          JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'principal_erased'
+          JOIN kb_event_types t ON t.id = e.event_type_id
+                                 AND t.name IN ('principal_erased', 'resource_erased')
          ORDER BY e.occurred_at, e.id
         "#,
     )
@@ -550,7 +551,8 @@ pub async fn fence_channel_report(pool: &PgPool, now: DateTime<Utc>) -> ApiResul
         r#"
         SELECT tg->>'outcome' AS "outcome!"
           FROM kb_events e
-          JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'principal_erased',
+          JOIN kb_event_types t ON t.id = e.event_type_id
+                                 AND t.name IN ('principal_erased', 'resource_erased'),
                jsonb_array_elements(e.payload->'targets') AS tg
          WHERE tg->>'target' = $1
         "#,

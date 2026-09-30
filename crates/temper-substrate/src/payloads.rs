@@ -1690,10 +1690,14 @@ pub enum ResourceErasureRefusalReason {
     /// A cogmap's telos/charter resource: map-grain erasure is its own act, named in `detail`.
     CharterResource,
     /// `ingest_state` is not `complete`: finalize or abandon the ingest first.
+    // Retired: ingest state no longer refuses an erasure (spec D5, ruled 2026-09-29; an in-flight
+    // ingest ends with the erasure). The value stays registered, and no path raises it.
     IngestInFlight,
     /// The resource is already erased. Recorded by the block history scrub, which has nothing to
     /// scrub on an erased resource; the erasure act itself answers an already-erased resource
     /// idempotently and records nothing.
+    // Present truth: a repeat erasure is a recorded refusal (ruled 2026-09-29), not an idempotent
+    // no-op; the projection is unchanged and no second `resource_erased` is minted.
     AlreadyErased,
 }
 
@@ -2095,10 +2099,11 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 "principal_erasure_refused" => {
                     serde_json::from_value::<PrincipalErasureRefused>(r.payload.clone())?;
                 }
-                // Resource erasure's admin vocabulary (resource erasure spec D1/D5/D11). No write
-                // path emits these yet (the act lands in a later build); the arms are here now so
-                // the typed contract is checked from the first really-emitted payload, not from
-                // whenever someone remembers to add them.
+                // Resource erasure's admin vocabulary (resource erasure spec D1/D5/D11).
+                // `resource_erasure_execute` emits `resource_erased` and `resource_erasure_refuse`
+                // emits `resource_erasure_refused` (migration 20260929040730), so per the rule
+                // below they get arms. `block_history_scrubbed` has no emitter until the block
+                // history scrub (build order 2e); its arm checks the first really-emitted payload.
                 "resource_erased" => {
                     serde_json::from_value::<ResourceErased>(r.payload.clone())?;
                 }
