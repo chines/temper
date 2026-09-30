@@ -439,3 +439,25 @@ async fn an_unreadable_intermediate_stops_the_walk_both_ways(pool: PgPool) -> sq
     );
     Ok(())
 }
+
+/// A seed is never its own lineage, even over a `derived_from` self-loop: the walk's first hop
+/// is cycle-guarded like every other.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_self_loop_does_not_list_the_seed(pool: PgPool) -> sqlx::Result<()> {
+    let p = profile(&pool, "lin-self").await;
+    let ctx = personal_context(&pool, p, "ctx-self").await;
+    let ev = seed_event(&pool, p).await;
+    let seed = resource(&pool, "Self seed", ctx, p).await;
+    let parent = resource(&pool, "Self parent", ctx, p).await;
+    derived_from(&pool, seed, seed, "leads_to", "inverse", ctx, ev, false).await;
+    derived_from(&pool, seed, parent, "leads_to", "inverse", ctx, ev, false).await;
+
+    for direction in ["ancestors", "descendants"] {
+        let rows = lineage_rows(&pool, p, seed, Some(direction), 16).await?;
+        assert!(
+            rows.iter().all(|(n, _, _)| *n != seed),
+            "{direction}: the seed is listed as its own lineage: {rows:?}"
+        );
+    }
+    Ok(())
+}

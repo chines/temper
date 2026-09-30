@@ -27,17 +27,17 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   `tools/list`, `resources/list`, `resources/templates/list`, `resources/read` and the empty
   `prompts/list` gain the two fields MCP 2026-07-28 requires (SEP-2549) — additive keys on
   unchanged result shapes: `Public` / 5 min for the deployment surface (tools, templates,
-  prompts), `Private` / 0 for caller data
-  (resources). Who observes: MCP clients; a client enforcing 2026-07-28 (Claude Code) listed no
-  tools before, older-protocol clients ignore the keys. Behind unchanged shapes, two ledger
-  readers change what they return: `element_trail` for an edge now includes that edge's own
-  property events (facet asserts, `anchored-at`, retractions), which it silently omitted; and
-  `resource_lineage` walks breadth-first, visiting each node once, where it previously exceeded
-  the function time limit (HTTP 502 / MCP gateway error) past depth 1 — it returns the same nodes
-  at the same depths, now reports a live edge before a folded one when a node is reached over
-  both, and walks nothing for an unknown direction (no caller passes one). Both are declared in their
-  migrations (`20260930000010`, `20260930000020`). User-visible: yes, as fixes. Release
-  relevance: signal-only.
+  prompts), `Private` / 0 for caller data (resources). Who observes: MCP clients; a client
+  enforcing 2026-07-28 (Claude Code) listed no tools before, older-protocol clients ignore the
+  keys. Behind unchanged shapes, two ledger readers change what they return: `element_trail` for
+  an edge now includes that edge's own property events (facet asserts, `anchored-at`,
+  retractions), which it silently omitted; and `resource_lineage` walks breadth-first, visiting
+  each node once, where it previously exceeded the function time limit (HTTP 502 / MCP gateway
+  error) past depth 1 — it returns the same nodes at the same depths (a seed with a self-loop is
+  no longer listed as its own lineage), now reports a live edge before a folded one when a node is
+  reached over both, and walks nothing for an unknown direction (no caller passes one). Both are
+  declared in their migrations (`20260930000010`, `20260930000020`). User-visible: yes, as fixes.
+  Release relevance: signal-only.
 pr: self
 classes: additive,behavioral
 surfaces: mcp,http,schema

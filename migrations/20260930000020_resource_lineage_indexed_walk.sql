@@ -17,7 +17,8 @@
 --   * the gates are the same three conjuncts as every edge read: the home anchor via
 --     `anchor_readable_by_profile`, both endpoints via `resources_visible_to` — the set form of
 --     `endpoint_readable_by_profile`'s kb_resources arm, computed once per hop, not once per edge;
---   * label-keyed (never edge_kind); folded edges walked and flagged; the seed never re-emitted;
+--   * label-keyed (never edge_kind); folded edges walked and flagged; the seed never re-emitted,
+--     not even over a self-loop (the old first hop had no path guard and listed it at depth 1);
 --   * depth 1 is always walked (a depth <= 0 or NULL answers depth 1, as before);
 --   * a node reached over several edges at its shallowest depth reports a live edge before a
 --     folded one, then the lowest edge id — previously the pick was arbitrary;
@@ -100,9 +101,14 @@ BEGIN
               AND s.near IN (SELECT vis.resource_id FROM vis)
               AND s.far  IN (SELECT vis.resource_id FROM vis)
         ),
+        -- MATERIALIZED is load-bearing: inlined, the planner pushes the gate below the DISTINCT
+        -- and calls it once per candidate edge rather than once per distinct home.
+        homes AS MATERIALIZED (
+            SELECT DISTINCT c.home_anchor_table, c.home_anchor_id FROM cand c
+        ),
         readable_homes AS (
             SELECT h.home_anchor_table, h.home_anchor_id
-            FROM (SELECT DISTINCT c.home_anchor_table, c.home_anchor_id FROM cand c) h
+            FROM homes h
             WHERE anchor_readable_by_profile(p_profile, h.home_anchor_table, h.home_anchor_id)
         ),
         picked AS (
@@ -140,5 +146,5 @@ $$;
 SELECT declare_migration(
     20260930000020,
     'additive',
-    'resource_lineage re-emitted as a breadth-first plpgsql walk over two new partial indexes on resource-to-resource derived_from edges (source_id, target_id; folded included). Signature and return type are unchanged. For both real directions the node set and depths are unchanged; the edge reported for a node reached over several shallowest edges is now deterministic (live before folded), and an unknown or NULL direction now walks nothing — no caller passes one. The two CREATE INDEX statements take a brief write lock on kb_edges while they build.'
+    'resource_lineage re-emitted as a breadth-first plpgsql walk over two new partial indexes on resource-to-resource derived_from edges (source_id, target_id; folded included). Signature and return type are unchanged. For both real directions the node set and depths are unchanged except that a seed with a derived_from self-loop is no longer listed as its own lineage; the edge reported for a node reached over several shallowest edges is now deterministic (live before folded), and an unknown or NULL direction now walks nothing — no caller passes one. The two CREATE INDEX statements take a brief write lock on kb_edges while they build.'
 );
