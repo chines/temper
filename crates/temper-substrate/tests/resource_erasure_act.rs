@@ -1313,3 +1313,58 @@ async fn the_operator_listed_blob_strike_verifies_and_strikes(pool: sqlx::PgPool
         "a listed blob the plan did NOT name is refused, not silently struck"
     );
 }
+
+/// The redaction body's scope parameter: `p_blocks` NULL is the whole resource (cut 1's only
+/// form); a non-NULL block set is refused until build order 2e, and the two-argument call
+/// text the act and the replay arm use still resolves (one function, no overload).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_redaction_body_refuses_a_block_scope_until_2e(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "scope-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "scope-twin").await,
+    )
+    .await;
+    let event: Uuid = sqlx::query_scalar("SELECT id FROM kb_events ORDER BY id LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let refused = sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2, $3)")
+        .bind(leak.resource.uuid())
+        .bind(event)
+        .bind(vec![Uuid::now_v7()])
+        .execute(&pool)
+        .await;
+    assert!(
+        refused
+            .unwrap_err()
+            .to_string()
+            .contains("a block-set scope lands with build order 2e"),
+        "a non-NULL p_blocks raises the 2e message"
+    );
+
+    sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2)")
+        .bind(leak.resource.uuid())
+        .bind(event)
+        .execute(&pool)
+        .await
+        .expect("the two-argument whole-resource call resolves and succeeds");
+    let leaked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks c JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
+          WHERE c.resource_id = $1 AND cc.content <> ''",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(leaked, 0, "the whole-resource form emptied the chunk prose");
+}

@@ -11,10 +11,10 @@
 --     enters kb_erased_content — that table is the principal act's hash-keyed record, and feeding it
 --     from a resource act would re-create exactly the defect 01a09c45 is cleaning up.
 --   * THE ONE REDACTION DEFINITION HAS A SCOPE (D11): `_resource_erasure_apply_redaction` takes a
---     scope parameter that either names the whole resource or narrows to a block set with
---     keep-current. Cut 1 (this migration) only ever calls the whole-resource form; the block
---     history scrub (build order 2e, `block_history_scrubbed`) narrows THIS definition rather than
---     forking it. A second body of erasure is two definitions that drift.
+--     scope parameter, `p_blocks uuid[] DEFAULT NULL`: NULL names the whole resource; a block-id
+--     array narrows to that block set with keep-current. Cut 1 (this migration) only accepts NULL
+--     and RAISES on a non-NULL array; the block history scrub (build order 2e,
+--     `block_history_scrubbed`) narrows THIS definition rather than forking it. A second body of erasure is two definitions that drift.
 --   * THE ACT AND THE SURVEY SHARE ONE COMPUTATION (D10, the 20260913000010 precedent): the plan is
 --     the act's scope machinery moved whole out of the act, so the act consumes it and nothing
 --     re-enumerates. A preview that can disagree with the act is worse than no preview.
@@ -36,18 +36,24 @@
 -- the replay arm runs this beside the walk; only `resource_erasure_execute`
 -- appends events around it.
 --
--- The scope is spelled with four parameters rather than a jsonb blob: p_whole
--- true = the whole resource (cut 1's only form today; anything else is REFUSED —
--- the narrowed form is the block history scrub's, 2e, and half-building it here
--- would be a scope that lies about its completeness). p_resource keys every
--- join; p_event supplies occurred_at for the replay-stable stamps.
+-- The scope is the third parameter, `p_blocks uuid[] DEFAULT NULL`: NULL = the
+-- whole resource (cut 1's only form today); a non-NULL array is REFUSED — the
+-- narrowed form is the block history scrub's, 2e, and half-building it here
+-- would be a scope that lies about its completeness. There is exactly one
+-- function: an overload beside a DEFAULTed parameter would make every
+-- two-argument call ambiguous. p_resource keys every join; p_event supplies
+-- occurred_at for the replay-stable stamps.
 -- ---------------------------------------------------------------------------
-CREATE FUNCTION _resource_erasure_apply_redaction(p_resource uuid, p_event uuid)
+CREATE FUNCTION _resource_erasure_apply_redaction(p_resource uuid, p_event uuid, p_blocks uuid[] DEFAULT NULL)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
     v_key text;
 BEGIN
+    IF p_blocks IS NOT NULL THEN
+        RAISE EXCEPTION '_resource_erasure_apply_redaction: a block-set scope lands with build order 2e (block history scrub); cut 1 accepts only the whole resource (p_blocks NULL)';
+    END IF;
+
     -- ── (1) Chunk prose emptied BY ROW JOIN, hash kept (D2 step 1, and the joint-read fix:
     --     header_path rides the same chunks — authored heading prose, scanned by the sweep).
     --     Current AND superseded. The CAS retention rule never fires: fold/supersede affect
@@ -269,7 +275,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION _resource_erasure_apply_redaction(uuid, uuid) IS
+COMMENT ON FUNCTION _resource_erasure_apply_redaction(uuid, uuid, uuid[]) IS
 'THE ONE row-anchored redaction body for resource erasure (spec 2026-09-28 D2, D4): chunk prose,
 header_path, block revision bytes, embeddings+embedded_with, search vector, data artifact content
 ({}::jsonb, EVERY artifact of the resource whatever its kind owner, intent or supersession — ruled
@@ -278,8 +284,8 @@ the projection-side sentinels (husk title/origin_uri, property keys erased-key-<
 of first appearance, values ''erased''::jsonb, edge labels NULL, remote-source re-pointing to the
 sentinel rows replay mints). ROW-ANCHORED: every join is on resource id, never a content hash —
 another resource''s byte-identical content is NEVER reached (the custody-never-bytes ruling), and
-no hash enters kb_erased_content from this body. Cut 1 (2026-09-29): scope is whole-resource; the
-block-set form with keep-current is the block history scrub''s (2e) and narrows THIS body, never
+no hash enters kb_erased_content from this body. Cut 1 (2026-09-29): scope is p_blocks, and only NULL (the whole resource) is accepted — a
+non-NULL array raises; the block-set form with keep-current is the block history scrub''s (2e) and narrows THIS body, never
 forks it. Event-free: the replay arm (replay.rs ResourceErased) calls it at the event''s ledger
 position; only resource_erasure_execute appends events around it.';
 
