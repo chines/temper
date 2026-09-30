@@ -14,7 +14,8 @@
 --     scope parameter, `p_blocks uuid[] DEFAULT NULL`: NULL names the whole resource; a block-id
 --     array narrows to that block set with keep-current. Cut 1 (this migration) only accepts NULL
 --     and RAISES on a non-NULL array; the block history scrub (build order 2e,
---     `block_history_scrubbed`) narrows THIS definition rather than forking it. A second body of erasure is two definitions that drift.
+--     `block_history_scrubbed`) narrows THIS definition rather than forking it. A second body of
+--     erasure is two definitions that drift.
 --   * THE ACT AND THE SURVEY SHARE ONE COMPUTATION (D10, the 20260913000010 precedent): the plan is
 --     the act's scope machinery moved whole out of the act, so the act consumes it and nothing
 --     re-enumerates. A preview that can disagree with the act is worse than no preview.
@@ -447,8 +448,9 @@ BEGIN
 
     -- ── (3) Embeddings and provenance nulled TOGETHER — `embedding IS NULL` and `embedded_with IS
     --     NULL` can never disagree (20260713000040:84-87), the coherence rule the principal act's
-    --     step (4) carries (D2 step 3). The embed drain skips inactive resources
-    --     (embed_service.rs:163,225), so nothing re-embeds (F4). ────────────────────────────────
+    --     step (4) carries (D2 step 3). Nothing re-embeds afterwards: the embed drain's
+    --     write-backs carry the D13 write guard (Section W), and the act holds R's row lock, so a
+    --     drain write either landed before the act and is nulled here, or is refused after it. ─
     UPDATE kb_chunks
        SET embedding = NULL,
            embedded_with = NULL
@@ -729,10 +731,10 @@ of first appearance — the resource''s, and each touching edge''s numbered per 
 them — values ''erased''::jsonb, edge labels NULL, remote-source re-pointing to the
 sentinel rows replay mints). ROW-ANCHORED: every join is on resource id, never a content hash —
 another resource''s byte-identical content is NEVER reached (the custody-never-bytes ruling), and
-no hash enters kb_erased_content from this body. Cut 1 (2026-09-29): scope is p_blocks, and only NULL (the whole resource) is accepted — a
-non-NULL array raises; the block-set form with keep-current is the block history scrub''s (2e) and narrows THIS body, never
-forks it. Event-free: the replay arm (replay.rs ResourceErased) calls it at the event''s ledger
-position; only resource_erasure_execute appends events around it.';
+no hash enters kb_erased_content from this body. Cut 1 (2026-09-29): scope is p_blocks, and only
+NULL (the whole resource) is accepted — a non-NULL array raises; the block-set form with
+keep-current is the block history scrub''s (2e) and narrows THIS body, never forks it. Event-free:
+the replay arm (replay.rs ResourceErased) calls it at the event''s ledger position; only resource_erasure_execute appends events around it.';
 
 -- ---------------------------------------------------------------------------
 -- Section 0b. THE trail-scope predicate (F2): "the resource's events" — the
@@ -915,7 +917,6 @@ DECLARE
     v_ledger        jsonb := '[]'::jsonb;
     v_remainder     jsonb := '[]'::jsonb;
     v_row           record;
-    v_fingerprint   text;
     v_targets       jsonb := '[]'::jsonb;
     v_a             bigint;
     v_b             bigint;
@@ -923,7 +924,7 @@ DECLARE
 BEGIN
     SELECT id INTO v_exists FROM kb_resources WHERE id = p_resource;
     IF v_exists IS NULL THEN
-        RAISE EXCEPTION 'resource_erasure_execute: resource % not found', p_resource;
+        RAISE EXCEPTION 'resource_erasure_survey_plan: resource % not found', p_resource;
     END IF;
 
     -- ── Scope counts, PRE-redaction state (the same discipline the principal plan's per-target
@@ -942,8 +943,8 @@ BEGIN
     -- ── The edges the act folds, each listed so the record's `folded_edges` and the per-edge
     --     events agree. LIVE edges only: an edge already folded by history is the fold's
     --     business, not this act's — enumerating it would abort execute against a lawful
-    --     state. Folded edges stay in `folded_edges`? No — only what THIS act folds is
-    --     listed; the pre-existing fold already carries its own event. ──────────────────
+    --     state. `folded_edges` lists only what THIS act folds; a pre-existing fold already
+    --     carries its own event. ────────────────────────────────────────────────────────
     FOR v_row IN
         SELECT e.id
           FROM kb_edges e
@@ -1144,7 +1145,7 @@ BEGIN
         v_remainder := v_remainder || jsonb_build_object(
             'target', 'kb_blobs',
             'outcome', 'related blob ' || v_row.id::text || '; hash ' || v_row.content_hash
-                       || '; hash ' || CASE WHEN v_row.is_live THEN 'live; struck only when the operator lists it'
+                       || '; ' || CASE WHEN v_row.is_live THEN 'live; struck only when the operator lists it'
                                             ELSE 'already struck' END);
     END LOOP;
 
@@ -1370,12 +1371,11 @@ refusal.';
 -- resolved before any mutation (the 20260720000030 rule); the SQL does not
 -- decide it, and the refuse function is the recorded negative face.
 --
--- The already-erased face is NOT an idempotent re-erase here: ruled
--- 2026-09-29, a repeat erasure is a recorded REFUSAL (already_erased) whose
--- effect is a no-op. The caller (resource_erasure_service) decides which face
--- it renders, but the RECORD is this function's job: SQL never appends the
--- refused event, so the gate decides refusal-or-execute BEFORE either door is
--- reached.
+-- The already-erased face is NOT an idempotent re-erase: ruled 2026-09-29, a
+-- repeat erasure is a recorded REFUSAL (already_erased) whose effect is a
+-- no-op. This function RAISES on it and appends no refused event; the Rust
+-- caller (resource_erasure_service) catches the typed message and records the
+-- refusal through resource_erasure_refuse.
 -- ---------------------------------------------------------------------------
 CREATE FUNCTION resource_erasure_execute(
     p_resource    uuid,
@@ -1436,19 +1436,15 @@ BEGIN
     IF v_erased THEN
         RAISE EXCEPTION 'resource_erasure_execute: already erased';
     END IF;
-    -- A TOMBSTONE IS ERASABLE — arguably the flow's most common shape: the content was
-    -- soft-deleted ("realized I shouldn't have persisted this"), and then the compliance
-    -- need arrives that demands it not exist at all. The principal act has no tombstone
-    -- refusal (it tombstones VIA the act, 20260909000025), F4's write floor makes
-    -- is_active=false already permanent, and no restore verb exists (the spec's F4 —
-    -- "un-modifiable on every axis"), so the only escape from a tombstone was always
-    -- erasure. The act completes over one mechanically: is_active is already false, the
-    -- CHECK is satisfied, and COALESCE keeps erased_at stable. D6's ruling ("a
-    -- soft-deleted resource must never be mistaken for an erased one") is a PROJECTION
-    -- honesty rule — erased_at is NULL until this act sets it — not a refusal on the
-    -- negative face. An earlier draft refused tombstones here; Pete overruled (compliance
-    -- erasure of soft-deleted resources is the PII-audit flow's main use). ──
-
+    -- A TOMBSTONE IS ERASABLE: a soft-deleted resource is not a refusal. It is arguably the
+    -- flow's most common shape — the content was soft-deleted, and the compliance need then
+    -- arrives that demands it not exist at all. The principal act has no tombstone refusal
+    -- (it tombstones VIA the act, 20260909000025), F4's write floor makes is_active=false
+    -- already permanent, and no restore verb exists (the spec's F4 — "un-modifiable on every
+    -- axis"), so erasure is the only way out of a tombstone. The act completes over one
+    -- mechanically: is_active is already false, the CHECK is satisfied, and COALESCE keeps
+    -- erased_at stable. D6's rule ("a soft-deleted resource must never be mistaken for an
+    -- erased one") is a PROJECTION honesty rule — erased_at is NULL until this act sets it. ──
 
     -- ── The ONE computation (D10). No re-enumeration of the remainder, block counts, artifact
     --    counts or edges happens below — the plan computed them once. The would_strike entries
@@ -1565,9 +1561,10 @@ id), strikes ONLY the operator-listed blobs through blob_delete(''blob_erased'',
 NULL-anchored resource_erased event (references carry the subject + the request reference;
 targets, remainder, ledger_remainder, folded_edges read straight off the plan — targets extended
 by each blob strike and, when ingest_state is not complete, the ingest the erasure ended, which
-is not a refusal), then calls _resource_erasure_apply_redaction — all one transaction. Refusals RAISE here and the Rust caller
-records them through resource_erasure_refuse BEFORE reaching this function; legality is the Rust
-caller''s is_system_admin gate, never SQL''s. No hash enters kb_erased_content.';
+is not a refusal), then calls _resource_erasure_apply_redaction — all one transaction. A refused
+state (charter resource, already erased) RAISES here and appends nothing; the Rust service catches
+it and records the refusal through resource_erasure_refuse. Legality is the Rust caller''s
+is_system_admin gate, never SQL''s. No hash enters kb_erased_content.';
 
 SELECT declare_migration(
     20260929040730,
@@ -1587,7 +1584,8 @@ byte-identical content is never reached, and NO hash enters kb_erased_content) a
 trail-scope predicate (_resource_erasure_trail_scope — the element-trail read''s predicate plus the
 edge-owned-properties arm), so the survey, the act and cut 2''s completion pass share one
 derivation; resource_erasure_survey_plan computes scope, refusals, targets (pre-act counts per
-reached target, never content), remainder and ledger_remainder once per act and the survey door renders it; resource_erasure_execute consumes the plan — folds
+reached target, never content), remainder and ledger_remainder once per act and the survey door
+renders it; resource_erasure_execute consumes the plan — folds
 every edge through its own relationship_folded (fixed reason ''resource_erased'', the act''s
 correlation id), strikes only operator-listed blobs through blob_delete(''blob_erased'', …), appends
 the ONE NULL-anchored resource_erased event (references carry the subject + request reference;

@@ -50,7 +50,8 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
     // arm would pass the byte-identity diff SILENTLY. Both are fully payload-derivable: a
     // kb_block_provenance row's (block, source, event) triple rides the payloads, and
     // kb_remote_sources rows are minted deterministically by `_upsert_remote_source` on the
-    // normalized URI (uri_normalized UNIQUE), so ids match fire-vs-replay and nothing is masked.
+    // normalized URI (uri_normalized UNIQUE), so the URI pair is the identity. Both entries mask
+    // their clock-minted columns (below) and compare on the URI-keyed remainder.
     (
         "kb_block_provenance",
         // mask id AND source_id: source_id on a 'remote' row is a kb_remote_sources id minted by
