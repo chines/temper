@@ -80,6 +80,12 @@ fn snapshot_files_cover_exactly_the_typed_names() {
 /// header declares. Structural (not byte) equality: the migration's own instruction says paste
 /// byte for byte, but the load-bearing contract is the schema content — whitespace in a SQL
 /// literal is not a wire fact.
+/// Stands in a migration's fixture list for a `$JS$` literal a LATER migration re-registered.
+/// An applied migration is immutable, so its superseded literal can never match the live fixture
+/// again; the entry keeps the positional pairing of the literals after it, and the superseding
+/// migration's own entry pins the type.
+const SUPERSEDED: &str = "(superseded by a later migration's entry)";
+
 #[test]
 fn the_migration_literal_matches_the_committed_fixture() {
     // A migration may register SEVERAL typed events (the erasure vocabulary registers three);
@@ -109,9 +115,13 @@ fn the_migration_literal_matches_the_committed_fixture() {
             "20260929000010_resource_erasure_vocabulary.sql",
             &[
                 "resource_erased.v1.schema.json",
-                "resource_erasure_refused.v1.schema.json",
+                SUPERSEDED, // resource_erasure_refused: 20260930000050
                 "block_history_scrubbed.v1.schema.json",
             ],
+        ),
+        (
+            "20260930000050_resource_erasure_present_truth_wording.sql",
+            &["resource_erasure_refused.v1.schema.json"],
         ),
     ] {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");
@@ -127,6 +137,9 @@ fn the_migration_literal_matches_the_committed_fixture() {
                     .find("$JS$")
                     .expect("the $JS$ literal is closed");
             cursor = end + 4;
+            if *fixture_name == SUPERSEDED {
+                continue;
+            }
             let literal: serde_json::Value = serde_json::from_str(&migration[start..end])
                 .expect("the migration's embedded literal parses as JSON");
             let fixture: serde_json::Value = serde_json::from_str(

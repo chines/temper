@@ -1689,15 +1689,13 @@ pub enum ResourceErasureRefusalReason {
     Unauthorized,
     /// A cogmap's telos/charter resource: map-grain erasure is its own act, named in `detail`.
     CharterResource,
-    /// `ingest_state` is not `complete`: finalize or abandon the ingest first.
-    // Retired: ingest state no longer refuses an erasure (spec D5, ruled 2026-09-29; an in-flight
-    // ingest ends with the erasure). The value stays registered, and no path raises it.
+    /// Retired: no path raises it. Ingest state does not refuse an erasure; an in-flight ingest
+    /// ends with it (spec D5). The value stays registered because removing one from a closed
+    /// vocabulary is not additive.
     IngestInFlight,
-    /// The resource is already erased. Recorded by the block history scrub, which has nothing to
-    /// scrub on an erased resource; the erasure act itself answers an already-erased resource
-    /// idempotently and records nothing.
-    // Present truth: a repeat erasure is a recorded refusal (ruled 2026-09-29), not an idempotent
-    // no-op; the projection is unchanged and no second `resource_erased` is minted.
+    /// The resource is already erased. Recorded by the erasure act on a repeat request and by
+    /// the block history scrub, which has nothing to scrub on an erased resource. Nothing in the
+    /// projection changes and no second `resource_erased` is minted.
     AlreadyErased,
 }
 
