@@ -1840,4 +1840,90 @@ mod tests {
             .expect("drains");
         assert_eq!(again.claimed, 0);
     }
+
+    /// ── WITNESS: the fence seeds from a `resource_erased` payload, unassisted ────────────────
+    /// The act runs with NO store, so nothing releases the bytes after the commit: the only
+    /// thing that can delete them is the fence deriving the delete from the `resource_erased`
+    /// event's `targets`.
+    /// FAILS IF the fence's seed scan drops `'resource_erased'` from its event-type `IN (...)`
+    /// (nothing seeds, `seeded` is 0, the bytes stay), or if it seeds under any event other than
+    /// the act's own, or if the drain does not delete the pathname.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn the_fence_seeds_a_resource_erased_strike_and_the_drain_deletes_the_bytes(
+        pool: PgPool,
+    ) {
+        let owner = principal(&pool).await;
+        let op = operator(&pool).await;
+        let store = InMemoryBlobStore::default();
+        let r = resource(&pool, &owner, "fence-seed").await;
+        let (blob, pathname) = related_blob(&pool, &store, &owner, &[r]).await;
+
+        let completion = completed(
+            execute_resource_erasure(&pool, None, request(op, r, &[blob]))
+                .await
+                .expect("the act completes"),
+        );
+        assert!(
+            store.contains(&pathname),
+            "no store was passed, so nothing released the bytes after the commit"
+        );
+
+        let summary = erasure_fence_service::drain(&pool, &store)
+            .await
+            .expect("the fence drains");
+        assert_eq!(summary.seeded, 1, "seeded from the resource_erased payload");
+        assert_eq!(summary.unparseable_verdicts, 0);
+        assert_eq!(summary.deleted, 1, "the drain struck the pathname");
+        assert!(!store.contains(&pathname), "the bytes are gone");
+
+        let seeded_under: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT erasure_event_id FROM kb_erasure_blob_deletes WHERE pathname = $1",
+        )
+        .bind(&pathname)
+        .fetch_all(&pool)
+        .await
+        .expect("fence rows");
+        assert_eq!(
+            seeded_under,
+            vec![completion.event_id],
+            "one queue row, keyed by the resource_erased event"
+        );
+    }
+
+    /// ── WITNESS: a remainder-only related blob never seeds ──────────────────────────────────
+    /// Two related blobs; the operator lists neither. Both stay in `remainder` (D8), so the
+    /// payload's `targets` carry no blob and the fence has nothing to derive.
+    /// FAILS IF the fence (or the act's payload) derives deletes from `remainder` rather than
+    /// `targets`: `seeded` would be nonzero and a blob's bytes would be deleted.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn an_unlisted_related_blob_stays_in_the_remainder_and_is_never_seeded(pool: PgPool) {
+        let owner = principal(&pool).await;
+        let op = operator(&pool).await;
+        let store = InMemoryBlobStore::default();
+        let r = resource(&pool, &owner, "fence-remainder").await;
+        let (_, first) = related_blob(&pool, &store, &owner, &[r]).await;
+        let (_, second) = related_blob(&pool, &store, &owner, &[r]).await;
+
+        let completion = completed(
+            execute_resource_erasure(&pool, None, request(op, r, &[]))
+                .await
+                .expect("the act completes"),
+        );
+        assert!(
+            !completion.remainder.is_empty(),
+            "the related blobs are named in the remainder"
+        );
+        assert!(
+            completion.targets.iter().all(|t| t.target != "kb_blobs"),
+            "an unlisted blob is never a target"
+        );
+
+        let summary = erasure_fence_service::drain(&pool, &store)
+            .await
+            .expect("the fence drains");
+        assert_eq!(summary.seeded, 0, "nothing derives from the remainder");
+        assert_eq!(summary.claimed, 0);
+        assert_eq!(summary.deleted, 0);
+        assert!(store.contains(&first) && store.contains(&second));
+    }
 }

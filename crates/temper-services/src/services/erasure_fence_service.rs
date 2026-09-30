@@ -2,12 +2,12 @@
 //! contract, Beat 4 of task 01a0577c).
 //!
 //! `blob_delete` releases bytes POST-commit ("a provider call cannot join the transaction",
-//! 20260906000010) and names the release in the `principal_erased` payload — so between the
+//! 20260906000010) and names the release in the `principal_erased` (or `resource_erased`) payload — so between the
 //! act's commit and the provider delete there is a window no transaction can close. The
 //! substrate contract rules what watches it: *"A byte-deleting build MUST run that fence or its
 //! equivalent — retry plus age alerting."* This module is that fence, in three moves:
 //!
-//! * **Derivation** — pending deletes are DERIVED from the `principal_erased` payload's
+//! * **Derivation** — pending deletes are DERIVED from the `principal_erased` and `resource_erased` payloads'
 //!   per-target strike verdicts (specific pathnames, never provider enumeration — BlobStore has
 //!   no `list`), seeded into `kb_erasure_blob_deletes` (20260909000040) with first-due at the
 //!   EVENT's `occurred_at`. Every tick re-derives from the ledger; the seed's
@@ -142,7 +142,7 @@ struct SeedScan {
     unparseable: usize,
 }
 
-/// Derive pending deletes from every `principal_erased` payload and seed the not-yet-seeded
+/// Derive pending deletes from every `principal_erased` and `resource_erased` payload and seed the not-yet-seeded
 /// ones. Store-independent by construction: the work is DERIVED from the ledger, and nothing
 /// here touches a provider (a derivation that needed the store could never run for a
 /// deployment whose provider configuration is gone — exactly the deployment whose stranded
@@ -216,7 +216,8 @@ async fn seed_from_ledger(pool: &PgPool) -> ApiResult<SeedScan> {
 /// What one drain tick did.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct DrainSummary {
-    /// Deletes newly derived from `principal_erased` payloads this tick.
+    /// Deletes newly derived this tick from `principal_erased` and `resource_erased` payloads
+    /// (the blob delete door seeds the same queue inside its own transaction).
     pub seeded: u64,
     /// `kb_blobs` targets whose outcome matched NO known strike-verdict shape (prose drift).
     /// Never seeded; the report raises `unparseable_verdicts` as an alertable cause — the
