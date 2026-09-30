@@ -507,10 +507,28 @@ async fn edge_trail_denied_when_an_endpoint_is_private(pool: sqlx::PgPool) {
     )
     .await;
 
+    // The edge's own property event rides the owner arm; the denial must cover it too.
+    insert_event(
+        &pool,
+        "property_asserted",
+        entity,
+        context,
+        json!({
+            "owner": {"table": "kb_edges", "id": edge_id},
+            "property_id": Uuid::now_v7(),
+            "property_key": "facet",
+            "value": {"k": "v"},
+            "weight": 1.0
+        }),
+        json!({}),
+    )
+    .await;
+
     let rows = element_trail_edge(&pool, profile, edge_id).await;
     assert!(
         rows.is_empty(),
-        "edge trail denied when an endpoint is private, despite a readable home: {rows:?}"
+        "edge trail denied when an endpoint is private, despite a readable home — its \
+         relationship and property events alike: {rows:?}"
     );
 }
 

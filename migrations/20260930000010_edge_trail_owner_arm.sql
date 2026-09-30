@@ -9,9 +9,6 @@
 -- qualification on an edge was invisible in that edge's trail, while `element_trail_node`
 -- has read the resource half of the same shape (its `owner` arm) all along.
 --
--- Found exercising the MCP surface live (2026-09-30): an edge carrying a facet, an
--- `anchored-at` row, a retraction and a re-assert showed only its relationship events.
---
 -- Fix: the node trail's shape — an `ev_ids` UNION of the two keys, each arm pruned by
 -- `producing_anchor_table IS NOT NULL` inside its index scan
 -- (`idx_kb_events_payload_edge_id`, `idx_kb_events_payload_owner_id`). Everything else is
