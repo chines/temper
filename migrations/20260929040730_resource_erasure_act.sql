@@ -28,8 +28,363 @@
 --     and its refusal are part of the record; the effect is a no-op — nothing in the projection
 --     changes, no second `resource_erased` is minted).
 --
--- Additive: new functions only — no existing column, constraint or function is altered, and an old
--- binary reads every pre-existing row unchanged.
+--   * THE ACT IS SERIALIZED AGAINST EVERY WRITER (D13): the act takes FOR UPDATE on R's row before
+--     the plan; every content-bearing write re-checks `erased_at` under FOR KEY SHARE inside its own
+--     transaction (Section W). A racing write lands before the act and is erased, or refuses after.
+--
+-- Additive: no existing column or constraint is altered. Section W re-creates seven incumbent
+-- functions, each verbatim plus guard calls that raise only for an erased resource — a state an
+-- old binary cannot produce — so an old binary reads and writes every pre-existing row unchanged.
+
+-- ---------------------------------------------------------------------------
+-- Section W. THE WRITE GUARD (D13): a write that races the act either lands
+-- before it, and is erased, or refuses after it; none lands on the husk.
+--
+-- The act takes FOR UPDATE on R's kb_resources row before it computes the plan
+-- (Section 4). Every content-bearing write calls `_resource_write_guard` inside
+-- its own transaction: FOR KEY SHARE on the same row, then a RAISE when
+-- `erased_at IS NOT NULL`. FOR KEY SHARE conflicts only with FOR UPDATE, so
+-- writers never block one another on it; a writer that already holds the row
+-- makes the act wait for its commit, and a writer that arrives while the act
+-- holds the row waits, then re-reads the committed row and refuses.
+--
+-- The guard reads `erased_at`, never `is_active`: replaying a historical ledger
+-- walks old writes to soft-deleted resources, and those must still project.
+-- It guards a state floor, not an authorization decision.
+--
+-- The incumbents re-created below are each their live definition verbatim
+-- plus the guard call (two for relationship assert, one per endpoint) as the
+-- body's first statement — nothing else changes:
+--   * `_recompute_resource_body_hash` — the tail of block mutate, segment
+--     append, finalize and reblock (`_project_block_mutated`, `_project_blocks`,
+--     `_project_resource_reblocked` all call it);
+--   * the non-content projectors: property set and assert (by owner),
+--     relationship assert (both endpoints), block provenance annotate (by
+--     block), `resource_updated`, data-artifact commit.
+-- `_project_relationship_folded` and `_project_resource_deleted` are NOT
+-- guarded: a fold or a tombstone writes no content, and the act itself folds.
+-- The Rust projectors `project_property_unset` / `project_property_retracted`
+-- (events.rs) and the embed drain's write-backs (embed.rs) carry the same
+-- guard on their side.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION _resource_write_guard(p_resource uuid)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_erased timestamptz;
+BEGIN
+    -- One statement, so a wait on the act's FOR UPDATE re-reads the row version the act
+    -- committed (READ COMMITTED re-check) and sees its erased_at. No row → nothing to guard;
+    -- the caller's own write reports a missing resource on its own terms.
+    SELECT r.erased_at INTO v_erased FROM kb_resources r WHERE r.id = p_resource FOR KEY SHARE;
+    IF v_erased IS NOT NULL THEN
+        RAISE EXCEPTION 'resource % is erased; writes are refused', p_resource;
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION _resource_write_guard(uuid) IS
+'the write guard (spec 2026-09-28 D13): FOR KEY SHARE on the kb_resources row, then RAISE
+''resource % is erased; writes are refused'' when erased_at IS NOT NULL. Conflicts only with the
+erasure act''s FOR UPDATE. Reads erased_at, never is_active, so replay of historical writes to a
+soft-deleted resource never trips it.';
+
+CREATE FUNCTION _resource_write_guard_owner(p_table text, p_id uuid)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_resource uuid;
+BEGIN
+    -- The owner tables kb_properties admits (kb_properties_owner_table_check) and the edge
+    -- endpoint tables (kb_edges_{source,target}_table_check). kb_cogmaps and kb_blobs write
+    -- into no resource, so they fall through unguarded.
+    IF p_table = 'kb_resources' THEN
+        PERFORM _resource_write_guard(p_id);
+    ELSIF p_table = 'kb_edges' THEN
+        FOR v_resource IN
+            SELECT e.source_id FROM kb_edges e
+             WHERE e.id = p_id AND e.source_table = 'kb_resources'
+            UNION
+            SELECT e.target_id FROM kb_edges e
+             WHERE e.id = p_id AND e.target_table = 'kb_resources'
+            ORDER BY 1
+        LOOP
+            PERFORM _resource_write_guard(v_resource);
+        END LOOP;
+    ELSIF p_table = 'kb_content_blocks' THEN
+        PERFORM _resource_write_guard(
+            (SELECT b.resource_id FROM kb_content_blocks b WHERE b.id = p_id));
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION _resource_write_guard_owner(text, uuid) IS
+'the write guard by owner (spec 2026-09-28 D13): resolves an owner to the resource or resources it
+writes into and guards each — kb_resources itself; kb_edges each endpoint whose table is
+kb_resources; kb_content_blocks the block''s resource_id; kb_cogmaps (and a kb_blobs endpoint)
+nothing.';
+
+-- _recompute_resource_body_hash: its live definition (last defined by 20260712000110), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._recompute_resource_body_hash(p_resource uuid, p_occurred timestamp with time zone)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_resource_hashes text;
+BEGIN
+    PERFORM _resource_write_guard(p_resource);
+    -- Serialize the recompute tail: wait out any concurrent same-resource append still in flight, so
+    -- the aggregate SELECT below (a fresh READ COMMITTED snapshot) sees the settled, committed block set.
+    -- FOR NO KEY UPDATE (not FOR UPDATE) so it does not conflict with the FK-induced KEY SHARE locks the
+    -- concurrent append already holds — see the header note; FOR UPDATE deadlocks here.
+    PERFORM 1 FROM kb_resources WHERE id = p_resource FOR NO KEY UPDATE;
+    SELECT string_agg(bh, '' ORDER BY seq) INTO v_resource_hashes FROM (
+        SELECT b.seq,
+               encode(sha256(convert_to(string_agg(ch.content_hash, '' ORDER BY ch.chunk_index), 'UTF8')),
+                      'hex') AS bh
+        FROM kb_content_blocks b
+        JOIN kb_chunks ch ON ch.block_id = b.id AND ch.is_current
+        WHERE b.resource_id = p_resource AND NOT b.is_folded
+        GROUP BY b.seq
+    ) per_block;
+    UPDATE kb_resources
+        SET body_hash = encode(sha256(convert_to(coalesce(v_resource_hashes, ''), 'UTF8')), 'hex'),
+            updated = p_occurred
+        WHERE id = p_resource;
+END;
+$function$;
+
+-- _project_property_set: its live definition (last defined by 20260815000030), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_property_set(p_event uuid, p_payload jsonb)
+ RETURNS uuid[]
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_prop uuid := (p_payload->>'property_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+        v_owner_tbl text := p_payload#>>'{owner,table}';
+        v_owner uuid := (p_payload#>>'{owner,id}')::uuid;
+        v_key text := p_payload->>'property_key';
+        v_value jsonb := _property_value_normalized(p_payload->>'property_key',
+                                                    p_payload->'value');
+        v_weight double precision := (p_payload->>'weight')::double precision;
+        v_ids uuid[] := '{}';
+        v_mark record;
+        v_id uuid;
+BEGIN
+    PERFORM _resource_write_guard_owner(p_payload#>>'{owner,table}', (p_payload#>>'{owner,id}')::uuid);
+    -- Replace semantics, unchanged for every key: fold the whole live set for this key first.
+    UPDATE kb_properties SET is_folded = true, last_event_id = p_event
+        WHERE owner_table = v_owner_tbl AND owner_id = v_owner
+          AND property_key = v_key AND NOT is_folded;
+
+    IF v_key = 'facet' THEN
+        FOR v_mark IN SELECT * FROM _facet_marks(v_value) LOOP
+            v_id := uuid_generate_v7();
+            INSERT INTO kb_properties (id, owner_table, owner_id, property_key, property_value,
+                                       weight, asserted_by_event_id, last_event_id, created)
+            VALUES (v_id, v_owner_tbl, v_owner, 'facet',
+                    CASE WHEN v_mark.inner_key IS NULL
+                         THEN v_mark.inner_value
+                         ELSE jsonb_build_object(v_mark.inner_key, v_mark.inner_value) END,
+                    v_weight, p_event, p_event, v_occurred);
+            v_ids := v_ids || v_id;
+        END LOOP;
+    ELSE
+        INSERT INTO kb_properties (id, owner_table, owner_id, property_key, property_value, weight,
+                                   asserted_by_event_id, last_event_id, created)
+        VALUES (v_prop, v_owner_tbl, v_owner, v_key, v_value, v_weight,
+                p_event, p_event, v_occurred);
+        v_ids := ARRAY[v_prop];
+    END IF;
+
+    -- Carried verbatim from 20260711000060: the FTS vector is gated on the indexed open_meta keys.
+    IF v_owner_tbl = 'kb_resources' AND v_key IN ('keywords', 'descriptor', 'tags') THEN
+        PERFORM _rebuild_resource_search_vector(v_owner);
+    END IF;
+    RETURN v_ids;
+END;
+$function$;
+
+-- _project_property_asserted: its live definition (last defined by 20260815000030), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_property_asserted(p_event uuid, p_payload jsonb)
+ RETURNS uuid[]
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_prop uuid := (p_payload->>'property_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+        v_owner_tbl text := p_payload#>>'{owner,table}';
+        v_owner uuid := (p_payload#>>'{owner,id}')::uuid;
+        v_key text := p_payload->>'property_key';
+        v_value jsonb := _property_value_normalized(p_payload->>'property_key',
+                                                    p_payload->'value');
+        v_weight double precision := (p_payload->>'weight')::double precision;
+        v_ids uuid[] := '{}';
+        v_mark record;
+        v_id uuid;
+BEGIN
+    PERFORM _resource_write_guard_owner(p_payload#>>'{owner,table}', (p_payload#>>'{owner,id}')::uuid);
+    IF v_key <> 'facet' THEN
+        INSERT INTO kb_properties (id, owner_table, owner_id, property_key, property_value, weight,
+                                   asserted_by_event_id, last_event_id, created)
+        VALUES (v_prop, v_owner_tbl, v_owner, v_key, v_value, v_weight,
+                p_event, p_event, v_occurred);
+        RETURN ARRAY[v_prop];
+    END IF;
+
+    FOR v_mark IN SELECT * FROM _facet_marks(v_value) LOOP
+        -- A mark is stored as a ONE-KEY OBJECT — {"status": "open"} — never an envelope around the
+        -- key and value: `expand_facets` explodes `property_value`'s top-level keys straight into
+        -- `Facet { path, value }`, so a wrapper would surface its own field names as facet paths.
+        --
+        -- Fold the prior live mark for THIS inner key only — never a sibling.
+        IF v_mark.inner_key IS NULL THEN
+            UPDATE kb_properties
+               SET is_folded = true, last_event_id = p_event
+             WHERE owner_table = v_owner_tbl AND owner_id = v_owner
+               AND property_key = 'facet' AND NOT is_folded
+               AND jsonb_typeof(property_value) <> 'object';
+        ELSE
+            UPDATE kb_properties
+               SET is_folded = true, last_event_id = p_event
+             WHERE owner_table = v_owner_tbl AND owner_id = v_owner
+               AND property_key = 'facet' AND NOT is_folded
+               AND jsonb_typeof(property_value) = 'object'
+               AND jsonb_exists(property_value, v_mark.inner_key);
+        END IF;
+
+        v_id := uuid_generate_v7();
+        INSERT INTO kb_properties (id, owner_table, owner_id, property_key, property_value, weight,
+                                   asserted_by_event_id, last_event_id, created)
+        VALUES (v_id, v_owner_tbl, v_owner, 'facet',
+                CASE WHEN v_mark.inner_key IS NULL
+                     THEN v_mark.inner_value
+                     ELSE jsonb_build_object(v_mark.inner_key, v_mark.inner_value) END,
+                v_weight, p_event, p_event, v_occurred);
+        v_ids := v_ids || v_id;
+    END LOOP;
+
+    RETURN v_ids;
+END;
+$function$;
+
+-- _project_relationship_asserted: its live definition (last defined by 20260624000002), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_relationship_asserted(p_event uuid, p_payload jsonb)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+BEGIN
+    PERFORM _resource_write_guard_owner(p_payload#>>'{source,table}', (p_payload#>>'{source,id}')::uuid);
+    PERFORM _resource_write_guard_owner(p_payload#>>'{target,table}', (p_payload#>>'{target,id}')::uuid);
+    INSERT INTO kb_edges (id, source_table, source_id, target_table, target_id,
+                          edge_kind, polarity, label, weight,
+                          home_anchor_table, home_anchor_id,
+                          asserted_by_event_id, last_event_id, created)
+    VALUES (v_edge,
+            p_payload#>>'{source,table}', (p_payload#>>'{source,id}')::uuid,
+            p_payload#>>'{target,table}', (p_payload#>>'{target,id}')::uuid,
+            (p_payload->>'edge_kind')::edge_kind,
+            COALESCE(p_payload->>'polarity', 'forward')::edge_polarity,
+            p_payload->>'label',
+            (p_payload->>'weight')::double precision,
+            p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid,
+            p_event, p_event, v_occurred)
+    -- Idempotent on the active-edge invariant (uq_kb_edges_assertion): re-asserting the same active
+    -- relationship updates the existing edge's weight (+ last_event_id) and returns ITS id rather than
+    -- creating a duplicate active edge. asserted_by_event_id is left on the original assertion. The
+    -- ON CONFLICT inference clause mirrors uq_kb_edges_assertion's columns + partial predicate exactly.
+    ON CONFLICT (source_table, source_id, target_table, target_id, edge_kind, COALESCE(label, ''),
+                 home_anchor_table, home_anchor_id) WHERE NOT is_folded
+        DO UPDATE SET weight = EXCLUDED.weight, last_event_id = EXCLUDED.last_event_id
+    RETURNING id INTO v_edge;
+    RETURN v_edge;
+END;
+$function$;
+
+-- _project_block_annotated: its live definition (last defined by 20260710000001), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_block_annotated(p_event uuid, p_payload jsonb)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_block uuid := (p_payload->>'block_id')::uuid;
+BEGIN
+    PERFORM _resource_write_guard_owner('kb_content_blocks', v_block);
+    IF NOT EXISTS (SELECT 1 FROM kb_content_blocks WHERE id = v_block) THEN
+        RAISE EXCEPTION '_project_block_annotated: block % not found', v_block;
+    END IF;
+    PERFORM _insert_block_provenance(v_block, p_event, p_payload->'incorporated');
+    RETURN v_block;
+END;
+$function$;
+
+-- _project_resource_updated: its live definition (last defined by 20260626000001), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_resource_updated(p_event uuid, p_payload jsonb)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_resource uuid := (p_payload->>'resource_id')::uuid;
+BEGIN
+    PERFORM _resource_write_guard(v_resource);
+    UPDATE kb_resources SET
+        title      = COALESCE(p_payload->>'title', title),
+        origin_uri = COALESCE(p_payload->>'origin_uri', origin_uri),
+        updated    = (SELECT occurred_at FROM kb_events WHERE id = p_event)
+        WHERE id = v_resource;
+    IF NOT FOUND THEN RAISE EXCEPTION 'resource_update: resource % not found', v_resource; END IF;
+    IF p_payload ? 'title' THEN                            -- ← Beat 1 (origin_uri is not in the FTS vector)
+        PERFORM _rebuild_resource_search_vector(v_resource);
+    END IF;
+    RETURN v_resource;
+END;
+$function$;
+
+-- _project_data_artifact_committed: its live definition (last defined by 20260820000020), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_data_artifact_committed(p_event uuid, p_payload jsonb, p_content jsonb)
+ RETURNS uuid[]
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_id       uuid := (p_payload->>'artifact_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+        v_resource uuid := (p_payload->>'resource_id')::uuid;
+        v_kind     text := p_payload->>'artifact_kind';
+        v_kind_tbl text := p_payload->>'kind_owner_table';
+        v_kind_own uuid := (p_payload->>'kind_owner_id')::uuid;
+        v_intent   text := p_payload->>'intent';
+        v_prec     double precision := COALESCE((p_payload->>'precedence')::double precision, 0.0);
+        v_hash     text := p_payload->>'content_hash';
+        v_bytes    bigint := (p_payload->>'content_bytes')::bigint;
+
+        v_supersedes uuid[] := COALESCE(
+            (SELECT array_agg(x::uuid) FROM jsonb_array_elements_text(
+                 COALESCE(p_payload->'supersedes', '[]'::jsonb)) x), '{}');
+BEGIN
+    PERFORM _resource_write_guard(v_resource);
+    -- Fold ONLY what the writer explicitly named. There is no "fold everything live of this kind"
+    -- sweep here, and that absence is the whole point: see the A2 comment. An empty `supersedes`
+    -- means this artifact replaces nothing, which is the common case for `member`.
+    IF array_length(v_supersedes, 1) IS NOT NULL THEN
+        UPDATE kb_data_artifacts SET is_folded = true, last_event_id = p_event
+         WHERE id = ANY(v_supersedes)
+           AND resource_id = v_resource      -- a writer may only fold artifacts of the resource it
+           AND NOT is_folded;                -- is writing to; cross-resource folds are not a thing
+    END IF;
+
+    INSERT INTO kb_data_artifacts (id, resource_id, kind_owner_table, kind_owner_id, artifact_kind,
+                                   intent, precedence, content_hash, content_bytes,
+                                   asserted_by_event_id, last_event_id, created)
+    VALUES (v_id, v_resource, v_kind_tbl, v_kind_own, v_kind, v_intent, v_prec, v_hash, v_bytes,
+            p_event, p_event, v_occurred);
+
+    -- The bytes arrive as a SEPARATE ARGUMENT, never inside p_payload — the same split
+    -- resource_create/_project_resource_created uses. This is what makes "the payload carries the
+    -- hash, never the body" true of the stored event rather than merely of the design doc: whatever
+    -- is in p_payload is what _event_append wrote to kb_events.
+    IF p_content IS NOT NULL AND jsonb_typeof(p_content) <> 'null' THEN
+        INSERT INTO kb_data_artifact_content (artifact_id, content, content_hash)
+        VALUES (v_id, p_content, v_hash);
+    END IF;
+
+    RETURN ARRAY[v_id];
+END;
+$function$;
 
 -- ---------------------------------------------------------------------------
 -- Section 0. The one redaction body (D2), given a scope. Event-free by design:
@@ -679,19 +1034,21 @@ BEGIN
     --    catches the typed message and records it through resource_erasure_refuse, so the SQL
     --    never silently widens the negative face to a partial act (and never appends a refusal
     --    event itself: _event_append's emitter is the OPERATOR and a refused attempt at SQL
-    --    grain would attribute wrongly). The verdict reads happen before anything mutates. ──
-    --    convention. The verdict reads happen before anything mutates, and under the
-    --    advisory lock (taken first below): two concurrent executes must serialize so the
-    --    loser re-reads `erased_at` AFTER the winner's commit and refuses as
-    --    already-erased, rather than both passing the unlocked reads and double-completing.
+    --    grain would attribute wrongly). The verdict reads happen before anything mutates, and
+    --    under R's row lock (D13), taken right after the existence check: FOR UPDATE waits out
+    --    every writer already holding the row (their FK KEY SHARE, the write guard's KEY SHARE,
+    --    the body-hash recompute's NO KEY UPDATE) so the plan, the folds and the body all see one
+    --    settled state, and a writer arriving after it waits on the lock, then refuses at the
+    --    write guard (Section W). The same lock serializes a second execute: its verdict read
+    --    runs after the first commits, sees `erased_at`, and raises `already erased` rather than
+    --    both passing the reads and double-completing.
     --    PR 2's service parses these strings into refusal vocabulary; see the tombstone
     --    paragraph below the ingest arm for the one overrule this file carries. ──
     SELECT count(*) > 0 INTO v_found FROM kb_resources r WHERE r.id = p_resource;
     IF NOT v_found THEN
         RAISE EXCEPTION 'resource_erasure_execute: resource % not found', p_resource;
     END IF;
-    PERFORM pg_advisory_xact_lock(hashtext('kb_resources'),
-                                  hashtext(p_resource::text));
+    PERFORM 1 FROM kb_resources WHERE id = p_resource FOR UPDATE;
     SELECT c.telos_resource_id INTO v_charter FROM kb_cogmaps c WHERE c.telos_resource_id = p_resource;
     SELECT r.ingest_state, r.erased_at INTO v_ingest, v_erased_ts
       FROM kb_resources r WHERE r.id = p_resource;
@@ -852,5 +1209,12 @@ position; resource_erasure_refuse records the closed refusal vocabulary (unautho
 charter_resource | ingest_in_flight | already_erased) — a repeat erasure is a recorded refusal, not
 a silent no-op (ruled 2026-09-29). CUT 1 DOES NOT TOUCH THE LEDGER (D12): the append-only trigger
 is unamended; replay stays byte-identical through the projection-side sentinels applied at the
-event''s position. Additive: new functions only.'
+event''s position. THE ACT IS SERIALIZED AGAINST EVERY WRITER (D13): resource_erasure_execute takes
+FOR UPDATE on the resource row before the plan, and _resource_write_guard (FOR KEY SHARE, RAISE when
+erased_at IS NOT NULL) with its owner-resolving companion _resource_write_guard_owner is called as
+the first statement of seven re-created incumbents — _recompute_resource_body_hash,
+_project_property_set, _project_property_asserted, _project_relationship_asserted,
+_project_block_annotated, _project_resource_updated, _project_data_artifact_committed — each
+otherwise verbatim. Additive: no column or constraint is altered, and the guard raises only for an
+erased resource, a state an old binary cannot produce.'
 );

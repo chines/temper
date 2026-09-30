@@ -1006,14 +1006,20 @@ impl EventContext {
 /// gone, and the address becomes re-assertable. Idempotent by payload under replay: an
 /// already-folded (or foreign, or missing) row folds zero rows — replay-normal, where the fire
 /// path refuses.
-pub(crate) async fn project_property_retracted<'e, E>(
-    executor: E,
+///
+/// The write guard runs first on the same connection (spec 2026-09-28 D13): the edge's
+/// resource endpoints are locked `FOR KEY SHARE` and an erased one refuses the fold.
+pub(crate) async fn project_property_retracted(
+    conn: &mut sqlx::PgConnection,
     event_id: Uuid,
     payload: &serde_json::Value,
-) -> Result<u64>
-where
-    E: sqlx::PgExecutor<'e>,
-{
+) -> Result<u64> {
+    sqlx::query!(
+        "SELECT _resource_write_guard_owner('kb_edges', ($1::jsonb->'owner'->>'id')::uuid)",
+        payload,
+    )
+    .execute(&mut *conn)
+    .await?;
     let res = sqlx::query!(
         "UPDATE kb_properties \
          SET is_folded = true, last_event_id = $1 \
@@ -1024,7 +1030,7 @@ where
         event_id,
         payload,
     )
-    .execute(executor)
+    .execute(&mut *conn)
     .await?;
     Ok(res.rows_affected())
 }
@@ -1038,11 +1044,20 @@ where
 /// `keywords`/`descriptor`/`tags` row must not leave a stale search vector behind, and the
 /// rebuild runs AFTER the fold so it reads the post-fold live set. Idempotent under replay —
 /// a second application folds zero rows and the rebuild is a pure refresh.
+///
+/// The write guard runs first on the same connection (spec 2026-09-28 D13): the owning resource
+/// is locked `FOR KEY SHARE` and an erased one refuses the unset.
 pub(crate) async fn project_property_unset(
     conn: &mut sqlx::PgConnection,
     event_id: Uuid,
     payload: &serde_json::Value,
 ) -> Result<u64> {
+    sqlx::query!(
+        "SELECT _resource_write_guard_owner('kb_resources', ($1::jsonb->'owner'->>'id')::uuid)",
+        payload,
+    )
+    .execute(&mut *conn)
+    .await?;
     let res = sqlx::query!(
         "UPDATE kb_properties \
          SET is_folded = true, last_event_id = $1 \

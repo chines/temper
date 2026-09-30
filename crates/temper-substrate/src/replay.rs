@@ -689,17 +689,22 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // implementation, since this event has no `_project_*` SQL function. The payload
             // carries the row id (identity-as-input), so replay re-folds the SAME row; the
             // `NOT is_folded` floor makes a re-application a zero-row no-op, never a resurrection.
+            // The write guard + fold are TWO statements, so they run in one transaction, as the
+            // unset arm below does.
             EventKind::PropertyRetracted => {
-                crate::events::project_property_retracted(pool, id, &payload).await?;
+                let mut conn = pool.acquire().await?;
+                let mut tx = conn.deref_mut().begin().await?;
+                crate::events::project_property_retracted(&mut tx, id, &payload).await?;
+                tx.commit().await?;
             }
             // property_unset (the key-grain delete verb): payload-only projector, no sidecar —
             // the shared `project_property_unset`, fire and replay ONE implementation since this
             // event has no `_project_*` SQL function. The payload carries (owner, key), so
             // replay re-folds the SAME key's live set; the `NOT is_folded` floor makes a
-            // re-application a zero-row no-op, never a resurrection. The fold + FTS rebuild are
-            // TWO statements, so they run in one transaction here — the SQL-function arms get
-            // that atomicity from being single function calls, and this arm must not be the
-            // first multi-statement projection replay runs bare.
+            // re-application a zero-row no-op, never a resurrection. The write guard, the fold and
+            // the FTS rebuild are separate statements, so they run in one transaction here — the
+            // SQL-function arms get that atomicity from being single function calls, and this arm
+            // must not be the first multi-statement projection replay runs bare.
             EventKind::PropertyUnset => {
                 let mut conn = pool.acquire().await?;
                 let mut tx = conn.deref_mut().begin().await?;

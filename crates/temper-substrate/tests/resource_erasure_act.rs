@@ -21,6 +21,10 @@
 //!   * **11 (SQL half)** — the closed refusals RAISE (already-erased, charter, ingest); the
 //!     recorded/typed refusal face is the service's, PR 2's witness.
 //!   * **12** — the joint-read columns: `header_path` NULL, artifact content `{}`::jsonb.
+//!   * **20** — no writer lands on the husk (D13): a block mutate holding its transaction makes
+//!     the act wait and is erased; a property set arriving while the act holds R's row refuses;
+//!     the embed write-back after the act writes nothing and the drain finds nothing stale on
+//!     the husk; replay byte-identical after each race.
 //!
 //! The doors (Rust) land in PR 2; this file pins the SQL behavior the doors consume.
 
@@ -1367,4 +1371,357 @@ async fn the_redaction_body_refuses_a_block_scope_until_2e(pool: sqlx::PgPool) {
     .await
     .unwrap();
     assert_eq!(leaked, 0, "the whole-resource form emptied the chunk prose");
+}
+
+// ── Witness 20: no writer lands on the husk (D13) ───────────────────────────────────────────
+//
+// The `blob_byte_window_test` choreography: a second connection races the act under explicit
+// transactions, and a 2-second `tokio::time::timeout` that EXPIRES is the serialization signal —
+// the racing side cannot complete while the other side holds R's row.
+
+/// The prose the racing writer lands; it must end nowhere in R's content.
+const RACED: &str = "late prose written while the act was waiting";
+
+/// Snapshot, reset, replay, and diff every projection table — the byte-identity check the
+/// witnesses above run inline.
+async fn assert_replay_byte_identical(pool: &PgPool, after_what: &str) {
+    let before = replay::dump_projections(pool).await.unwrap();
+    let snap = replay::snapshot(pool).await.unwrap();
+    common::reset_schema(pool).await;
+    replay::replay(pool, &snap).await.unwrap();
+    let after = replay::dump_projections(pool).await.unwrap();
+    for ((ta, a), (tb, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(ta, tb);
+        assert_eq!(
+            a, b,
+            "projection table {ta} diverged under replay {after_what}"
+        );
+    }
+}
+
+/// (20, content half, writer first) A block mutate holding its transaction makes the act wait
+/// on R's row lock; once the writer commits, the act erases what it wrote. The mutate lands
+/// BEFORE the act — its event precedes `resource_erased` — and the husk ends with every chunk's
+/// prose and every revision's bytes empty.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_writer_holding_its_transaction_makes_the_act_wait_then_is_erased(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "race-writer-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "race-writer-twin").await,
+    )
+    .await;
+    let block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // The writer: a per-block mutate through the in-transaction write path, NOT committed.
+    let mut writer = pool.begin().await.unwrap();
+    writes::update_resource_in_tx(
+        &mut writer,
+        UpdateParams {
+            resource: leak.resource,
+            body: Some(RACED),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            unset_keys: &[],
+            chunks: Some(vec![chunk(RACED, "")]),
+            sources: vec![],
+            content_block: Some(block),
+            rehome_to: None,
+            emitter,
+        },
+        EventContext::default(),
+        false,
+    )
+    .await
+    .expect("the racing block mutate writes inside its open transaction");
+
+    let pool_for_act = pool.clone();
+    let resource = leak.resource.uuid();
+    let mut act = tokio::spawn(async move { execute_act(&pool_for_act, resource).await });
+    let finished_within_window =
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut act).await;
+    assert!(
+        finished_within_window.is_err(),
+        "the act completed while a writer held R's row — its FOR UPDATE did not wait"
+    );
+
+    writer.commit().await.unwrap();
+    let event_id = act.await.expect("the act task must not panic");
+
+    // The mutate landed before the act: its event precedes resource_erased in the ledger.
+    let mutated: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'block_mutated' AND (e.payload->>'block_id')::uuid = $1",
+    )
+    .bind(block)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !mutated.is_empty() && mutated.iter().all(|id| *id < event_id),
+        "the racing mutate committed before the act; got {mutated:?} vs {event_id}"
+    );
+
+    let leaked_chunks: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks c JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
+          WHERE c.resource_id = $1 AND cc.content <> ''",
+    )
+    .bind(resource)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        leaked_chunks, 0,
+        "every chunk on the husk is empty — the raced prose included"
+    );
+    let leaked_revisions: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_block_content bc \
+           JOIN kb_block_revisions br ON br.id = bc.block_revision_id \
+           JOIN kb_content_blocks b ON b.id = br.block_id \
+          WHERE b.resource_id = $1 AND bc.content <> ''",
+    )
+    .bind(resource)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        leaked_revisions, 0,
+        "every block revision on the husk is empty — the raced revision included"
+    );
+
+    assert_replay_byte_identical(&pool, "of a writer that committed ahead of the act").await;
+}
+
+/// (20, non-content half, act first) A property set arriving while the act holds R's row waits
+/// on the write guard's FOR KEY SHARE; once the act commits, the guard re-reads the row, sees
+/// `erased_at`, and refuses. Nothing of the write survives: no row carries its key and no event
+/// records it.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_writer_after_the_act_is_refused(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "race-act-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "race-act-twin").await,
+    )
+    .await;
+
+    // The act, run inside a transaction that is NOT committed yet.
+    let mut act = pool.begin().await.unwrap();
+    sqlx::query("SELECT resource_erasure_execute($1,$2,$3,$4)")
+        .bind(leak.resource.uuid())
+        .bind(emitter)
+        .bind(emitter)
+        .bind(Uuid::now_v7())
+        .execute(&mut *act)
+        .await
+        .expect("the act runs inside its open transaction");
+
+    let pool_for_writer = pool.clone();
+    let resource = leak.resource;
+    let mut writer = tokio::spawn(async move {
+        writes::set_property(
+            &pool_for_writer,
+            resource,
+            "raced",
+            &serde_json::json!(RACED),
+            emitter,
+        )
+        .await
+    });
+    let finished_within_window =
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut writer).await;
+    assert!(
+        finished_within_window.is_err(),
+        "the property set completed while the act held R's row — the write guard did not wait"
+    );
+
+    act.commit().await.unwrap();
+    let refused = writer
+        .await
+        .expect("the writer task must not panic")
+        .expect_err("a write that arrives after the act refuses");
+    let expected = format!("resource {} is erased; writes are refused", resource.uuid());
+    assert!(
+        format!("{refused:#}").contains(&expected),
+        "the refusal is the write guard's; got {refused:#}"
+    );
+
+    let raced_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties \
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 \
+            AND (property_key = 'raced' OR property_value = to_jsonb($2::text))",
+    )
+    .bind(resource.uuid())
+    .bind(RACED)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(raced_rows, 0, "no property row carries the refused write");
+    let props = resource_props(&pool, resource).await;
+    assert!(
+        props
+            .iter()
+            .all(|(k, v)| k.starts_with("erased-key-") && v == &serde_json::json!("erased")),
+        "R has no live property but the act's sentinels; got {props:?}"
+    );
+    let raced_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'property_set' AND e.payload->>'property_key' = 'raced'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        raced_events, 0,
+        "the refused write rolled back its event with it"
+    );
+
+    assert_replay_byte_identical(&pool, "of a writer refused after the act").await;
+}
+
+/// (20, embed half) The embed drain's write-back arriving after the act writes nothing: the
+/// drain's own statement (`CHUNK_EMBEDDING_WRITE_BACK`) against one of the husk's chunks
+/// leaves the vector NULL. The same statement against the live twin writes, so the refusal is
+/// the guard's, not a statement that never writes.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_embed_write_back_after_the_act_writes_nothing(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "embed-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "embed-twin").await,
+    )
+    .await;
+    execute_act(&pool, leak.resource.uuid()).await;
+
+    let vector = format!("[{}]", vec!["0.1"; 768].join(","));
+    let first_chunk_sql = "SELECT id FROM kb_chunks WHERE resource_id = $1 ORDER BY id LIMIT 1";
+    let husk_chunk: Uuid = sqlx::query_scalar(first_chunk_sql)
+        .bind(leak.resource.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let twin_chunk: Uuid = sqlx::query_scalar(first_chunk_sql)
+        .bind(leak.twin.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let husk_write = sqlx::query(temper_substrate::embed::CHUNK_EMBEDDING_WRITE_BACK)
+        .bind(vector.as_str())
+        .bind("model-sha-1")
+        .bind(husk_chunk)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        husk_write.rows_affected(),
+        0,
+        "the write-back refuses the husk"
+    );
+    let (has_embedding, embedded_with): (bool, Option<String>) =
+        sqlx::query_as("SELECT embedding IS NOT NULL, embedded_with FROM kb_chunks WHERE id = $1")
+            .bind(husk_chunk)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!has_embedding, "the husk's chunk keeps a NULL vector");
+    assert!(
+        embedded_with.is_none(),
+        "and no provenance stamp rides in with a vector that did not land"
+    );
+
+    let twin_write = sqlx::query(temper_substrate::embed::CHUNK_EMBEDDING_WRITE_BACK)
+        .bind(vector.as_str())
+        .bind("model-sha-1")
+        .bind(twin_chunk)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        twin_write.rows_affected(),
+        1,
+        "the same statement writes a live resource's chunk"
+    );
+}
+
+/// (20, embed half, the drain converges) After the act the husk's chunks are not embed work:
+/// the stale predicate excludes an erased resource, so a drain job for R — one in flight across
+/// the act included — reports nothing remaining and completes instead of re-enqueueing forever
+/// on chunks its guarded write-backs may never stamp. Before the act the same chunks ARE stale
+/// (the seed's `embedded_with` is not this build's model), so the zero is the exclusion's.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn after_the_act_the_embed_drain_finds_nothing_stale(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "drain-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "drain-twin").await,
+    )
+    .await;
+    let resource = leak.resource.uuid();
+
+    let stale_before = temper_substrate::embed::count_stale_chunks(&pool, resource)
+        .await
+        .unwrap();
+    assert!(
+        stale_before > 0,
+        "setup: R's chunks are stale before the act (seeded under another model)"
+    );
+
+    execute_act(&pool, resource).await;
+
+    assert_eq!(
+        temper_substrate::embed::count_stale_chunks(&pool, resource)
+            .await
+            .unwrap(),
+        0,
+        "an erased resource's chunks are not embed work"
+    );
+    let progress = temper_substrate::embed::embed_resource_chunks(&pool, resource, 64)
+        .await
+        .unwrap();
+    assert_eq!(progress.embedded, 0, "the drain embeds nothing on the husk");
+    assert!(
+        progress.is_complete(),
+        "the drain reports nothing remaining, so its job completes; got {progress:?}"
+    );
 }
