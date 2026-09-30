@@ -4,6 +4,7 @@
 //! Claude Code, and other MCP-compatible clients. Deployed as a Vercel
 //! serverless function alongside the main temper-api.
 
+pub(crate) mod cache_policy;
 pub mod config;
 pub mod discovery;
 pub mod middleware;

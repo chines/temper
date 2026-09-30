@@ -20,7 +20,7 @@
 mod common;
 
 use jsonwebtoken::Algorithm;
-use rmcp::model::{CallToolRequestParams, ClientConfig, PaginatedRequestParams};
+use rmcp::model::{CacheScope, CallToolRequestParams, ClientConfig, PaginatedRequestParams};
 use rmcp::service::ServiceExt;
 use rmcp::transport::streamable_http_client::{
     StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
@@ -157,6 +157,51 @@ async fn typed_object_calls_drive_both_formerly_ref_carrying_instances_end_to_en
     assert!(
         !tools.tools.is_empty(),
         "the deployed transport advertises the tool set"
+    );
+    // MCP 2026-07-28 requires `ttlMs` and `cacheScope` on list results; a client that
+    // enforces it (Claude Code) drops every tool when they are absent. Both are
+    // optional in rmcp's model, so `Some` here means they crossed the transport.
+    assert!(
+        tools.ttl_ms.is_some(),
+        "tools/list must carry ttlMs over the transport"
+    );
+    assert_eq!(
+        tools.cache_scope,
+        Some(CacheScope::Public),
+        "tools/list must carry cacheScope over the transport — the tool set is the same for \
+         every caller"
+    );
+    // The caller-data list: gated by the caller's own bearer, so private and never fresh.
+    let listed = peer
+        .list_resources(Some(PaginatedRequestParams::default()))
+        .await
+        .expect("resources/list over the deployed transport");
+    assert_eq!(
+        (listed.ttl_ms, listed.cache_scope),
+        (Some(0), Some(CacheScope::Private)),
+        "resources/list must carry a private, immediately-stale cache policy"
+    );
+    // The rest of the deployment surface: the same for every caller, so public.
+    let templates = peer
+        .list_resource_templates(Some(PaginatedRequestParams::default()))
+        .await
+        .expect("resources/templates/list over the deployed transport");
+    assert_eq!(
+        (templates.ttl_ms.is_some(), templates.cache_scope),
+        (true, Some(CacheScope::Public)),
+        "resources/templates/list must carry a public cache policy"
+    );
+    // No prompts are offered or advertised, but a client that probes anyway must still meet
+    // a list result it accepts rather than one missing the required fields.
+    let prompts = peer
+        .list_prompts(Some(PaginatedRequestParams::default()))
+        .await
+        .expect("prompts/list over the deployed transport");
+    assert!(prompts.prompts.is_empty(), "no prompts are offered");
+    assert_eq!(
+        (prompts.ttl_ms.is_some(), prompts.cache_scope),
+        (true, Some(CacheScope::Public)),
+        "prompts/list must carry a public cache policy"
     );
     let mut offenders: Vec<String> = Vec::new();
     for tool in &tools.tools {

@@ -270,6 +270,115 @@ async fn edge_trail_keys_on_edge_id_and_survives_fold(pool: sqlx::PgPool) {
     );
 }
 
+/// Edge trail: an edge's PROPERTY events (`facet_set target=edge`, the keyed `anchored-at`
+/// row, `facet_retract`) name their subject as `payload.owner` = `{table: kb_edges, id}` and
+/// carry no `edge_id` — they surfaced in no trail until the owner arm
+/// (`20260930000010`). FAILS IF: the edge's own property events are missing, or a property
+/// event owned by a resource with the same id, or by another edge, bleeds in.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn edge_trail_carries_the_edges_own_property_events(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "etp-tester").await;
+    let entity = mk_entity(&pool, profile, "etp-entity").await;
+    let context = mk_owned_context(&pool, profile, "etp-context").await;
+
+    let src = create_resource(&pool, "edge-src", "temper://etp/src").await;
+    let tgt = create_resource(&pool, "edge-tgt", "temper://etp/tgt").await;
+    home_resource(&pool, src, context, profile).await;
+    home_resource(&pool, tgt, context, profile).await;
+
+    let edge_id = Uuid::now_v7();
+    let assert_event = insert_event(
+        &pool,
+        "relationship_asserted",
+        entity,
+        context,
+        json!({"edge_id": edge_id, "weight": 1.0}),
+        json!({}),
+    )
+    .await;
+    insert_edge(
+        &pool,
+        edge_id,
+        src,
+        tgt,
+        "kb_contexts",
+        context,
+        assert_event,
+        false,
+    )
+    .await;
+
+    let property_id = Uuid::now_v7();
+    let facet_event = insert_event(
+        &pool,
+        "property_asserted",
+        entity,
+        context,
+        json!({
+            "owner": {"table": "kb_edges", "id": edge_id},
+            "property_id": property_id,
+            "property_key": "anchored-at",
+            "value": {"endpoint": "target", "address": format!("{tgt}#{}", Uuid::now_v7())},
+            "weight": 1.0
+        }),
+        json!({}),
+    )
+    .await;
+    let retract_event = insert_event(
+        &pool,
+        "property_retracted",
+        entity,
+        context,
+        json!({"owner": {"table": "kb_edges", "id": edge_id}, "property_id": property_id}),
+        json!({}),
+    )
+    .await;
+
+    // Negatives: the same id under the resource owner table, and another edge's property.
+    insert_event(
+        &pool,
+        "property_asserted",
+        entity,
+        context,
+        json!({
+            "owner": {"table": "kb_resources", "id": edge_id},
+            "property_id": Uuid::now_v7(),
+            "property_key": "facet",
+            "value": {"k": "v"},
+            "weight": 1.0
+        }),
+        json!({}),
+    )
+    .await;
+    insert_event(
+        &pool,
+        "property_asserted",
+        entity,
+        context,
+        json!({
+            "owner": {"table": "kb_edges", "id": Uuid::now_v7()},
+            "property_id": Uuid::now_v7(),
+            "property_key": "facet",
+            "value": {"k": "v"},
+            "weight": 1.0
+        }),
+        json!({}),
+    )
+    .await;
+
+    let rows = element_trail_edge(&pool, profile, edge_id).await;
+    assert_eq!(
+        rows.iter().map(|r| (r.0, r.1.as_str())).collect::<Vec<_>>(),
+        vec![
+            (assert_event, "relationship_asserted"),
+            (facet_event, "property_asserted"),
+            (retract_event, "property_retracted"),
+        ],
+        "the edge trail is its lifecycle events plus its own property events, in emission \
+         order, and nothing owned by anything else: {rows:?}"
+    );
+}
+
 /// Node trail: a `resource_created` event (keyed by `resource_id`), a
 /// `property_set` event (keyed by `owner.id` + `owner.table = 'kb_resources'`),
 /// and a `block_mutated` event (keyed only by `block_id`, attributed via
@@ -398,10 +507,101 @@ async fn edge_trail_denied_when_an_endpoint_is_private(pool: sqlx::PgPool) {
     )
     .await;
 
+    // The edge's own property event rides the owner arm; the denial must cover it too.
+    insert_event(
+        &pool,
+        "property_asserted",
+        entity,
+        context,
+        json!({
+            "owner": {"table": "kb_edges", "id": edge_id},
+            "property_id": Uuid::now_v7(),
+            "property_key": "facet",
+            "value": {"k": "v"},
+            "weight": 1.0
+        }),
+        json!({}),
+    )
+    .await;
+
     let rows = element_trail_edge(&pool, profile, edge_id).await;
     assert!(
         rows.is_empty(),
-        "edge trail denied when an endpoint is private, despite a readable home: {rows:?}"
+        "edge trail denied when an endpoint is private, despite a readable home — its \
+         relationship and property events alike: {rows:?}"
+    );
+}
+
+/// A soft-deleted endpoint denies the edge's trail — its property events too. This is what keeps
+/// an erased resource's edge-owned facets out of every trail while resource erasure cut 1 leaves
+/// the ledger untouched (`20260929040730`, D12): the husk is `is_active = false`, which
+/// `resources_visible_to` never returns. FAILS IF: the owner arm reaches past the endpoint gate,
+/// or the gate stops honouring the soft-delete floor.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn edge_trail_denied_when_an_endpoint_is_soft_deleted(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "ett-husk").await;
+    let entity = mk_entity(&pool, profile, "ett-husk-entity").await;
+    let context = mk_owned_context(&pool, profile, "ett-husk-ctx").await;
+
+    let src = create_resource(&pool, "live endpoint", "temper://ett/live").await;
+    let tgt = create_resource(&pool, "deleted endpoint", "temper://ett/gone").await;
+    home_resource(&pool, src, context, profile).await;
+    home_resource(&pool, tgt, context, profile).await;
+
+    let edge_id = Uuid::now_v7();
+    let assert_event = insert_event(
+        &pool,
+        "relationship_asserted",
+        entity,
+        context,
+        json!({"edge_id": edge_id, "weight": 1.0}),
+        json!({}),
+    )
+    .await;
+    insert_edge(
+        &pool,
+        edge_id,
+        src,
+        tgt,
+        "kb_contexts",
+        context,
+        assert_event,
+        false,
+    )
+    .await;
+    insert_event(
+        &pool,
+        "property_asserted",
+        entity,
+        context,
+        json!({
+            "owner": {"table": "kb_edges", "id": edge_id},
+            "property_id": Uuid::now_v7(),
+            "property_key": "facet",
+            "value": {"k": "the facet text"},
+            "weight": 1.0
+        }),
+        json!({}),
+    )
+    .await;
+
+    assert_eq!(
+        element_trail_edge(&pool, profile, edge_id).await.len(),
+        2,
+        "control: both events are in the trail while the endpoint is live"
+    );
+
+    sqlx::query("UPDATE kb_resources SET is_active = false WHERE id = $1")
+        .bind(tgt)
+        .execute(&pool)
+        .await
+        .expect("soft delete");
+
+    let rows = element_trail_edge(&pool, profile, edge_id).await;
+    assert!(
+        rows.is_empty(),
+        "an edge touching a soft-deleted resource shows no trail, property events included: \
+         {rows:?}"
     );
 }
 

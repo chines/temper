@@ -251,7 +251,7 @@ async fn assert_no_ghost(pool: &PgPool, store: &InMemoryBlobStore, hash: &str, p
     let live = live_rows_for_hash(pool, hash).await;
     let present = store.exists(pathname).await.expect("probe exists");
     assert!(
-        !(live > 0 && !present),
+        live <= 0 || present,
         "GHOST: {live} live row(s) carry hash {hash} but the provider holds no object at \
          {pathname} — a commit minted a row over bytes a strike released"
     );

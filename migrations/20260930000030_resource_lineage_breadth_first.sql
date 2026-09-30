@@ -1,0 +1,137 @@
+-- resource_lineage walks breadth-first, visiting each node once. Supersedes the walk in
+-- `20260930000020`, whose two partial indexes stay and serve this one.
+--
+-- `20260930000020` removed the seq scan but kept the recursive CTE, which can only guard cycles
+-- per PATH: it enumerated every simple path before `DISTINCT ON` collapsed them, running the
+-- scalar gates on each path-edge. A lattice of 12 layers of 5 has 5^12 paths over 60 nodes and
+-- never answered at the default depth. (Its header's second cause, the direction `OR`, is wrong:
+-- on PG18 the old SQL body uses both indexes through a BitmapOr.)
+--
+-- So the walk is a plpgsql loop over a frontier with a visited set: each node is reached once, at
+-- its shallowest depth, and each hop's gates run once over that hop's candidate edges. What a
+-- later edit must not break:
+--
+--   * the gates are the same three conjuncts as every edge read: the home anchor via
+--     `anchor_readable_by_profile`, once per distinct home; both endpoints via
+--     `resources_visible_to`, the set form of `endpoint_readable_by_profile`'s kb_resources arm,
+--     computed once per hop rather than once per edge;
+--   * label-keyed (never edge_kind); folded edges walked and flagged; the seed never re-emitted,
+--     not even over a self-loop (the original first hop had no path guard and listed it);
+--   * depth 1 is always walked (a depth <= 0 or NULL answers depth 1, as before);
+--   * a node reached over several edges at its shallowest depth reports a live edge before a
+--     folded one, then the lowest edge id; previously the pick was arbitrary;
+--   * any direction but 'ancestors' / 'descendants' walks nothing; `20260930000020` walked
+--     descendants for one, and the original walked nothing.
+
+CREATE OR REPLACE FUNCTION resource_lineage(
+    p_profile uuid,
+    p_resource uuid,
+    p_direction text,
+    p_max_depth int DEFAULT 16
+) RETURNS TABLE(
+    resource_id uuid,
+    title text,
+    is_active boolean,
+    edge_id uuid,
+    edge_is_folded boolean,
+    depth int
+) LANGUAGE plpgsql STABLE AS $$
+#variable_conflict use_column
+DECLARE
+    v_ancestors boolean := p_direction = 'ancestors';
+    v_frontier  uuid[]  := ARRAY[p_resource];
+    v_visited   uuid[]  := ARRAY[p_resource];
+    v_hop       int     := 0;
+    v_nodes     uuid[]    := '{}';
+    v_vias      uuid[]    := '{}';
+    v_folded    boolean[] := '{}';
+    v_hops      int[]     := '{}';
+    h_nodes     uuid[];
+    h_vias      uuid[];
+    h_folded    boolean[];
+BEGIN
+    IF p_direction IS DISTINCT FROM 'ancestors' AND p_direction IS DISTINCT FROM 'descendants' THEN
+        RETURN;
+    END IF;
+
+    LOOP
+        v_hop := v_hop + 1;
+
+        WITH vis AS MATERIALIZED (
+            SELECT v.resource_id FROM resources_visible_to(p_profile) v
+        ),
+        -- One hop out of the frontier. `near` is the frontier end, `far` the node reached:
+        -- ancestors follow source -> target, descendants target -> source.
+        step AS (
+            SELECT e.id, e.is_folded, e.home_anchor_table, e.home_anchor_id,
+                   e.source_id AS near, e.target_id AS far
+            FROM kb_edges e
+            WHERE v_ancestors
+              AND e.label = 'derived_from'
+              AND e.source_table = 'kb_resources'
+              AND e.target_table = 'kb_resources'
+              AND e.source_id = ANY(v_frontier)
+            UNION ALL
+            SELECT e.id, e.is_folded, e.home_anchor_table, e.home_anchor_id,
+                   e.target_id, e.source_id
+            FROM kb_edges e
+            WHERE NOT v_ancestors
+              AND e.label = 'derived_from'
+              AND e.source_table = 'kb_resources'
+              AND e.target_table = 'kb_resources'
+              AND e.target_id = ANY(v_frontier)
+        ),
+        cand AS (
+            SELECT s.*
+            FROM step s
+            WHERE NOT EXISTS (SELECT 1 FROM unnest(v_visited) AS seen(id) WHERE seen.id = s.far)
+              AND s.near IN (SELECT vis.resource_id FROM vis)
+              AND s.far  IN (SELECT vis.resource_id FROM vis)
+        ),
+        -- MATERIALIZED is load-bearing: inlined, the planner pushes the gate below the DISTINCT
+        -- and calls it once per candidate edge rather than once per distinct home.
+        homes AS MATERIALIZED (
+            SELECT DISTINCT c.home_anchor_table, c.home_anchor_id FROM cand c
+        ),
+        readable_homes AS (
+            SELECT h.home_anchor_table, h.home_anchor_id
+            FROM homes h
+            WHERE anchor_readable_by_profile(p_profile, h.home_anchor_table, h.home_anchor_id)
+        ),
+        picked AS (
+            SELECT DISTINCT ON (c.far) c.far, c.id, c.is_folded
+            FROM cand c
+            JOIN readable_homes rh
+              ON rh.home_anchor_table = c.home_anchor_table
+             AND rh.home_anchor_id = c.home_anchor_id
+            ORDER BY c.far, c.is_folded, c.id
+        )
+        SELECT array_agg(p.far), array_agg(p.id), array_agg(p.is_folded)
+          INTO h_nodes, h_vias, h_folded
+          FROM picked p;
+
+        EXIT WHEN h_nodes IS NULL;
+
+        v_nodes   := v_nodes || h_nodes;
+        v_vias    := v_vias || h_vias;
+        v_folded  := v_folded || h_folded;
+        v_hops    := v_hops || array_fill(v_hop, ARRAY[cardinality(h_nodes)]);
+        v_visited := v_visited || h_nodes;
+        v_frontier := h_nodes;
+
+        EXIT WHEN p_max_depth IS NULL OR v_hop >= p_max_depth;
+    END LOOP;
+
+    RETURN QUERY
+    SELECT w.node, r.title, r.is_active, w.via, w.via_folded, w.hops
+    FROM unnest(v_nodes, v_vias, v_folded, v_hops) AS w(node, via, via_folded, hops)
+    JOIN kb_resources r ON r.id = w.node
+    ORDER BY w.node;
+END;
+$$;
+
+SELECT declare_migration(
+    20260930000030,
+    'additive',
+    'resource_lineage re-emitted as a breadth-first plpgsql walk over the 20260930000020 indexes. Signature and return type are unchanged. For both real directions the node set and depths are unchanged except that a seed with a derived_from self-loop is no longer listed as its own lineage; the edge reported for a node reached over several shallowest edges is now deterministic (live before folded), and an unknown or NULL direction walks nothing. No caller passes one.'
+);

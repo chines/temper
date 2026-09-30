@@ -315,12 +315,11 @@ pub async fn list_edge_facets(
         ));
     }
 
-    // Attribution is joined here rather than left to the caller: the edge's own trail cannot
-    // recover it. `element_trail_edge` joins events on `payload->>'edge_id'`, and a
-    // `property_asserted` payload carries `owner.{table,id}` instead — so the one surface built to
-    // answer "what happened to this edge" is structurally blind to its facets. Until that is
-    // reconciled, this read is the only place an author is recoverable, which is why it is not
-    // optional here.
+    // Attribution is joined here rather than left to the caller: a facet listing names each live
+    // row's author in the same read. The edge's trail (`element_trail_edge`, which carries the
+    // edge's property events through their `owner` key since `20260930000010`) answers the
+    // history instead — every assert and retraction — and is a second read the caller would
+    // otherwise have to make and reconcile against these rows.
     //
     // The row is constructed explicitly rather than decoded by `FromRow` (the incumbent shape
     // `list_resource_edges` uses): two of the wire fields — `address_resolution` and `verdict` —

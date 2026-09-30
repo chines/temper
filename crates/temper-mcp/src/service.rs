@@ -16,9 +16,9 @@
 use rmcp::{
     handler::server::{common::Extension, wrapper::Parameters},
     model::{
-        CallToolResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
-        PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-        ServerCapabilities, ServerConfig,
+        CallToolResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+        ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+        ReadResourceResponse, ServerCapabilities, ServerConfig,
     },
     tool, tool_handler, tool_router,
 };
@@ -1208,6 +1208,18 @@ fn advertise_blob_tools(tools: Vec<rmcp::model::Tool>, blob_ready: bool) -> Vec<
     }
 }
 
+/// The `tools/list` answer: the advertised tool set, stamped with the deployment
+/// surface's cache policy (see `cache_policy`) — MCP 2026-07-28 clients reject a list
+/// result without `ttlMs` and `cacheScope`.
+fn list_tools_result(blob_ready: bool) -> ListToolsResult {
+    ListToolsResult::with_all_items(advertise_blob_tools(
+        TemperMcpService::tool_router().list_all(),
+        blob_ready,
+    ))
+    .with_ttl_ms(crate::cache_policy::DEPLOYMENT_SURFACE_TTL_MS)
+    .with_cache_scope(crate::cache_policy::DEPLOYMENT_SURFACE_SCOPE)
+}
+
 #[tool_handler]
 impl rmcp::ServerHandler for TemperMcpService {
     fn get_info(&self) -> ServerConfig {
@@ -1239,11 +1251,20 @@ impl rmcp::ServerHandler for TemperMcpService {
         _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListToolsResult, rmcp::ErrorData> {
-        let tools = advertise_blob_tools(
-            Self::tool_router().list_all(),
-            self.api_state.config.blob.is_some(),
-        );
-        Ok(ListToolsResult::with_all_items(tools))
+        Ok(list_tools_result(self.api_state.config.blob.is_some()))
+    }
+
+    /// No prompts are offered and the capability is not advertised, but a client that
+    /// probes anyway must meet a list result MCP 2026-07-28 accepts: rmcp's default leaves
+    /// `ttlMs`/`cacheScope` unset. The empty list is the same for every caller.
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListPromptsResult, rmcp::ErrorData> {
+        Ok(ListPromptsResult::with_all_items(Vec::new())
+            .with_ttl_ms(crate::cache_policy::DEPLOYMENT_SURFACE_TTL_MS)
+            .with_cache_scope(crate::cache_policy::DEPLOYMENT_SURFACE_SCOPE))
     }
 
     async fn initialize(
@@ -1330,7 +1351,10 @@ impl rmcp::ServerHandler for TemperMcpService {
 
 #[cfg(test)]
 mod tests {
-    use super::{advertise_blob_tools, map_post_edge_auth, TemperMcpService, BLOB_TOOL_NAMES};
+    use super::{
+        advertise_blob_tools, list_tools_result, map_post_edge_auth, TemperMcpService,
+        BLOB_TOOL_NAMES,
+    };
     use temper_client::error::ClientError;
 
     /// The JWKS-outage 401 ("Authentication service unavailable") is TRANSIENT — the
@@ -1958,5 +1982,37 @@ mod tests {
              A tool satisfying neither arm runs unauthenticated or half-migrated.",
             missing.join("\n  ")
         );
+    }
+
+    /// MCP 2026-07-28 makes `ttlMs` and `cacheScope` required on `tools/list`, and Claude
+    /// Code enforces it: without them it logs `Invalid result for tools/list` and drops
+    /// every tool. rmcp's constructor leaves both unset, so assert the serialized answer of
+    /// the result builder in both blob postures. FAILS IF: either key is absent, or the
+    /// values drift from the deployment-surface policy. That the handler answers with this
+    /// builder is witnessed over the transport by `mcp_typed_object_calls_e2e` and by the
+    /// byte-identical declaration fixture.
+    #[test]
+    fn list_tools_result_carries_ttl_ms_and_cache_scope() {
+        for blob_ready in [true, false] {
+            let wire = serde_json::to_value(list_tools_result(blob_ready))
+                .expect("tools/list result serializes");
+
+            assert_eq!(
+                wire.get("ttlMs"),
+                Some(&serde_json::json!(
+                    crate::cache_policy::DEPLOYMENT_SURFACE_TTL_MS
+                )),
+                "tools/list must carry a numeric ttlMs (blob_ready={blob_ready}): {wire}"
+            );
+            assert_eq!(
+                wire.get("cacheScope"),
+                Some(&serde_json::json!("public")),
+                "tools/list must carry cacheScope (blob_ready={blob_ready}): {wire}"
+            );
+            assert!(
+                wire["tools"].as_array().is_some_and(|t| !t.is_empty()),
+                "the stamped result still advertises the tool set: {wire}"
+            );
+        }
     }
 }

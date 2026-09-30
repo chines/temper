@@ -2164,7 +2164,7 @@ async fn the_delete_door_strikes_through_the_router(pool: PgPool) {
     );
     assert_eq!(ack["released"], true, "the last live row releases its hash");
     assert!(
-        !ack.get("pathname").is_some(),
+        ack.get("pathname").is_none(),
         "the pathname is provider-internal and never rides the wire"
     );
     // FAILS IF: the post-commit release ever stops riding the caller's delete — the bytes
