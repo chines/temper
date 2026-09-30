@@ -16,9 +16,9 @@
 use rmcp::{
     handler::server::{common::Extension, wrapper::Parameters},
     model::{
-        CallToolResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
-        PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-        ServerCapabilities, ServerConfig,
+        CallToolResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+        ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+        ReadResourceResponse, ServerCapabilities, ServerConfig,
     },
     tool, tool_handler, tool_router,
 };
@@ -1254,6 +1254,19 @@ impl rmcp::ServerHandler for TemperMcpService {
         Ok(list_tools_result(self.api_state.config.blob.is_some()))
     }
 
+    /// No prompts are offered and the capability is not advertised, but a client that
+    /// probes anyway must meet a list result MCP 2026-07-28 accepts: rmcp's default leaves
+    /// `ttlMs`/`cacheScope` unset. The empty list is the same for every caller.
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListPromptsResult, rmcp::ErrorData> {
+        Ok(ListPromptsResult::with_all_items(Vec::new())
+            .with_ttl_ms(crate::cache_policy::DEPLOYMENT_SURFACE_TTL_MS)
+            .with_cache_scope(crate::cache_policy::DEPLOYMENT_SURFACE_SCOPE))
+    }
+
     async fn initialize(
         &self,
         request: rmcp::model::InitializeRequestParams,
@@ -1973,11 +1986,13 @@ mod tests {
 
     /// MCP 2026-07-28 makes `ttlMs` and `cacheScope` required on `tools/list`, and Claude
     /// Code enforces it: without them it logs `Invalid result for tools/list` and drops
-    /// every tool. rmcp's constructor leaves both unset, so assert the SERIALIZED answer —
-    /// the wire shape — in both blob postures. FAILS IF: either key is absent, or the
-    /// values drift from the deployment-surface policy.
+    /// every tool. rmcp's constructor leaves both unset, so assert the serialized answer of
+    /// the result builder in both blob postures. FAILS IF: either key is absent, or the
+    /// values drift from the deployment-surface policy. That the handler answers with this
+    /// builder is witnessed over the transport by `mcp_typed_object_calls_e2e` and by the
+    /// byte-identical declaration fixture.
     #[test]
-    fn tools_list_carries_ttl_ms_and_cache_scope_on_the_wire() {
+    fn list_tools_result_carries_ttl_ms_and_cache_scope() {
         for blob_ready in [true, false] {
             let wire = serde_json::to_value(list_tools_result(blob_ready))
                 .expect("tools/list result serializes");

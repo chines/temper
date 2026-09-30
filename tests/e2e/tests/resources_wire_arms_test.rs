@@ -438,6 +438,18 @@ async fn a_create_just_over_the_ceiling_meets_the_bare_413(pool: PgPool) {
 
 // ── Resources-protocol reads ────────────────────────────────────────
 
+/// `resources/list` and `resources/read` answer the caller's own data, so MCP 2026-07-28's
+/// required `ttlMs`/`cacheScope` must say private and immediately stale — on every arm, since a
+/// strict client rejects a result missing either. FAILS IF: a read or list arm skips the stamp.
+fn assert_caller_data_cache_policy(wire: &serde_json::Value) {
+    assert_eq!(wire.get("ttlMs"), Some(&json!(0)), "ttlMs: {wire}");
+    assert_eq!(
+        wire.get("cacheScope"),
+        Some(&json!("private")),
+        "cacheScope: {wire}"
+    );
+}
+
 /// The protocol browse list crosses the door: one `temper://resources/{id}` URI per
 /// visible resource, titles carried.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -471,6 +483,7 @@ async fn protocol_list_browses_through_the_door(pool: PgPool) {
     let listed = temper_mcp::resources::list_resources(&client, None)
         .await
         .expect("protocol list lands");
+    assert_caller_data_cache_policy(&serde_json::to_value(&listed).expect("serializable"));
     let uris: Vec<String> = listed.resources.iter().map(|r| r.uri.clone()).collect();
     for id in &ids {
         assert!(
@@ -520,6 +533,7 @@ async fn protocol_reads_serve_metadata_content_and_context_pages(pool: PgPool) {
     .await
     .expect("metadata read lands");
     let full_json = serde_json::to_value(&full).expect("serializable");
+    assert_caller_data_cache_policy(&full_json);
     let contents = full_json["contents"].as_array().expect("contents array");
     assert_eq!(contents.len(), 2, "metadata part + body part: {full_json}");
     // [0] is the resource view as JSON — identity, never the prose.
@@ -543,6 +557,7 @@ async fn protocol_reads_serve_metadata_content_and_context_pages(pool: PgPool) {
     .await
     .expect("content read lands");
     let raw_text = serde_json::to_value(&raw).expect("serializable");
+    assert_caller_data_cache_policy(&raw_text);
     let raw_text = raw_text["contents"][0]["text"].as_str().expect("text");
     assert_eq!(raw_text, body, "the /content URI is the raw markdown");
 
@@ -556,6 +571,7 @@ async fn protocol_reads_serve_metadata_content_and_context_pages(pool: PgPool) {
     .await
     .expect("the contexts URI lands");
     let page_text = serde_json::to_value(&page).expect("serializable");
+    assert_caller_data_cache_policy(&page_text);
     let page_text = page_text["contents"][0]["text"].as_str().expect("text");
     assert!(
         page_text.contains(&id),

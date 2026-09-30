@@ -181,6 +181,28 @@ async fn typed_object_calls_drive_both_formerly_ref_carrying_instances_end_to_en
         (Some(0), Some(CacheScope::Private)),
         "resources/list must carry a private, immediately-stale cache policy"
     );
+    // The rest of the deployment surface: the same for every caller, so public.
+    let templates = peer
+        .list_resource_templates(Some(PaginatedRequestParams::default()))
+        .await
+        .expect("resources/templates/list over the deployed transport");
+    assert_eq!(
+        (templates.ttl_ms.is_some(), templates.cache_scope),
+        (true, Some(CacheScope::Public)),
+        "resources/templates/list must carry a public cache policy"
+    );
+    // No prompts are offered or advertised, but a client that probes anyway must still meet
+    // a list result it accepts rather than one missing the required fields.
+    let prompts = peer
+        .list_prompts(Some(PaginatedRequestParams::default()))
+        .await
+        .expect("prompts/list over the deployed transport");
+    assert!(prompts.prompts.is_empty(), "no prompts are offered");
+    assert_eq!(
+        (prompts.ttl_ms.is_some(), prompts.cache_scope),
+        (true, Some(CacheScope::Public)),
+        "prompts/list must carry a public cache policy"
+    );
     let mut offenders: Vec<String> = Vec::new();
     for tool in &tools.tools {
         let schema = serde_json::to_value(&*tool.input_schema).expect("input schema serializes");

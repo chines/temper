@@ -216,7 +216,7 @@ mod tests {
     /// deployment surface (identical for every caller), so they share its policy.
     /// FAILS IF: either key is absent from the serialized answer.
     #[tokio::test]
-    async fn resource_templates_list_carries_ttl_ms_and_cache_scope_on_the_wire() {
+    async fn resource_templates_list_carries_ttl_ms_and_cache_scope() {
         let wire = serde_json::to_value(
             list_resource_templates(None)
                 .await

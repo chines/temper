@@ -10,7 +10,8 @@
 //!
 //! Two postures, because this is a shared, multi-tenant server:
 //!
-//! - **Deployment surface** (`tools/list`, `resources/templates/list`): decided by
+//! - **Deployment surface** (`tools/list`, `resources/templates/list`, and the empty
+//!   `prompts/list` answered to a client that probes an unadvertised capability): decided by
 //!   the build and the instance's configuration (`advertise_blob_tools` reads
 //!   config, never the caller), so the answer is the same for every caller —
 //!   `Public`. The TTL bounds how long a client may keep a pre-deploy tool list;
