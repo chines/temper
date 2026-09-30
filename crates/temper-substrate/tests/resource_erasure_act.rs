@@ -6,11 +6,18 @@
 //!
 //! Spec witnesses covered (numbers per the spec's list):
 //!   * **1 (cut-1 form) + 14** — replay byte-identity with a `resource_erased` in the ledger,
-//!     the record naming every unreached ledger path, provenance + remote-source tables diffed
-//!     (D4's build check: both added to PROJECTION_DUMPS).
+//!     provenance + remote-source tables diffed (D4's build check: both added to
+//!     PROJECTION_DUMPS); the record names every unreached ledger path by event (R's
+//!     `resource_created` by `title`, `origin_uri` and its sources, each `property_set` by
+//!     `property_key` and `value`); every typed payload on the ledger roundtrips, the act's
+//!     folds included. The redaction steps a byte-identical replay cannot prove (replay runs the
+//!     same body) are asserted directly: embeddings, search vector, audit reasons, the home
+//!     context's formation watermark, the husk's sentinels and `erased_at`.
 //!   * **2** — custody-never-bytes: a sibling in another home with byte-identical content keeps
 //!     it; `kb_erased_content` gains no row.
-//!   * **3** — history reached: the superseded chunk and the prior revision's bytes end empty.
+//!   * **3** — history reached: three revisions of one block, a block folded by a
+//!     `replaces_body` mutate and every superseded chunk end with empty content and NULL
+//!     embeddings.
 //!   * **6** — the edge folds through `relationship_folded` under the act's correlation id.
 //!   * **8** — soft delete is not YET erasure (`erased_at IS NULL`, content intact) — and a
 //!     tombstone IS erasable: the act completes over one (compliance erasure of a
@@ -21,8 +28,11 @@
 //!     replay reproduces it.
 //!   * **11 (SQL half)** — the closed refusals RAISE (already-erased, charter); the two former
 //!     refusals complete — an in-flight ingest (its `targets` name the ended ingest) and a
-//!     tombstone; the recorded/typed refusal face is the service's, PR 2's witness.
-//!   * **12** — the joint-read columns: `header_path` NULL, artifact content `{}`::jsonb.
+//!     tombstone made through the real delete path; the recorded/typed refusal face is the
+//!     service's, PR 2's witness.
+//!   * **10** — artifacts gone: current, member, pinned and superseded artifacts all end `{}`.
+//!   * **12** — the joint-read columns: `header_path` NULL, audit `reason` NULL, artifact content
+//!     `{}`::jsonb.
 //!   * **20** — no writer lands on the husk (D13): a block mutate holding its transaction makes
 //!     the act wait and is erased; a property set arriving while the act holds R's row refuses;
 //!     the embed write-back after the act writes nothing and the drain finds nothing stale on
@@ -47,13 +57,16 @@ mod common;
 
 use sha2::Digest;
 use sqlx::PgPool;
+use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::EntityId;
 use temper_core::types::property_owner::PropertyOwner;
 use temper_substrate::affinity::EdgeKind;
 use temper_substrate::blob_store::InMemoryBlobStore;
 use temper_substrate::content::IncomingChunk;
 use temper_substrate::events::{fire, EdgeHome, EventContext, SeedAction};
-use temper_substrate::ids::{BlobId, ContextId, EdgeId, ProfileId, ResourceId};
+use temper_substrate::ids::{
+    BlobId, BlockId, ContextId, DataArtifactId, EdgeId, EventId, LensId, ProfileId, ResourceId,
+};
 use temper_substrate::payloads::EdgePolarity;
 use temper_substrate::payloads::{
     self, AnchorRef, ArtifactIntent, Incorporation, KindOwner, ProvenanceSource,
@@ -275,6 +288,18 @@ async fn register_block_provenance_annotated(pool: &PgPool) {
     .expect("re-register block_provenance_annotated");
 }
 
+/// Re-register `citation_audited`: migration 20260724000110 inserts it; `reset_schema` truncates it.
+async fn register_citation_audited(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+         VALUES ('citation_audited', NULL, 1, 'domain') \
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .execute(pool)
+    .await
+    .expect("re-register citation_audited");
+}
+
 /// The one act invocation every witness uses — the boot-seeded system actor is the operator
 /// (the service gate is PR 2's concern; here SQL executes as the operator), a fresh request
 /// reference per act. Returns the `resource_erased` event id.
@@ -312,7 +337,10 @@ async fn resource_props(pool: &PgPool, resource: ResourceId) -> Vec<(String, ser
 
 /// (1 + 14) Replay byte-identity: seed the leak, erase, snapshot, reset, replay — the projection
 /// comes back byte-identical INCLUDING the re-pointed provenance rows and the sentinel
-/// remote-source rows (the tables D4's build check added). A repeat erasure on the replayed
+/// remote-source rows (the tables D4's build check added). Before replay: the record names each
+/// of R's ledger paths (14), the ledger's payloads roundtrip over the act's folds, all four
+/// artifact intents are emptied (10), and each redaction step replay cannot prove is asserted
+/// directly (steps 3, 4, 6, 7, 9a). A repeat erasure on the replayed
 /// namespace REFUSES (ruled 2026-09-29: a recorded refusal, no second event, no-op projection),
 /// and replay after it is still identical.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
@@ -348,23 +376,257 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
+    // Step (6)'s precondition: R's live block cites the twin (resource-kind, the only auditable
+    // kind — `citation_audit`), and an auditor's verdict on that citation carries a reason.
+    register_citation_audited(&pool).await;
+    let r_block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let r_block = writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: leak.resource,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Resource(leak.twin.uuid()),
+                seq: 0,
+            }],
+            content_block: Some(r_block),
+            emitter,
+        },
+    )
+    .await
+    .expect("R's block cites the twin");
+    writes::record_citation_audit(
+        &pool,
+        writes::CitationAuditParams {
+            block: r_block,
+            source: ProvenanceSource::Resource(leak.twin.uuid()),
+            value: 0.5,
+            reason: Some("jane smith confirmed the figures"),
+            emitter,
+        },
+    )
+    .await
+    .expect("an audit of R's citation, with a reason");
+
+    // Step (7)'s precondition: a materialize over R's home context stamps its formation
+    // watermark, through the real `region_materialize` door (a boot-seeded global lens; no
+    // region rows are needed for the stamp).
+    let lens: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_cogmap_lenses WHERE cogmap_id IS NULL AND name = 'telos-default'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let watermark: Uuid = sqlx::query_scalar("SELECT id FROM kb_events ORDER BY id DESC LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let materialized = fire(
+        &mut tx,
+        SeedAction::Materialize {
+            anchor: HomeAnchor::Context(home),
+            lens: LensId::from(lens),
+            watermark: EventId::from(watermark),
+            membership_fingerprint: "erasure-witness",
+            region_ids: &[],
+            telos: None,
+            emitter,
+        },
+    )
+    .await
+    .unwrap()
+    .materialize_event()
+    .unwrap();
+    tx.commit().await.unwrap();
+    let home_watermark: Option<Uuid> =
+        sqlx::query_scalar("SELECT shape_materialized_event_id FROM kb_contexts WHERE id = $1")
+            .bind(home.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        home_watermark,
+        Some(materialized.uuid()),
+        "the witness needs the home context's watermark stamped before the act"
+    );
+
+    // Witness 10's seed: beside seed_leak's `Current` artifact, a `Member` and a `Pinned` one,
+    // then a second `Current` commit that supersedes the first — four artifacts, one folded.
+    let mut all_artifacts: Vec<Uuid> = vec![leak.artifact];
+    for (intent, content) in [
+        (
+            ArtifactIntent::Member,
+            serde_json::json!({"run": "jane smith, member"}),
+        ),
+        (
+            ArtifactIntent::Pinned,
+            serde_json::json!({"run": "jane smith, pinned"}),
+        ),
+    ] {
+        let peer = writes::commit_data_artifact(
+            &pool,
+            CommitDataArtifactParams {
+                resource: leak.resource,
+                kind: "notes",
+                kind_owner: Some(KindOwner::Profile(owner.uuid())),
+                intent,
+                precedence: 0.0,
+                content: &content,
+                supersedes: &[],
+                emitter,
+            },
+        )
+        .await
+        .unwrap();
+        all_artifacts.push(Uuid::from(peer));
+    }
+    let successor = writes::commit_data_artifact(
+        &pool,
+        CommitDataArtifactParams {
+            resource: leak.resource,
+            kind: "notes",
+            kind_owner: Some(KindOwner::Profile(owner.uuid())),
+            intent: ArtifactIntent::Current,
+            precedence: 0.0,
+            content: &serde_json::json!({"jane": "was here again"}),
+            supersedes: &[DataArtifactId::from(leak.artifact)],
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    let superseded: bool =
+        sqlx::query_scalar("SELECT is_folded FROM kb_data_artifacts WHERE id = $1")
+            .bind(leak.artifact)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        superseded,
+        "the first Current artifact is superseded before the act"
+    );
+    all_artifacts.push(Uuid::from(successor));
+
+    // Steps (3) and (4)'s preconditions: R's chunks carry embeddings and R has a non-empty
+    // search vector, so the post-act NULLs and '' are the act's.
+    let embedded_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND embedding IS NOT NULL",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        embedded_before > 0,
+        "the witness needs embedded chunks on R"
+    );
+    let searchable_before: bool = sqlx::query_scalar(
+        "SELECT search_vector <> ''::tsvector FROM kb_resource_search_index WHERE resource_id = $1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        searchable_before,
+        "the witness needs a non-empty search vector on R"
+    );
+
     let event_id = execute_act(&pool, leak.resource.uuid()).await;
 
     // 14 is IN the record: the `resource_erased` payload names every unreached ledger path in
     // ledger_remainder — cut 1 redacts nothing on the ledger, so EVERY free-text path of every
     // trail-scope event is named (the F3 catalog), and the record is the plan's, verbatim.
-    let (ledger_remainder, remainder): (serde_json::Value, serde_json::Value) = sqlx::query_as(
-        "SELECT payload->'ledger_remainder', payload->'remainder' \
+    let (ledger_remainder, remainder, folded_edges): (
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+    ) = sqlx::query_as(
+        "SELECT payload->'ledger_remainder', payload->'remainder', payload->'folded_edges' \
            FROM kb_events WHERE id = $1",
     )
     .bind(event_id)
     .fetch_one(&pool)
     .await
     .unwrap();
+    let paths_named_for = |event: Uuid| -> Vec<String> {
+        ledger_remainder
+            .as_array()
+            .expect("ledger_remainder is an array")
+            .iter()
+            .find(|entry| entry["event"] == serde_json::json!(event))
+            .unwrap_or_else(|| {
+                panic!("ledger_remainder names event {event}; got {ledger_remainder}")
+            })["paths"]
+            .as_array()
+            .expect("an entry's paths is an array")
+            .iter()
+            .map(|p| p.as_str().expect("a path is a string").to_owned())
+            .collect()
+    };
+    let created_event: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_created' AND (e.payload->>'resource_id')::uuid = $1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let created_paths = paths_named_for(created_event);
+    for path in [
+        "title",
+        "origin_uri",
+        "blocks[*].incorporated[*].source.value",
+    ] {
+        assert!(
+            created_paths.iter().any(|p| p == path),
+            "R's resource_created is named with {path}; got {created_paths:?}"
+        );
+    }
+    let property_set_events: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'property_set' \
+            AND e.payload #>> '{owner,table}' = 'kb_resources' \
+            AND (e.payload #>> '{owner,id}')::uuid = $1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
     assert!(
-        !ledger_remainder.as_array().unwrap().is_empty(),
-        "cut 1 names what it has not reached: ledger_remainder must be non-empty, got {ledger_remainder}"
+        !property_set_events.is_empty(),
+        "the witness needs R's property_set events on the ledger"
     );
+    for event in property_set_events {
+        let paths = paths_named_for(event);
+        for path in ["property_key", "value"] {
+            assert!(
+                paths.iter().any(|p| p == path),
+                "property_set {event} is named with {path}; got {paths:?}"
+            );
+        }
+    }
+
+    // The ledger carries the act's folds (`folded_edges` is non-empty: seed_leak's edge), and
+    // every typed payload on it — the act's `resource_erased` and `relationship_folded`
+    // included — deserializes into its struct.
+    assert!(
+        !folded_edges
+            .as_array()
+            .expect("folded_edges is an array")
+            .is_empty(),
+        "the roundtrip must run over a ledger with folds; got {folded_edges}"
+    );
+    payloads::verify_ledger_roundtrip(&pool)
+        .await
+        .expect("every typed payload on an erasure ledger roundtrips");
     // The twin is NOT in any remainder entry naming the resource's own content — the twin is a
     // separate resource whose identical bytes are lawful, not a remainder of this act.
     let remainder_text = remainder.to_string();
@@ -464,17 +726,97 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
         null_headers, 0,
         "every chunk's header_path is NULL (the joint-read fix)"
     );
-    let artifact_content: Option<serde_json::Value> = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT content FROM kb_data_artifact_content WHERE artifact_id = $1",
+    // 10 + 12 (artifact half): current, member, pinned and superseded — all four emptied.
+    let artifact_contents: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+        "SELECT artifact_id, content FROM kb_data_artifact_content WHERE artifact_id = ANY($1)",
     )
-    .bind(leak.artifact)
-    .fetch_optional(&pool)
+    .bind(&all_artifacts)
+    .fetch_all(&pool)
     .await
     .unwrap();
     assert_eq!(
-        artifact_content,
-        Some(serde_json::json!({})),
-        "the artifact content is empty jsonb — every intent is erased with its resource"
+        artifact_contents.len(),
+        4,
+        "every artifact keeps its content row; got {artifact_contents:?}"
+    );
+    assert!(
+        artifact_contents
+            .iter()
+            .all(|(_, c)| c == &serde_json::json!({})),
+        "every artifact's content is empty jsonb — every intent, superseded included; got {artifact_contents:?}"
+    );
+
+    // Step (3): embeddings and their provenance nulled together on every chunk of R.
+    let still_embedded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 \
+            AND (embedding IS NOT NULL OR embedded_with IS NOT NULL)",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        still_embedded, 0,
+        "every chunk of R has embedding IS NULL AND embedded_with IS NULL"
+    );
+
+    // Step (4): the search vector is empty.
+    let search_emptied: bool = sqlx::query_scalar(
+        "SELECT search_vector = ''::tsvector FROM kb_resource_search_index WHERE resource_id = $1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(search_emptied, "R's search_vector is ''");
+
+    // Step (6) + 12 (audit half): every audit on R's blocks has its reason nulled.
+    let audit_reasons: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT ca.reason FROM kb_citation_audits ca \
+           JOIN kb_content_blocks b ON b.id = ca.block_id \
+          WHERE b.resource_id = $1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !audit_reasons.is_empty() && audit_reasons.iter().all(Option::is_none),
+        "the audit on R's block has reason IS NULL; got {audit_reasons:?}"
+    );
+
+    // Step (7): the home context's formation watermark is nulled.
+    let home_watermark: Option<Uuid> =
+        sqlx::query_scalar("SELECT shape_materialized_event_id FROM kb_contexts WHERE id = $1")
+            .bind(home.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        home_watermark, None,
+        "the home context's shape_materialized_event_id IS NULL after the act"
+    );
+
+    // Step (9a): the husk — sentinel title and origin_uri, inactive, erased_at the act's
+    // occurred_at.
+    let (husk_title, husk_uri, husk_active, erased_at_is_the_acts): (String, String, bool, bool) =
+        sqlx::query_as(
+            "SELECT r.title, r.origin_uri, r.is_active, \
+                    coalesce(r.erased_at = e.occurred_at, false) \
+               FROM kb_resources r, kb_events e \
+              WHERE r.id = $1 AND e.id = $2",
+        )
+        .bind(leak.resource.uuid())
+        .bind(event_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(husk_title, format!("erased-{}", leak.resource.uuid()));
+    assert_eq!(husk_uri, format!("erased:{}", leak.resource.uuid()));
+    assert!(!husk_active, "the husk is inactive");
+    assert!(
+        erased_at_is_the_acts,
+        "erased_at equals the resource_erased event's occurred_at"
     );
 
     // 9 (property surface): keys erased-key-<n>, values sentineled, ONE row per key.
@@ -585,6 +927,201 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
         second_erasure, 1,
         "no second resource_erased is minted by the refused repeat"
     );
+}
+
+/// Every `kb_block_content` and `kb_chunk_content` row of the resource, and how many of them are
+/// not the empty string: (block rows, non-empty block rows, chunk rows, non-empty chunk rows).
+async fn content_rows(pool: &PgPool, resource: ResourceId) -> (i64, i64, i64, i64) {
+    sqlx::query_as(
+        "SELECT (SELECT count(*) FROM kb_block_content bc \
+                   JOIN kb_block_revisions br ON br.id = bc.block_revision_id \
+                   JOIN kb_content_blocks b ON b.id = br.block_id \
+                  WHERE b.resource_id = $1), \
+                (SELECT count(*) FROM kb_block_content bc \
+                   JOIN kb_block_revisions br ON br.id = bc.block_revision_id \
+                   JOIN kb_content_blocks b ON b.id = br.block_id \
+                  WHERE b.resource_id = $1 AND bc.content IS DISTINCT FROM ''), \
+                (SELECT count(*) FROM kb_chunk_content cc \
+                   JOIN kb_chunks c ON c.id = cc.chunk_id \
+                  WHERE c.resource_id = $1), \
+                (SELECT count(*) FROM kb_chunk_content cc \
+                   JOIN kb_chunks c ON c.id = cc.chunk_id \
+                  WHERE c.resource_id = $1 AND cc.content IS DISTINCT FROM '')",
+    )
+    .bind(resource.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// (3) History reached: one block with three revisions (its create, then two per-block
+/// `update_resource` calls, each superseding the prior chunk), and a second block folded by a
+/// `replaces_body` mutate. After the act every `kb_block_content` and `kb_chunk_content` row of
+/// R is `''` and every chunk's embedding is NULL; replay is byte-identical.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn history_is_reached_across_revisions_folds_and_supersession(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "history-home").await;
+    let resource = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "history",
+            origin_uri: "test://history",
+            body: SECRET,
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: Some(vec![chunk(SECRET, "first")]),
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .expect("seed R through the create path");
+    let block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Revisions two and three of the one block, each superseding the prior chunk.
+    for prose in [
+        "revision two: SSN 987-65-4321",
+        "revision three: SSN 555-44-3333",
+    ] {
+        writes::update_resource(
+            &pool,
+            UpdateParams {
+                resource,
+                body: Some(prose),
+                title: None,
+                origin_uri: None,
+                properties: &[],
+                unset_keys: &[],
+                chunks: Some(vec![chunk(prose, "")]),
+                sources: vec![],
+                content_block: Some(block),
+                rehome_to: None,
+                emitter,
+            },
+        )
+        .await
+        .expect("a per-block revise");
+    }
+    let revisions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_block_revisions WHERE block_id = $1")
+            .bind(block)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        revisions >= 3,
+        "the witness needs three revisions of one block; got {revisions}"
+    );
+
+    // A second block, then a `replaces_body` mutate of the first that folds it.
+    const SIDE: &str = "a side block naming jane smith";
+    let mut side =
+        temper_substrate::content::prepare_block_from_chunks(1, None, vec![chunk(SIDE, "side")]);
+    side.raw_text = Some(SIDE.to_owned());
+    let sibling = writes::append_block(
+        &pool,
+        writes::AppendParams {
+            resource,
+            block: &side,
+            sources: vec![],
+            emitter,
+        },
+    )
+    .await
+    .expect("append a second block");
+    const WHOLE: &str = "the whole body, replaced";
+    let replacement =
+        temper_substrate::content::prepare_block_from_chunks(0, None, vec![chunk(WHOLE, "")]);
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::BlockMutate {
+            block: BlockId::from(block),
+            chunks: &replacement.chunks,
+            raw: Some(WHOLE),
+            incorporated: &[],
+            replaces_body: true,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let sibling_folded: bool =
+        sqlx::query_scalar("SELECT is_folded FROM kb_content_blocks WHERE id = $1")
+            .bind(sibling.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        sibling_folded,
+        "the replaces_body mutate folded the sibling"
+    );
+    let superseded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND NOT is_current",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        superseded >= 3,
+        "the witness needs superseded chunks (two revises + the folded sibling's); got {superseded}"
+    );
+    let (blocks_before, blocks_filled, chunks_before, chunks_filled) =
+        content_rows(&pool, resource).await;
+    assert!(
+        blocks_filled > 0 && chunks_filled > 0,
+        "the witness needs content to erase; got {blocks_filled} block and {chunks_filled} chunk rows"
+    );
+
+    execute_act(&pool, resource.uuid()).await;
+
+    let (blocks_after, blocks_left, chunks_after, chunks_left) =
+        content_rows(&pool, resource).await;
+    assert_eq!(
+        (blocks_after, chunks_after),
+        (blocks_before, chunks_before),
+        "emptied rows stay rows"
+    );
+    assert_eq!(
+        (blocks_left, chunks_left),
+        (0, 0),
+        "every kb_block_content and kb_chunk_content row of R is '' — every revision, the \
+         folded block, every superseded chunk"
+    );
+    let still_embedded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 \
+            AND (embedding IS NOT NULL OR embedded_with IS NOT NULL)",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(still_embedded, 0, "every embedding of R is NULL");
+
+    assert_replay_byte_identical(
+        &pool,
+        "of an erasure over revisions, a fold and supersession",
+    )
+    .await;
 }
 
 /// (8) Soft delete is not erasure: the act's survey says not-erased, `erased_at` stays NULL, and
@@ -829,11 +1366,9 @@ async fn the_sql_refusals_raise_and_the_former_refusals_complete(pool: sqlx::PgP
             .await;
     assert!(pending.is_err(), "a nil resource cannot execute");
 
-    // a TOMBSTONE IS ERASABLE — the compliance flow's main shape: the content was
+    // A TOMBSTONE IS ERASABLE — the compliance flow's main shape: the content was
     // soft-deleted because it should never have been persisted, then the compliance need
-    // arrives demanding it not exist at all. The act completes over one; the earlier
-    // refusal was Pete's overrule in review (the principal act has no tombstone refusal
-    // either — it tombstones VIA the act).
+    // arrives demanding it not exist at all. The act completes over one (D5).
     let tombstone = writes::create_resource_with(
         &pool,
         CreateParams {
@@ -854,14 +1389,30 @@ async fn the_sql_refusals_raise_and_the_former_refusals_complete(pool: sqlx::PgP
     )
     .await
     .unwrap();
-    sqlx::query(
-        "UPDATE kb_resources SET is_active = false \
-          WHERE id = $1 AND ingest_state = 'complete' AND erased_at IS NULL",
+    // Tombstone through the REAL delete path, so the ledger carries its `resource_deleted`.
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::ResourceDelete {
+            resource: tombstone,
+            emitter,
+        },
     )
-    .bind(tombstone.uuid())
-    .execute(&pool)
     .await
     .unwrap();
+    tx.commit().await.unwrap();
+    let tomb_deleted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_deleted' AND (e.payload->>'resource_id')::uuid = $1",
+    )
+    .bind(tombstone.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        tomb_deleted, 1,
+        "the tombstone's resource_deleted is on the ledger"
+    );
     // The act COMPLETES: a tombstone is not a refusal state.
     let _tomb_event = execute_act(&pool, tombstone.uuid()).await;
     let (t_active, t_erased): (bool, Option<chrono::DateTime<chrono::Utc>>) =
@@ -889,11 +1440,9 @@ async fn the_sql_refusals_raise_and_the_former_refusals_complete(pool: sqlx::PgP
         "the tombstone's content is gone — soft delete hid it, the act ended it"
     );
 
-    // The tombstone-then-erased ledger must REPLAY byte-identically: the `resource_deleted`
-    // event is in trail scope, `resource_created`'s `resource_updated`-style is_active flip
-    // rides the delete, and the erasure arm overwrites at its position. This is the exact
-    // silent-divergence class the review flagged — a ledger whose tombstone lands BETWEEN
-    // create and erase.
+    // The tombstone-then-erased ledger REPLAYS byte-identically: the walk projects the
+    // `resource_deleted` (is_active cleared) at its position between create and erase, and
+    // the erasure arm then applies the body at its own position.
     let before = replay::dump_projections(&pool).await.unwrap();
     let snap = replay::snapshot(&pool).await.unwrap();
     common::reset_schema(&pool).await;
@@ -905,10 +1454,6 @@ async fn the_sql_refusals_raise_and_the_former_refusals_complete(pool: sqlx::PgP
             "projection table {ta} diverged under replay of a tombstone-then-erased erasure"
         );
     }
-
-    // execute refuses a plan that names an ALREADY-FOLDED edge — the act completes on
-    // live edges only now, so this exercises the live-only enumeration (the witness
-    // the reviews asked for and the diff's own defect class).
 }
 
 /// (1, the twin half) A sibling with identical bytes in ANOTHER home keeps its content AND its
@@ -1252,10 +1797,9 @@ async fn two_live_rows_of_one_key_sentinel_without_colliding(pool: sqlx::PgPool)
     }
 }
 
-/// (13) A resource whose history carries an ALREADY-FOLDED edge is a lawful state — the
-/// act must complete on the LIVE edges and record only what it folds. The first draft
-/// enumerated every edge regardless of fold state and aborted execute on the pre-existing
-/// fold; this witness was the defect's pin.
+/// (Pre-existing fold) A resource whose history carries an ALREADY-FOLDED edge is a lawful
+/// state — the act completes on the LIVE edges and records only what it folds; a pre-existing
+/// fold does not abort execute.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_pre_existing_folded_edge_does_not_abort_the_act(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -1612,7 +2156,7 @@ async fn an_edge_from_another_principal_keeps_its_structure_and_loses_its_text(p
     assert_replay_byte_identical(&pool, "of an erasure reaching another principal's edges").await;
 }
 
-/// (14) THE BLOB STRIKE ARM + its list-verification fence, previously unwitnessed: a
+/// (Blob strike) THE BLOB STRIKE ARM + its list-verification fence: a
 /// listed live blob is struck through `blob_delete('blob_erased', …)` (released verdict;
 /// the row's outcome prose is the fence template byte-parsed downstream), an operator
 /// widening the plan mid-act is REFUSED, and the struck blob is named in `targets`.

@@ -2095,10 +2095,11 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 "principal_erasure_refused" => {
                     serde_json::from_value::<PrincipalErasureRefused>(r.payload.clone())?;
                 }
-                // Resource erasure's admin vocabulary (resource erasure spec D1/D5/D11). No write
-                // path emits these yet (the act lands in a later build); the arms are here now so
-                // the typed contract is checked from the first really-emitted payload, not from
-                // whenever someone remembers to add them.
+                // Resource erasure's admin vocabulary (resource erasure spec D1/D5/D11).
+                // `resource_erasure_execute` emits `resource_erased` and `resource_erasure_refuse`
+                // emits `resource_erasure_refused` (migration 20260929040730), so per the rule
+                // below they get arms. `block_history_scrubbed` has no emitter until the block
+                // history scrub (build order 2e); its arm checks the first really-emitted payload.
                 "resource_erased" => {
                     serde_json::from_value::<ResourceErased>(r.payload.clone())?;
                 }
