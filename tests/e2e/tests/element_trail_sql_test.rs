@@ -532,6 +532,79 @@ async fn edge_trail_denied_when_an_endpoint_is_private(pool: sqlx::PgPool) {
     );
 }
 
+/// A soft-deleted endpoint denies the edge's trail — its property events too. This is what keeps
+/// an erased resource's edge-owned facets out of every trail while resource erasure cut 1 leaves
+/// the ledger untouched (`20260929040730`, D12): the husk is `is_active = false`, which
+/// `resources_visible_to` never returns. FAILS IF: the owner arm reaches past the endpoint gate,
+/// or the gate stops honouring the soft-delete floor.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn edge_trail_denied_when_an_endpoint_is_soft_deleted(pool: sqlx::PgPool) {
+    let profile = mk_profile(&pool, "ett-husk").await;
+    let entity = mk_entity(&pool, profile, "ett-husk-entity").await;
+    let context = mk_owned_context(&pool, profile, "ett-husk-ctx").await;
+
+    let src = create_resource(&pool, "live endpoint", "temper://ett/live").await;
+    let tgt = create_resource(&pool, "deleted endpoint", "temper://ett/gone").await;
+    home_resource(&pool, src, context, profile).await;
+    home_resource(&pool, tgt, context, profile).await;
+
+    let edge_id = Uuid::now_v7();
+    let assert_event = insert_event(
+        &pool,
+        "relationship_asserted",
+        entity,
+        context,
+        json!({"edge_id": edge_id, "weight": 1.0}),
+        json!({}),
+    )
+    .await;
+    insert_edge(
+        &pool,
+        edge_id,
+        src,
+        tgt,
+        "kb_contexts",
+        context,
+        assert_event,
+        false,
+    )
+    .await;
+    insert_event(
+        &pool,
+        "property_asserted",
+        entity,
+        context,
+        json!({
+            "owner": {"table": "kb_edges", "id": edge_id},
+            "property_id": Uuid::now_v7(),
+            "property_key": "facet",
+            "value": {"k": "the facet text"},
+            "weight": 1.0
+        }),
+        json!({}),
+    )
+    .await;
+
+    assert_eq!(
+        element_trail_edge(&pool, profile, edge_id).await.len(),
+        2,
+        "control: both events are in the trail while the endpoint is live"
+    );
+
+    sqlx::query("UPDATE kb_resources SET is_active = false WHERE id = $1")
+        .bind(tgt)
+        .execute(&pool)
+        .await
+        .expect("soft delete");
+
+    let rows = element_trail_edge(&pool, profile, edge_id).await;
+    assert!(
+        rows.is_empty(),
+        "an edge touching a soft-deleted resource shows no trail, property events included: \
+         {rows:?}"
+    );
+}
+
 /// N3: the trail carries the replay-sufficient `payload` and a humanized
 /// `actor_name` through `event_service::element_trail` (not just the raw SQL
 /// functions) — and `resource_created`'s heavy inline `blocks[]` is stripped
