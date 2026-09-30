@@ -14,36 +14,44 @@
 //!     same body) are asserted directly: embeddings, search vector, audit reasons, the home
 //!     context's formation watermark, the husk's sentinels and `erased_at`.
 //!   * **2** — custody-never-bytes: a sibling in another home with byte-identical content keeps
-//!     it; `kb_erased_content` gains no row.
+//!     it, its embedding and its search vector; `kb_erased_content` gains no row.
 //!   * **3** — history reached: three revisions of one block, a block folded by a
 //!     `replaces_body` mutate and every superseded chunk end with empty content and NULL
 //!     embeddings.
-//!   * **6** — the edge folds through `relationship_folded` under the act's correlation id.
+//!   * **6** — the edge folds through `relationship_folded` under the act's correlation id; an
+//!     edge another principal authored is folded by an event on that edge's own trail.
 //!   * **8** — soft delete is not YET erasure (`erased_at IS NULL`, content intact) — and a
 //!     tombstone IS erasable: the act completes over one (compliance erasure of a
-//!     soft-deleted resource is the flow's main shape; ruled by Pete over the draft's
-//!     refusal).
-//!   * **9** — the property surface (Q3): values sentineled; a set→set→unset→set key maps to ONE
+//!     soft-deleted resource is the flow's main shape).
+//!   * **9** — the property surface (Q3): every row R owns, live and folded, ends with an
+//!     `erased-key-<n>` key and the `"erased"` value; a set→unset→set key maps to ONE
 //!     `erased-key-<n>`; two keys tied on occurred_at number by event id, never key text (D4);
 //!     replay reproduces it.
-//!   * **11 (SQL half)** — the closed refusals RAISE (already-erased, charter); the two former
-//!     refusals complete — an in-flight ingest (its `targets` name the ended ingest) and a
-//!     tombstone made through the real delete path; the recorded/typed refusal face is the
-//!     service's, PR 2's witness.
+//!   * **11 (SQL half)** — the closed refusals RAISE (already-erased, charter, a NULL request
+//!     reference at both the act and the refusal); the two former refusals complete — an
+//!     in-flight ingest (its `targets` name the ended ingest) and a tombstone made through the
+//!     real delete path; the recorded/typed refusal face is the service's, PR 2's witness.
 //!   * **10** — artifacts gone: current, member, pinned and superseded artifacts all end `{}`.
 //!   * **12** — the joint-read columns: `header_path` NULL, audit `reason` NULL, artifact content
 //!     `{}`::jsonb.
-//!   * **20** — no writer lands on the husk (D13): a block mutate holding its transaction makes
-//!     the act wait and is erased; a property set arriving while the act holds R's row refuses;
-//!     the embed write-back after the act writes nothing and the drain finds nothing stale on
-//!     the husk; replay byte-identical after each race.
+//!   * **20** — no writer lands on the husk (D13): a block mutate or a property set holding its
+//!     transaction makes the act wait and is erased; a property set or a block mutate arriving
+//!     while the act holds R's row refuses; a citation audit, a finalize, a retype, a reweight
+//!     and a verdict upsert after the act refuse; the embed write-back after the act writes
+//!     nothing and the drain finds nothing stale on the husk; replay byte-identical after each
+//!     race.
 //!   * **21** — replay does not depend on intra-transaction order (D14): with the act's
 //!     `resource_erased` sorted BEFORE its folds over two live R→T edges that differ only by
-//!     label, replay completes byte-identical.
+//!     label, replay completes byte-identical. The deferral is bounded to the act's own
+//!     transaction: a later event reusing the request reference does not pull the body past a
+//!     lawful write that followed the act. A lawful write that sorts after the act in walk order projects under
+//!     the replay walk's guard bypass instead of aborting it.
 //!   * **22** — the remote-source re-point holds (D4): two sources at one seq in one event get
 //!     distinct `erased:<block_id>:<n>` sentinels; a pre-minted look-alike sentinel does not stop
-//!     the re-point; a block citing its own sentinel literal still erases; a concurrent citer
-//!     keeps its remote source and its provenance stays readable; a shared source is named in the remainder by id, never by URL.
+//!     the re-point; a block citing its own sentinel literal still erases; a citer holding its
+//!     transaction keeps its remote source, and the record says the source was kept as shared;
+//!     a citer arriving while the act holds the source waits and cites a fresh row; a shared
+//!     source is named in the remainder by id, never by URL.
 //!   * **23** — edge-owned content is gone (goal §8): another principal's edges into R, live and
 //!     already folded, end folded with their structure intact, label NULL, and every edge-owned
 //!     key and value sentineled, numbered per edge; the other principal's resource is untouched.
@@ -300,12 +308,28 @@ async fn register_citation_audited(pool: &PgPool) {
     .expect("re-register citation_audited");
 }
 
+/// Re-register `resource_finalized`: migration 20260708000012 inserts it; `reset_schema` truncates it.
+async fn register_resource_finalized(pool: &PgPool) {
+    sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+         VALUES ('resource_finalized', NULL, 1, 'domain') \
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .execute(pool)
+    .await
+    .expect("re-register resource_finalized");
+}
+
 /// The one act invocation every witness uses — the boot-seeded system actor is the operator
 /// (the service gate is PR 2's concern; here SQL executes as the operator), a fresh request
 /// reference per act. Returns the `resource_erased` event id.
 async fn execute_act(pool: &PgPool, resource: Uuid) -> Uuid {
+    execute_act_with_ref(pool, resource, Uuid::now_v7()).await
+}
+
+/// [`execute_act`] under a request reference the caller names.
+async fn execute_act_with_ref(pool: &PgPool, resource: Uuid, request_ref: Uuid) -> Uuid {
     let (_, operator_entity) = system_actor(pool).await;
-    let request_ref = Uuid::now_v7();
     let raw: String =
         sqlx::query_scalar("SELECT (resource_erasure_execute($1,$2,$3,$4)->>'event_id')::text")
             .bind(resource)
@@ -537,6 +561,18 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
     assert!(
         searchable_before,
         "the witness needs a non-empty search vector on R"
+    );
+    // Witness 9's denominator: every property row R owns, live and folded, before the act.
+    let family_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties WHERE owner_table = 'kb_resources' AND owner_id = $1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        family_before >= 2,
+        "the witness needs R's property family (doc_type and `transient`); got {family_before}"
     );
 
     let event_id = execute_act(&pool, leak.resource.uuid()).await;
@@ -819,16 +855,31 @@ async fn replay_of_a_resource_erasure_is_byte_identical(pool: sqlx::PgPool) {
         "erased_at equals the resource_erased event's occurred_at"
     );
 
-    // 9 (property surface): keys erased-key-<n>, values sentineled, ONE row per key.
-    let props = resource_props(&pool, leak.resource).await;
-    let keys: Vec<&str> = props.iter().map(|(k, _)| k.as_str()).collect();
-    assert!(
-        keys.iter().all(|k| k.starts_with("erased-key-")),
-        "no original metadata key survives (Q3); got {keys:?}"
+    // 9 (property surface): EVERY row R owns — the act folds the whole family, so the live
+    // surface is empty and the check runs over the folded rows — has an erased-key-<n> key and
+    // the sentinel value, and the act neither dropped nor added a row.
+    let family: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT property_key, property_value FROM kb_properties \
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 ORDER BY property_key",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        family.len() as i64,
+        family_before,
+        "the act keeps every row of R's property family; got {family:?}"
     );
     assert!(
-        props.iter().all(|(_, v)| v == &serde_json::json!("erased")),
-        "every value is the sentinel; got {props:?}"
+        family.iter().all(|(k, _)| k.starts_with("erased-key-")),
+        "no original metadata key survives, live or folded (Q3); got {family:?}"
+    );
+    assert!(
+        family
+            .iter()
+            .all(|(_, v)| v == &serde_json::json!("erased")),
+        "every value, live or folded, is the sentinel; got {family:?}"
     );
 
     // The old title is GONE from the ledger-free-text reach this act has: the husk carries the
@@ -1192,9 +1243,10 @@ async fn a_soft_deleted_resource_is_not_an_erased_one(pool: sqlx::PgPool) {
 }
 
 /// (11, SQL half) The closed refusals RAISE at the SQL surface: already-erased and a charter
-/// resource. The two former refusals complete (D5): a resource whose ingest is in flight is
-/// erased and the record's `targets` names the ingest the act ended, and a tombstone is erased.
-/// The recorded face is the service's.
+/// resource; a NULL request reference raises at both the act and the refusal, and the act it
+/// refused leaves the resource un-erased. The two former refusals complete (D5): a resource whose
+/// ingest is in flight is erased and the record's `targets` names the ingest the act ended, and a
+/// tombstone is erased. The recorded face is the service's.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_sql_refusals_raise_and_the_former_refusals_complete(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -1211,6 +1263,44 @@ async fn the_sql_refusals_raise_and_the_former_refusals_complete(pool: sqlx::PgP
         make_home(&pool, owner, "refuse-twin").await,
     )
     .await;
+
+    // A NULL request reference: without it every event would correlate to itself and the act's
+    // span would be lost, so both SQL faces refuse it.
+    let no_ref_act = sqlx::query_scalar::<sqlx::Postgres, serde_json::Value>(
+        "SELECT resource_erasure_execute($1,$2,$3,$4)",
+    )
+    .bind(leak.resource.uuid())
+    .bind(owner.uuid())
+    .bind(emitter)
+    .bind(Option::<Uuid>::None)
+    .fetch_one(&pool)
+    .await;
+    let msg = no_ref_act.unwrap_err().to_string();
+    assert!(
+        msg.contains("resource_erasure_execute: p_request_ref is required"),
+        "the act refuses a NULL request reference; got {msg}"
+    );
+    let untouched: Option<chrono::DateTime<chrono::Utc>> =
+        sqlx::query_scalar("SELECT erased_at FROM kb_resources WHERE id = $1")
+            .bind(leak.resource.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(untouched.is_none(), "the refused act erased nothing");
+    let no_ref_refusal = sqlx::query_scalar::<sqlx::Postgres, Uuid>(
+        "SELECT resource_erasure_refuse($1,$2,$3,$4,'unauthorized')",
+    )
+    .bind(leak.resource.uuid())
+    .bind(owner.uuid())
+    .bind(emitter)
+    .bind(Option::<Uuid>::None)
+    .fetch_one(&pool)
+    .await;
+    let msg = no_ref_refusal.unwrap_err().to_string();
+    assert!(
+        msg.contains("resource_erasure_refuse: p_request_ref is required"),
+        "the refusal refuses a NULL request reference; got {msg}"
+    );
 
     execute_act(&pool, leak.resource.uuid()).await;
 
@@ -1229,11 +1319,9 @@ async fn the_sql_refusals_raise_and_the_former_refusals_complete(pool: sqlx::PgP
         "the repeat refusal says why; got {msg}"
     );
 
-    // a charter resource (a cogmap's telos) refuses — the map-grain act is another task
-    // Genesis the map through the REAL cogmap-genesis path (the earlier raw
-    // `INSERT INTO kb_cogmaps` produced a table row with NO ledger event, so replay
-    // dropped the map and the dump diff diverged — a projection with no event behind it).
-    // Genesis MINTS the telos resource itself — a pre-created one at the same id
+    // a charter resource (a cogmap's telos) refuses — the map-grain act is another task.
+    // The map is made through the REAL cogmap-genesis path, so its ledger event is there for
+    // replay. Genesis MINTS the telos resource itself — a pre-created one at the same id
     // collides (`kb_resources_pkey`), because the projector owns both inserts.
     let refusal_map = {
         let mut conn = pool.acquire().await.unwrap();
@@ -1474,6 +1562,17 @@ async fn custody_is_never_decided_by_bytes(pool: sqlx::PgPool) {
         make_home(&pool, owner, "custody-twin").await,
     )
     .await;
+    let twin_vector_sql =
+        "SELECT search_vector::text FROM kb_resource_search_index WHERE resource_id = $1";
+    let twin_vector_before: String = sqlx::query_scalar(twin_vector_sql)
+        .bind(leak.twin.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !twin_vector_before.is_empty(),
+        "setup: the twin has a non-empty search vector"
+    );
 
     execute_act(&pool, leak.resource.uuid()).await;
 
@@ -1506,6 +1605,15 @@ async fn custody_is_never_decided_by_bytes(pool: sqlx::PgPool) {
         twin_vec,
         Some(true),
         "the twin's embedding is untouched (the drain never re-embeds it)"
+    );
+    let twin_vector_after: String = sqlx::query_scalar(twin_vector_sql)
+        .bind(leak.twin.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        twin_vector_after, twin_vector_before,
+        "the twin's search vector is untouched"
     );
     let twin_alive: bool = sqlx::query_scalar("SELECT is_active FROM kb_resources WHERE id = $1")
         .bind(leak.twin.uuid())
@@ -1550,9 +1658,10 @@ async fn unset_via_update(
     .await
 }
 
-/// (9, the mapping half) A key set in many properties over the resource's events maps to ONE
-/// erased-key-<n>; the surface carries no original key after the act; replay reproduces it
-/// (the mapping is a pure function of ledger order).
+/// (9, the mapping half) A key set → unset → re-set over the resource's events maps to ONE
+/// erased-key-<n>; two keys tied on occurred_at number by event id; after the act every row R
+/// owns carries a sentinel key and the `"erased"` value; replay is byte-identical (the mapping is
+/// a pure function of ledger order).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_reset_key_maps_to_one_sentinel_key(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -1692,9 +1801,26 @@ async fn a_reset_key_maps_to_one_sentinel_key(pool: sqlx::PgPool) {
         "alpha_name, asserted second, takes the next number despite sorting first as text"
     );
 
+    // Values: every row R owns, live and folded, carries the sentinel — "beta", "gamma",
+    // "stage 3" and "jane smith" are gone.
+    let values: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT property_value FROM kb_properties \
+          WHERE owner_table='kb_resources' AND owner_id=$1",
+    )
+    .bind(resource.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        !values.is_empty() && values.iter().all(|v| v == &serde_json::json!("erased")),
+        "every value R owns is the sentinel; got {values:?}"
+    );
+
     // The typed roundtrip contract is what catches a payload-shape drift like a
     // wrapped `{"edge_id": …}` item instead of a bare uuid — add it to the walk.
     payloads::verify_ledger_roundtrip(&pool).await.unwrap();
+
+    assert_replay_byte_identical(&pool, "of a reset key and a tied pair").await;
 }
 
 /// (9, the facet half) Two live rows of ONE key — the facet shape `facet_set` exists for — must
@@ -1761,6 +1887,20 @@ async fn two_live_rows_of_one_key_sentinel_without_colliding(pool: sqlx::PgPool)
         "TWO live rows of one key (the facet shape); got {live_before}"
     );
 
+    // The planted values, present before the act — the absence check below needs them to bite.
+    let planted_sql = "SELECT count(*) FROM kb_properties \
+          WHERE owner_table='kb_resources' AND owner_id=$1 \
+            AND property_value::text LIKE ANY (ARRAY['%\"open\"%', '%\"jane smith\"%'])";
+    let planted_before: i64 = sqlx::query_scalar(planted_sql)
+        .bind(resource.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        planted_before, 2,
+        "setup: both planted values are on R's rows before the act"
+    );
+
     execute_act(&pool, resource.uuid()).await;
 
     let live: i64 = sqlx::query_scalar(
@@ -1772,16 +1912,25 @@ async fn two_live_rows_of_one_key_sentinel_without_colliding(pool: sqlx::PgPool)
     .await
     .unwrap();
     assert_eq!(live, 0, "the husk keeps NO live metadata (Q3)");
-    let stale: i64 = sqlx::query_scalar(
+    let planted_after: i64 = sqlx::query_scalar(planted_sql)
+        .bind(resource.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        planted_after, 0,
+        "neither planted value (\"open\", \"jane smith\") survives, folded or live"
+    );
+    let stale_keys: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_properties \
           WHERE owner_table='kb_resources' AND owner_id=$1 \
-            AND (property_value IN ('1'::jsonb,'2'::jsonb) OR property_key NOT LIKE 'erased-key-%')",
+            AND property_key NOT LIKE 'erased-key-%'",
     )
     .bind(resource.uuid())
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(stale, 0, "no original key or value survives folded either");
+    assert_eq!(stale_keys, 0, "no original key survives folded either");
 
     // Replay reproduces the same folded+sentinelled family.
     let before = replay::dump_projections(&pool).await.unwrap();
@@ -2071,7 +2220,41 @@ async fn an_edge_from_another_principal_keeps_its_structure_and_loses_its_text(p
     let folded_before = structure(folded_edge).await;
     let s_before = s_state(s).await;
 
-    execute_act(&pool, r.uuid()).await;
+    let request_ref = Uuid::now_v7();
+    execute_act_with_ref(&pool, r.uuid(), request_ref).await;
+
+    // 6: B's live edge is ended by a `relationship_folded` on ITS OWN trail — keyed to the edge,
+    // anchored in the edge's home (B's context), under the act's request reference. The
+    // already-folded edge gets no second fold.
+    let folds_on_trail = |e: EdgeId| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>, Option<Uuid>)>(
+                "SELECT e.payload->>'reason', e.producing_anchor_table, e.producing_anchor_id \
+                   FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+                  WHERE t.name = 'relationship_folded' \
+                    AND (e.payload->>'edge_id')::uuid = $1 AND e.correlation_id = $2",
+            )
+            .bind(e)
+            .bind(request_ref)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(
+        folds_on_trail(edge).await,
+        vec![(
+            "resource_erased".to_owned(),
+            Some("kb_contexts".to_owned()),
+            Some(home_b.uuid())
+        )],
+        "the act folds B's edge through one event on that edge's trail, in B's home"
+    );
+    assert!(
+        folds_on_trail(folded_edge).await.is_empty(),
+        "an edge B already folded gets no second fold from the act"
+    );
 
     // Structure stays: both edges folded, kind/polarity/asserting event/endpoints unchanged,
     // label NULL.
@@ -2177,10 +2360,9 @@ async fn the_operator_listed_blob_strike_verifies_and_strikes(pool: sqlx::PgPool
     )
     .await;
 
-    // The blob + its relation edge, through the REAL write paths (an earlier raw-INSERT
-    // fixture carried the same "projection with no event behind it" defect the refusal-map
-    // genesis fix was made for): commit_blob stores + emits `blob_committed`, and the
-    // relation is an ordinary edge — `AnchorRef::blob` is a lawful source (D3).
+    // The blob + its relation edge, through the REAL write paths, so each projection has its
+    // event behind it: commit_blob stores + emits `blob_committed`, and the relation is an
+    // ordinary edge — `AnchorRef::blob` is a lawful source (D3).
     let bytes = b"blob bytes under erasure".to_vec();
     let hash = {
         use sha2::Digest as _;
@@ -2599,6 +2781,402 @@ async fn a_writer_after_the_act_is_refused(pool: sqlx::PgPool) {
     assert_replay_byte_identical(&pool, "of a writer refused after the act").await;
 }
 
+/// (20, non-content half, writer first) A property set holding its transaction makes the act wait
+/// on R's row lock; once the writer commits, the act sentinels what it wrote. The set lands BEFORE
+/// the act — its event precedes `resource_erased` — and no row R owns, live or folded, keeps its
+/// key or its value.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_property_set_holding_its_transaction_makes_the_act_wait_then_is_sentineled(
+    pool: sqlx::PgPool,
+) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "race-prop-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "race-prop-twin").await,
+    )
+    .await;
+
+    // The writer: a property set through the in-transaction write path, NOT committed.
+    let mut writer = pool.begin().await.unwrap();
+    writes::set_property_in_tx(
+        &mut writer,
+        leak.resource,
+        "raced",
+        &serde_json::json!(RACED),
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .expect("the racing property set writes inside its open transaction");
+
+    let pool_for_act = pool.clone();
+    let resource = leak.resource.uuid();
+    let mut act = tokio::spawn(async move { execute_act(&pool_for_act, resource).await });
+    let finished_within_window =
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut act).await;
+    assert!(
+        finished_within_window.is_err(),
+        "the act completed while a property set held R's row — its FOR UPDATE did not wait"
+    );
+
+    writer.commit().await.unwrap();
+    let event_id = act.await.expect("the act task must not panic");
+
+    let set_events: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'property_set' AND e.payload->>'property_key' = 'raced'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        set_events.len() == 1 && set_events[0] < event_id,
+        "the racing set committed before the act; got {set_events:?} vs {event_id}"
+    );
+    let raced_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties \
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 \
+            AND (property_key = 'raced' OR property_value = to_jsonb($2::text))",
+    )
+    .bind(resource)
+    .bind(RACED)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        raced_rows, 0,
+        "the raced key and value are sentineled like the rest of R's family"
+    );
+    let unsentineled: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties \
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 \
+            AND (property_key NOT LIKE 'erased-key-%' OR property_value <> '\"erased\"'::jsonb)",
+    )
+    .bind(resource)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        unsentineled, 0,
+        "every row R owns ends sentineled, the raced one included"
+    );
+
+    assert_replay_byte_identical(&pool, "of a property set that committed ahead of the act").await;
+}
+
+/// (20, content half, act first) A block mutate arriving while the act holds R's row waits on it;
+/// once the act commits, the mutate's write guard re-reads the row, sees `erased_at`, and refuses.
+/// Nothing of the write survives: no event records it and no chunk or revision of R carries its
+/// prose.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_block_mutate_after_the_act_is_refused(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "race-mutate-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "race-mutate-twin").await,
+    )
+    .await;
+    let block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let mutates_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'block_mutated' AND (e.payload->>'block_id')::uuid = $1",
+    )
+    .bind(block)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // The act, run inside a transaction that is NOT committed yet.
+    let mut act = pool.begin().await.unwrap();
+    sqlx::query("SELECT resource_erasure_execute($1,$2,$3,$4)")
+        .bind(leak.resource.uuid())
+        .bind(emitter)
+        .bind(emitter)
+        .bind(Uuid::now_v7())
+        .execute(&mut *act)
+        .await
+        .expect("the act runs inside its open transaction");
+
+    let pool_for_writer = pool.clone();
+    let resource = leak.resource;
+    let mut writer = tokio::spawn(async move {
+        writes::update_resource(
+            &pool_for_writer,
+            UpdateParams {
+                resource,
+                body: Some(RACED),
+                title: None,
+                origin_uri: None,
+                properties: &[],
+                unset_keys: &[],
+                chunks: Some(vec![chunk(RACED, "")]),
+                sources: vec![],
+                content_block: Some(block),
+                rehome_to: None,
+                emitter,
+            },
+        )
+        .await
+    });
+    let finished_within_window =
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut writer).await;
+    assert!(
+        finished_within_window.is_err(),
+        "the block mutate completed while the act held R's row — the write guard did not wait"
+    );
+
+    act.commit().await.unwrap();
+    let refused = writer
+        .await
+        .expect("the writer task must not panic")
+        .expect_err("a block mutate that arrives after the act refuses");
+    let expected = format!("resource {} is erased; writes are refused", resource.uuid());
+    assert!(
+        format!("{refused:#}").contains(&expected),
+        "the refusal is the write guard's; got {refused:#}"
+    );
+
+    let mutates_after: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'block_mutated' AND (e.payload->>'block_id')::uuid = $1",
+    )
+    .bind(block)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        mutates_after, mutates_before,
+        "the refused mutate rolled back its event with it"
+    );
+    let (_, blocks_filled, _, chunks_filled) = content_rows(&pool, resource).await;
+    assert_eq!(
+        (blocks_filled, chunks_filled),
+        (0, 0),
+        "no revision or chunk of R carries the refused prose"
+    );
+
+    assert_replay_byte_identical(&pool, "of a block mutate refused after the act").await;
+}
+
+/// (20, the remaining writers) After the act, every other guarded write path refuses on R: a
+/// citation audit of R's block (`_project_citation_audited`), a retype and a reweight of R's
+/// folded edge (`_project_relationship_retyped` / `_reweighted`), a verdict on R's artifact
+/// (`data_artifact_verdict_upsert`, the writer shape reconcile calls), and the finalize of an
+/// erased segmented ingest (`_project_resource_finalized`) — which leaves the husk `in_progress`.
+/// Each refusal is the write guard's, and none leaves a row behind.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_other_guarded_writers_refuse_after_the_act(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    register_block_provenance_annotated(&pool).await;
+    register_citation_audited(&pool).await;
+    register_resource_finalized(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "guarded-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "guarded-twin").await,
+    )
+    .await;
+    // R's block cites the twin (resource-kind, the auditable kind), so an audit of that citation
+    // is a lawful write before the act.
+    let r_block: Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded \
+          ORDER BY seq LIMIT 1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let r_block = writes::annotate_block_sources(
+        &pool,
+        writes::AnnotateParams {
+            resource: leak.resource,
+            sources: vec![Incorporation {
+                source: ProvenanceSource::Resource(leak.twin.uuid()),
+                seq: 0,
+            }],
+            content_block: Some(r_block),
+            emitter,
+        },
+    )
+    .await
+    .expect("R's block cites the twin");
+
+    // A segmented ingest, not yet finalized: its finalize is the last write the act must refuse.
+    let in_flight = writes::create_resource_with_mode(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "mid-ingest",
+            origin_uri: "test://guarded-mid-ingest",
+            body: "block zero",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+        CreateMode {
+            defer: false,
+            segmented: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    execute_act(&pool, leak.resource.uuid()).await;
+    execute_act(&pool, in_flight.uuid()).await;
+    let refusal = |r: ResourceId| format!("resource {} is erased; writes are refused", r.uuid());
+
+    // The citation audit.
+    let audit = writes::record_citation_audit(
+        &pool,
+        writes::CitationAuditParams {
+            block: r_block,
+            source: ProvenanceSource::Resource(leak.twin.uuid()),
+            value: -1.0,
+            reason: Some("jane smith's figures, quoted"),
+            emitter,
+        },
+    )
+    .await
+    .expect_err("an audit of the husk's citation refuses");
+    assert!(
+        format!("{audit:#}").contains(&refusal(leak.resource)),
+        "the audit refusal is the write guard's; got {audit:#}"
+    );
+    let audits: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_citation_audits WHERE block_id = $1")
+            .bind(r_block.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(audits, 0, "no audit row lands on the husk's block");
+
+    // The retype and the reweight of R's folded edge.
+    let retype = writes::retype_relationship(
+        &pool,
+        leak.edge,
+        EdgeKind::Contains,
+        EdgePolarity::Forward,
+        emitter,
+    )
+    .await
+    .expect_err("a retype of the husk's edge refuses");
+    assert!(
+        format!("{retype:#}").contains(&refusal(leak.resource)),
+        "the retype refusal is the write guard's; got {retype:#}"
+    );
+    let reweight = writes::reweight_relationship(&pool, leak.edge, 0.25, emitter)
+        .await
+        .expect_err("a reweight of the husk's edge refuses");
+    assert!(
+        format!("{reweight:#}").contains(&refusal(leak.resource)),
+        "the reweight refusal is the write guard's; got {reweight:#}"
+    );
+    let (kind, weight): (String, f64) =
+        sqlx::query_as("SELECT edge_kind::text, weight FROM kb_edges WHERE id = $1")
+            .bind(leak.edge)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (kind.as_str(), weight),
+        ("leads_to", 1.0),
+        "the husk's edge keeps its kind and weight"
+    );
+
+    // The verdict writer shape reconcile calls.
+    let verdict = sqlx::query("SELECT data_artifact_verdict_upsert($1, $2, 1, 'h', false, $3)")
+        .bind(leak.artifact)
+        .bind(Uuid::now_v7())
+        .bind(serde_json::json!({"message": "jane was here"}))
+        .execute(&pool)
+        .await
+        .expect_err("a verdict on the husk's artifact refuses");
+    assert!(
+        verdict.to_string().contains(&refusal(leak.resource)),
+        "the verdict refusal is the write guard's; got {verdict}"
+    );
+    let verdicts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_data_artifact_verdicts WHERE artifact_id = $1")
+            .bind(leak.artifact)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(verdicts, 0, "no verdict row lands on the husk's artifact");
+
+    // The finalize of the erased segmented ingest, with the counts and hash it would otherwise
+    // accept, so the refusal is the guard's and not a mismatch.
+    let (blocks, body_hash): (i64, Option<String>) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM kb_content_blocks WHERE resource_id = $1 AND NOT is_folded), \
+                (SELECT body_hash FROM kb_resources WHERE id = $1)",
+    )
+    .bind(in_flight.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let finalize = writes::finalize_ingest(
+        &pool,
+        writes::FinalizeParams {
+            resource: in_flight,
+            expected_blocks: u32::try_from(blocks).expect("a block count fits u32"),
+            expected_body_hash: body_hash.expect("setup: the husk has a body hash"),
+            expected_content_hash: None,
+            emitter,
+        },
+    )
+    .await
+    .expect_err("the finalize of an erased ingest refuses");
+    assert!(
+        format!("{finalize:#}").contains(&refusal(in_flight)),
+        "the finalize refusal is the write guard's; got {finalize:#}"
+    );
+    let ingest_state: String =
+        sqlx::query_scalar("SELECT ingest_state FROM kb_resources WHERE id = $1")
+            .bind(in_flight.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        ingest_state, "in_progress",
+        "the husk keeps in_progress; the finalize did not land"
+    );
+}
+
 /// (20, embed half) The embed drain's write-back arriving after the act writes nothing: the
 /// drain's own statement (`CHUNK_EMBEDDING_WRITE_BACK`) against one of the husk's chunks
 /// leaves the vector NULL. The same statement against the live twin writes, so the refusal is
@@ -2760,8 +3338,9 @@ async fn other_resource(
 }
 
 /// (22, collision half) Two distinct remote sources cited in ONE annotate event at ONE seq get
-/// distinct sentinels — `erased:<block>:<seq>` gave both the same row, and the second re-point
-/// violated the provenance unique key (block_id, source_kind, source_id, contributed_by_event_id).
+/// distinct sentinels: a sentinel keyed by seq would give both the same row, and the second
+/// re-point would violate the provenance unique key (block_id, source_kind, source_id,
+/// contributed_by_event_id).
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn two_remote_sources_at_one_seq_erase_without_collision(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -2872,7 +3451,7 @@ async fn two_remote_sources_at_one_seq_erase_without_collision(pool: sqlx::PgPoo
 /// (22, look-alike half) A row another resource minted in advance whose NORMALIZED uri equals
 /// R's sentinel (`' erased:<block>:1'`, leading space; `normalize_remote_uri` trims it) is the
 /// row `_upsert_remote_source` returns for the sentinel. Re-pointing by that returned id lands
-/// R's provenance on it; matching on `uri` text missed it and left R on the original URL.
+/// R's provenance on it; matching on `uri` text would miss it and leave R on the original URL.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_pre_minted_look_alike_sentinel_does_not_stop_the_re_point(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -3004,12 +3583,13 @@ async fn a_pre_minted_look_alike_sentinel_does_not_stop_the_re_point(pool: sqlx:
     assert_replay_byte_identical(&pool, "of a re-point onto a look-alike").await;
 }
 
-/// (22, concurrent-citer half) R exclusively cites URL. Another resource's annotate of URL
-/// holds its transaction — its `_upsert_remote_source` holds URL's row lock — while the act
-/// runs; the act's FOR UPDATE on that row waits, and the separate existence check after it sees
-/// the committed citer and keeps the row. The other resource's provenance stays readable: its
-/// whole-body update reads attributions (`read_attributions`), which fails on a remote row with
-/// no `kb_remote_sources` uri.
+/// (22, concurrent-citer half, citer first) R exclusively cites URL. Another resource's annotate
+/// of URL holds its transaction — its `_upsert_remote_source` holds URL's row lock — while the act
+/// runs; the act locks R's captured originals before it computes the plan, so it waits there, and
+/// the plan, the record and the delete decision all see the committed citer: the row is kept,
+/// and the record's `targets` says it was kept as shared, not deleted. The other resource's
+/// provenance stays readable: its whole-body update reads attributions (`read_attributions`),
+/// which fails on a remote row with no `kb_remote_sources` uri.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn a_concurrent_citer_keeps_its_remote_source(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
@@ -3063,7 +3643,35 @@ async fn a_concurrent_citer_keeps_its_remote_source(pool: sqlx::PgPool) {
     );
 
     citer.commit().await.unwrap();
-    act.await.expect("the act task must not panic");
+    let event_id = act.await.expect("the act task must not panic");
+
+    // The record matches what the act did: the source it kept is counted shared, not deleted,
+    // and the remainder names it by id.
+    let (targets, remainder): (serde_json::Value, serde_json::Value) = sqlx::query_as(
+        "SELECT payload->'targets', payload->'remainder' FROM kb_events WHERE id = $1",
+    )
+    .bind(event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let source_outcomes: Vec<&str> = targets
+        .as_array()
+        .expect("targets is an array")
+        .iter()
+        .filter(|t| t["target"] == "kb_remote_sources")
+        .map(|t| t["outcome"].as_str().expect("an outcome is a string"))
+        .collect();
+    assert_eq!(
+        source_outcomes,
+        vec!["0 exclusive remote sources deleted; 1 shared remote sources kept, named in the remainder"],
+        "the record says the source was kept as shared, as it was; got {targets}"
+    );
+    assert!(
+        remainder.to_string().contains(&format!(
+            "shared remote source {url_id}; another resource's block still cites it; named, kept"
+        )),
+        "the remainder names the kept source by id; got {remainder}"
+    );
 
     let survivor: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE id = $1")
@@ -3123,6 +3731,123 @@ async fn a_concurrent_citer_keeps_its_remote_source(pool: sqlx::PgPool) {
     .expect("the other resource's whole-body update reads its attributions and succeeds");
 
     assert_replay_byte_identical(&pool, "of a citer that committed while the act waited").await;
+}
+
+/// (22, concurrent-citer half, act first) R exclusively cites URL. The act runs inside a
+/// transaction that has not committed, so it holds URL's row, which it has deleted. Another
+/// resource's annotate of URL arrives: its `_upsert_remote_source` waits on that row. Once the act
+/// commits, the upsert finds no row and inserts URL fresh, so the citer's provenance resolves to a
+/// live row with a new id — nothing dangles — and its whole-body update succeeds.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_citer_arriving_during_the_act_waits_and_cites_a_fresh_row(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    register_block_provenance_annotated(&pool).await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "late-citer-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "late-citer-twin").await,
+    )
+    .await;
+    let other = other_resource(&pool, owner, emitter, "late-citer-other").await;
+    let url_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE uri = $1")
+        .bind(URL)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // The act, run inside a transaction that is NOT committed yet.
+    let mut act = pool.begin().await.unwrap();
+    sqlx::query("SELECT resource_erasure_execute($1,$2,$3,$4)")
+        .bind(leak.resource.uuid())
+        .bind(emitter)
+        .bind(emitter)
+        .bind(Uuid::now_v7())
+        .execute(&mut *act)
+        .await
+        .expect("the act runs inside its open transaction");
+
+    let pool_for_citer = pool.clone();
+    let mut citer = tokio::spawn(async move {
+        writes::annotate_block_sources(
+            &pool_for_citer,
+            writes::AnnotateParams {
+                resource: other,
+                sources: vec![Incorporation {
+                    source: ProvenanceSource::Remote(URL.to_owned()),
+                    seq: 0,
+                }],
+                content_block: None,
+                emitter,
+            },
+        )
+        .await
+    });
+    let finished_within_window =
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut citer).await;
+    assert!(
+        finished_within_window.is_err(),
+        "the citer completed while the act held URL's row — its upsert did not wait"
+    );
+
+    act.commit().await.unwrap();
+    citer
+        .await
+        .expect("the citer task must not panic")
+        .expect("the citer completes once the act commits");
+
+    let fresh: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM kb_remote_sources WHERE uri = $1")
+        .bind(URL)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(fresh.len(), 1, "URL has exactly one row after the act");
+    assert_ne!(
+        fresh[0], url_id,
+        "the act deleted R's exclusive original; the citer's upsert inserted URL fresh"
+    );
+    let other_uris: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT rs.uri FROM kb_block_provenance bp \
+           JOIN kb_content_blocks b ON b.id = bp.block_id \
+           LEFT JOIN kb_remote_sources rs ON rs.id = bp.source_id \
+          WHERE b.resource_id = $1 AND bp.source_kind = 'remote'",
+    )
+    .bind(other.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        other_uris,
+        vec![Some(URL.to_owned())],
+        "the citer's provenance resolves to the fresh URL row"
+    );
+
+    writes::update_resource(
+        &pool,
+        UpdateParams {
+            resource: other,
+            body: Some(RACED),
+            title: None,
+            origin_uri: None,
+            properties: &[],
+            unset_keys: &[],
+            chunks: Some(vec![chunk(RACED, "")]),
+            sources: vec![],
+            content_block: None,
+            rehome_to: None,
+            emitter,
+        },
+    )
+    .await
+    .expect("the citer's whole-body update reads its attributions and succeeds");
+
+    assert_replay_byte_identical(&pool, "of a citer that waited on the act").await;
 }
 
 /// (22, self-sentinel half) An author cannot make their own resource un-erasable. One annotate
@@ -3597,4 +4322,223 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
     assert_eq!(ended, 2, "both edges end folded with their label gone");
 
     assert_replay_byte_identical(&pool, "with the erasure sorted before its folds").await;
+}
+
+/// (21, the span's bound) The replay deferral is bounded to the act's own transaction (D14). R is
+/// erased under request reference X; then, in later transactions, the husk is soft-deleted through
+/// the real delete path (a lawful write — `_project_resource_deleted` is unguarded, it writes no
+/// content — that stamps `updated` with its own `occurred_at`), and a retried request is refused as
+/// already erased under the SAME X. The refusal shares X but not the act's transaction, so it is
+/// not part of the act's span: replay applies the body at the act, then the delete, and the
+/// replayed husk's `updated` is the delete's, as live. A deferral unbounded by the transaction runs
+/// the body after the refusal and rewinds `updated` to the act's `occurred_at`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_defers_only_within_the_acts_own_transaction(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "span-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "span-twin").await,
+    )
+    .await;
+
+    let request_ref = Uuid::now_v7();
+    let erasure = execute_act_with_ref(&pool, leak.resource.uuid(), request_ref).await;
+    // Separate milliseconds, so each later transaction's event ids sort after the one before.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+    // A lawful write after the act that the body would undo if it ran again: the soft delete of
+    // the husk stamps `updated`.
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::ResourceDelete {
+            resource: leak.resource,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let deleted: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_deleted' AND (e.payload->>'resource_id')::uuid = $1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+    // A retried request under the same reference, refused as already erased.
+    let refused: Uuid =
+        sqlx::query_scalar("SELECT resource_erasure_refuse($1, $2, $3, $4, 'already_erased')")
+            .bind(leak.resource.uuid())
+            .bind(owner.uuid())
+            .bind(emitter)
+            .bind(request_ref)
+            .fetch_one(&pool)
+            .await
+            .expect("the refusal records");
+
+    // Preconditions that make this witness bite: the refusal carries X and sorts after the
+    // delete, which sorts after every event of the act's own transaction; the live husk's
+    // `updated` is the delete's, not the act's.
+    let (span_max, refused_corr, act_at, refused_at): (
+        Uuid,
+        Uuid,
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+    ) = sqlx::query_as(
+        "SELECT (SELECT max(s.id::text)::uuid FROM kb_events s \
+                  WHERE s.correlation_id = $1 AND s.occurred_at = er.occurred_at), \
+                rf.correlation_id, er.occurred_at, rf.occurred_at \
+           FROM kb_events er, kb_events rf WHERE er.id = $2 AND rf.id = $3",
+    )
+    .bind(request_ref)
+    .bind(erasure)
+    .bind(refused)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        refused_corr, request_ref,
+        "the refusal shares the act's request reference"
+    );
+    assert_ne!(
+        act_at, refused_at,
+        "the refusal is not in the act's transaction"
+    );
+    assert!(
+        span_max < deleted && deleted < refused,
+        "walk order is: the act's span, the delete, the refusal"
+    );
+    let husk_updated_sql = "SELECT r.updated = d.occurred_at FROM kb_resources r, kb_events d \
+                             WHERE r.id = $1 AND d.id = $2";
+    let live_is_the_delete: bool = sqlx::query_scalar(husk_updated_sql)
+        .bind(leak.resource.uuid())
+        .bind(deleted)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        live_is_the_delete,
+        "setup: the live husk's updated is the post-act delete's occurred_at"
+    );
+
+    // kb_resources is in the dumps, so the byte-identity diff compares `updated` too.
+    assert_replay_byte_identical(&pool, "with the request reference reused after the act").await;
+    let replayed_is_the_delete: bool = sqlx::query_scalar(husk_updated_sql)
+        .bind(leak.resource.uuid())
+        .bind(deleted)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        replayed_is_the_delete,
+        "replay leaves the husk's updated where the lawful delete after the act stamped it"
+    );
+}
+
+/// (21, the replay bypass) A lawful write can sort after the act in walk order: its transaction
+/// committed before the act's, but event ids are uuidv7, unordered across transactions within a
+/// millisecond on PG17. The ledger's walk-order shape is built here by appending a `property_set`
+/// on R through the real write path AFTER the act commits, inside a transaction that sets
+/// `temper.replaying` — the setting the replay walk sets around each event — so the live write
+/// guard lets it through as the walk's would. The witness is that replay projects that event
+/// where it sorts instead of aborting on the write guard, and comes back byte-identical. The
+/// setting is transaction-local: the same connection no longer carries it after the commit.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_projects_a_lawful_write_that_sorts_after_the_act(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "bypass-home").await;
+    let resource = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "sorted-after",
+            origin_uri: "test://sorted-after",
+            body: "a body",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    let erasure = execute_act(&pool, resource.uuid()).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+    let mut conn = pool.acquire().await.unwrap();
+    let mut tx = sqlx::Connection::begin(&mut *conn).await.unwrap();
+    sqlx::query("SELECT set_config('temper.replaying', 'on', true)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    writes::set_property_in_tx(
+        &mut tx,
+        resource,
+        "late_note",
+        &serde_json::json!("written in a transaction that committed first"),
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .expect("under the replay setting the guard lets the write through");
+    tx.commit().await.unwrap();
+    let flag_after: Option<String> =
+        sqlx::query_scalar("SELECT current_setting('temper.replaying', true)")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+    assert_ne!(
+        flag_after.as_deref(),
+        Some("on"),
+        "the setting ended with its transaction; the pooled connection does not carry it"
+    );
+    drop(conn);
+
+    let late_event: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'property_set' AND e.payload->>'property_key' = 'late_note'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        late_event > erasure,
+        "precondition: the write sorts after the act in walk order"
+    );
+
+    assert_replay_byte_identical(&pool, "with a lawful write sorted after the act").await;
+    let late_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties \
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 \
+            AND property_key = 'late_note' AND NOT is_folded",
+    )
+    .bind(resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        late_rows, 1,
+        "the walk projected the write at its position after the act"
+    );
 }

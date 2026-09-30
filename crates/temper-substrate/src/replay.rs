@@ -15,9 +15,8 @@
 
 use crate::events::EventKind;
 use anyhow::{Context, Result};
-use sqlx::{Connection, PgPool, Row};
+use sqlx::{PgPool, Row};
 use std::collections::HashMap;
-use std::ops::DerefMut;
 use temper_core::types::home::HomeAnchor;
 use uuid::Uuid;
 
@@ -42,16 +41,16 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         // projection (that table masks its own id for the same reason), so it differs fire-vs-replay.
         "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'current_revision_id') ORDER BY t.id), '[]'::jsonb) FROM kb_content_blocks t",
     ),
-    // The provenance rows and their resolved remote-source rows: added with resource erasure (spec
-    // 2026-09-28 D4's build check). Both were ABSENT here, which was a silent-diff hole: the act
-    // re-points kb_block_provenance rows to sentinel remote-source rows (upsert-then-update) and
-    // deletes exclusively-cited originals, and replay of the redacted payloads reproduces exactly
-    // that — but with neither table in the dumps, a divergence between the live act and the walk
-    // arm would pass the byte-identity diff SILENTLY. Both are fully payload-derivable: a
-    // kb_block_provenance row's (block, source, event) triple rides the payloads, and
-    // kb_remote_sources rows are minted deterministically by `_upsert_remote_source` on the
-    // normalized URI (uri_normalized UNIQUE), so the URI pair is the identity. Both entries mask
-    // their clock-minted columns (below) and compare on the URI-keyed remainder.
+    // The provenance rows and their resolved remote-source rows (spec 2026-09-28 D4's build
+    // check): the act re-points kb_block_provenance rows to sentinel remote-source rows
+    // (upsert-then-update) and deletes exclusively-cited originals, and replay reproduces that by
+    // running the same redaction body at its deferred position (D14). Without both tables in the
+    // dumps, a divergence between the live act and the walk arm would pass the byte-identity diff
+    // silently. Both are fully payload-derivable: a kb_block_provenance row's (block, source,
+    // event) triple rides the payloads, and kb_remote_sources rows are minted deterministically by
+    // `_upsert_remote_source` on the normalized URI (uri_normalized UNIQUE), so the URI pair is the
+    // identity. Both entries mask their clock-minted columns (below) and compare on the URI-keyed
+    // remainder.
     (
         "kb_block_provenance",
         // mask id AND source_id: source_id on a 'remote' row is a kb_remote_sources id minted by
@@ -554,14 +553,21 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
     // millisecond, so the act's `relationship_folded` events can sort AFTER its
     // `resource_erased`. For each erasure, `apply_after` is the greatest walk-order id among the
     // events sharing its correlation id; the body runs once the walk has projected that event.
-    // An erasure that is itself the greatest (or carries no correlation) applies at its own
-    // position. The known limit: an UNRELATED transaction's event that sorts inside the act's
-    // correlated span is projected before the body. That can only diverge for an event touching
-    // R, which the D13 write guard makes impossible after the act.
+    // An erasure that is itself the greatest applies at its own position. The span is bounded to
+    // the act's own transaction: every event the act appends shares its `occurred_at` (the column
+    // default, now() = the transaction's start), and the request reference can recur on later
+    // events — a retried request refused as already erased, or a caller that reuses it as an
+    // ordinary correlation — which must not pull the body past lawful writes that followed the
+    // act. The remaining limit is cross-transaction id inversion: an event from ANOTHER
+    // transaction that committed before the act can still sort inside, or after, the act's span.
+    // One that touches R then projects over what the live act had already erased, the walk
+    // diverges (D14) rather than aborting on the write guard (see `temper.replaying` below), and
+    // the byte-identity diff reports it.
     let apply_after: HashMap<Uuid, Uuid> = sqlx::query!(
         r#"SELECT er.id,
                   (SELECT s.id FROM kb_events s
                     WHERE s.correlation_id = er.correlation_id
+                      AND s.occurred_at = er.occurred_at
                     ORDER BY s.id DESC LIMIT 1) AS "apply_after!"
              FROM kb_events er JOIN kb_event_types et ON et.id = er.event_type_id
             WHERE et.name = 'resource_erased' AND er.correlation_id IS NOT NULL"#
@@ -580,6 +586,20 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
         let payload: serde_json::Value = r.get(2);
         let kind = EventKind::from_canonical_name(&name)
             .with_context(|| format!("replay: no projector for event type {name}"))?;
+        // Each event projects in its own transaction, with `temper.replaying` set LOCAL to it:
+        // the resource write guard (`_resource_write_guard`, migration 20260929040730) returns at
+        // once under it. A lawful write whose event committed before an erasure can sort after
+        // the act's events in this walk (event ids are uuidv7, unordered across transactions
+        // within a millisecond on PG17), and the walk must then diverge (D14), not abort on the
+        // guard. `set_config(.., true)` scopes the setting to this transaction, so it ends at the
+        // commit below or at the rollback an early `?` return causes when the transaction drops,
+        // and the pooled connection never carries it to another user. The multi-statement Rust
+        // projectors (`project_property_unset`, `project_property_retracted`) get their atomicity
+        // from the same transaction.
+        let mut tx = pool.begin().await?;
+        sqlx::query_scalar!("SELECT set_config('temper.replaying', 'on', true)")
+            .fetch_one(&mut *tx)
+            .await?;
         match kind {
             EventKind::CogmapSeeded => {
                 let side = snap.sidecars.get(&id).context("missing sidecar")?;
@@ -587,7 +607,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .bind(id)
                     .bind(&payload)
                     .bind(side)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::ResourceCreated => {
@@ -596,7 +616,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .bind(id)
                     .bind(&payload)
                     .bind(side)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::DataArtifactCommitted => {
@@ -613,7 +633,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     payload,
                     side as Option<&serde_json::Value>,
                 )
-                .fetch_one(pool)
+                .fetch_one(&mut *tx)
                 .await?;
             }
             EventKind::ShapeDeclared => {
@@ -625,7 +645,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     id,
                     payload,
                 )
-                .fetch_one(pool)
+                .fetch_one(&mut *tx)
                 .await?;
             }
             EventKind::BlobCommitted => {
@@ -633,7 +653,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 // reads only the payload. Macro form for the same static-literal reason as the
                 // arms above.
                 sqlx::query!("SELECT _project_blob_committed($1,$2)", id, payload)
-                    .fetch_one(pool)
+                    .fetch_one(&mut *tx)
                     .await?;
             }
             EventKind::BlobDeleted => {
@@ -642,7 +662,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 // event's own second application and on any later strike of the same row.
                 // No sidecar, macro form, same reasons as the commit arm above.
                 sqlx::query!("SELECT _project_blob_deleted($1,$2)", id, payload)
-                    .fetch_one(pool)
+                    .fetch_one(&mut *tx)
                     .await?;
             }
             EventKind::BlobErased => {
@@ -651,7 +671,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 // without knowing or caring which act struck the row, because no row-shape
                 // marker of the act exists. No sidecar, macro form, same reasons as above.
                 sqlx::query!("SELECT _project_blob_deleted($1,$2)", id, payload)
-                    .fetch_one(pool)
+                    .fetch_one(&mut *tx)
                     .await?;
             }
             EventKind::BlockMutated => {
@@ -660,7 +680,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .bind(id)
                     .bind(&payload)
                     .bind(side)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::BlockCreated => {
@@ -669,7 +689,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .bind(id)
                     .bind(&payload)
                     .bind(side)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::CharterSet => {
@@ -678,7 +698,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .bind(id)
                     .bind(&payload)
                     .bind(side)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             // A segmented ingest completing. NO sidecar — it carries no content, only the assertion
@@ -688,28 +708,28 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 sqlx::query("SELECT _project_resource_finalized($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::RelationshipAsserted => {
                 sqlx::query("SELECT _project_relationship_asserted($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::PropertyAsserted => {
                 sqlx::query("SELECT _project_property_asserted($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::PropertySet => {
                 sqlx::query("SELECT _project_property_set($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             // property_retracted (the row-grain correction): payload-only projector, no sidecar.
@@ -717,40 +737,31 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // implementation, since this event has no `_project_*` SQL function. The payload
             // carries the row id (identity-as-input), so replay re-folds the SAME row; the
             // `NOT is_folded` floor makes a re-application a zero-row no-op, never a resurrection.
-            // The write guard + fold are TWO statements, so they run in one transaction, as the
-            // unset arm below does.
+            // The write guard + fold are TWO statements; the event's walk transaction holds both.
             EventKind::PropertyRetracted => {
-                let mut conn = pool.acquire().await?;
-                let mut tx = conn.deref_mut().begin().await?;
                 crate::events::project_property_retracted(&mut tx, id, &payload).await?;
-                tx.commit().await?;
             }
             // property_unset (the key-grain delete verb): payload-only projector, no sidecar —
             // the shared `project_property_unset`, fire and replay ONE implementation since this
             // event has no `_project_*` SQL function. The payload carries (owner, key), so
             // replay re-folds the SAME key's live set; the `NOT is_folded` floor makes a
             // re-application a zero-row no-op, never a resurrection. The write guard, the fold and
-            // the FTS rebuild are separate statements, so they run in one transaction here — the
-            // SQL-function arms get that atomicity from being single function calls, and this arm
-            // must not be the first multi-statement projection replay runs bare.
+            // the FTS rebuild are separate statements; the event's walk transaction holds all three.
             EventKind::PropertyUnset => {
-                let mut conn = pool.acquire().await?;
-                let mut tx = conn.deref_mut().begin().await?;
                 crate::events::project_property_unset(&mut tx, id, &payload).await?;
-                tx.commit().await?;
             }
             EventKind::LensCreated => {
                 sqlx::query("SELECT _project_lens_created($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::RegionMaterialized => {
                 sqlx::query("SELECT _project_region_materialized($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             // T6's cheap clock. Projects ONLY the telos snapshot onto the anchor — the readouts it
@@ -759,7 +770,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 sqlx::query("SELECT _project_salience_refreshed($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             // WS6 4c mutations + the relationship_folded sibling (payload-only projectors, no sidecar).
@@ -767,21 +778,21 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 sqlx::query("SELECT _project_relationship_folded($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::RelationshipRetyped => {
                 sqlx::query("SELECT _project_relationship_retyped($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::RelationshipReweighted => {
                 sqlx::query("SELECT _project_relationship_reweighted($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             // Annotate-only provenance (issue #355): payload-only projector, no sidecar — records
@@ -790,7 +801,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 sqlx::query("SELECT _project_block_annotated($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             // citation_audited (Set 5, spec §4.1-4.2): payload-only projector, no sidecar — records
@@ -800,42 +811,42 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 sqlx::query("SELECT _project_citation_audited($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::ResourceDeleted => {
                 sqlx::query("SELECT _project_resource_deleted($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::ResourceUpdated => {
                 sqlx::query("SELECT _project_resource_updated($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::ResourceRehomed => {
                 sqlx::query("SELECT _project_resource_rehomed($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::ResourceReassigned => {
                 sqlx::query("SELECT _project_resource_reassigned($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::ContextReassigned => {
                 sqlx::query("SELECT _project_context_reassigned($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             // The pure projector half, deliberately: `_project_context_renamed` never authorizes,
@@ -845,7 +856,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 sqlx::query("SELECT _project_context_renamed($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             // The pure projector half, deliberately, for the identical reason `ContextRenamed`'s
@@ -860,7 +871,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // converts." So it converts, and gains a `.sqlx` entry the change detector can see.
             EventKind::ContextRetired => {
                 sqlx::query_scalar!("SELECT _project_context_retired($1,$2)", id, payload)
-                    .fetch_one(pool)
+                    .fetch_one(&mut *tx)
                     .await?;
             }
             // A compile-checked macro, unlike the runtime `sqlx::query` its sibling arms use.
@@ -871,21 +882,21 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // converts." So it converts, and gains a `.sqlx` entry the change detector can see.
             EventKind::ContextRestored => {
                 sqlx::query_scalar!("SELECT _project_context_restored($1,$2)", id, payload)
-                    .fetch_one(pool)
+                    .fetch_one(&mut *tx)
                     .await?;
             }
             EventKind::DelegatedLaunch => {
                 sqlx::query("SELECT _project_delegated_launch($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             EventKind::InvocationClosed => {
                 sqlx::query("SELECT _project_invocation_closed($1,$2)")
                     .bind(id)
                     .bind(&payload)
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await?;
             }
             // The erasure act's completion (spec 2026-08-31, D1): the one admin event the walk
@@ -942,7 +953,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     &hashes,
                     id
                 )
-                .fetch_one(pool)
+                .fetch_one(&mut *tx)
                 .await?;
             }
             // Admin-ledger events are NULL-anchored (the cognition firewall, spec 2026-07-16): they
@@ -971,10 +982,10 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             | EventKind::ResourceErasureRefused
             | EventKind::BlockHistoryScrubbed => {}
             // The act's completion (spec 2026-09-28, D2/D12/D14). The body applies at the END of
-            // the act's correlated span, not at this event's position: after the last event
-            // sharing its correlation id (`apply_after`, above the walk), so the act's own folds
-            // are projected first whichever order their ids sort in (D14). An erasure that is
-            // already the last of its span applies here. Either way it is not a trailing pass
+            // the act's correlated span, not at this event's position: after the last event of
+            // the act's own transaction sharing its correlation id (`apply_after`, above the
+            // walk), so the act's own folds are projected first whichever order their ids sort
+            // in (D14). An erasure that is already the last of its span applies here. Either way it is not a trailing pass
             // over the whole ledger, which would wrongly redact what later events lawfully wrote.
             // The set needs no read-ahead scan — the payload names the resource, and the
             // redaction body joins the projection by THAT id, so the idempotent call reproduces
@@ -991,7 +1002,7 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .context("resource_erased subject_id is not a uuid")?;
                 match apply_after.get(&id) {
                     Some(after) => pending.entry(*after).or_default().push((subject, id)),
-                    None => apply_resource_erasure(pool, subject, id).await?,
+                    None => apply_resource_erasure(&mut tx, subject, id).await?,
                 }
             }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
@@ -1022,14 +1033,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                 // a fixed projector call with bound parameters, and the audit's dynamic-table
                 // reason does not cover those — it converts, and gains a .sqlx entry.
                 sqlx::query_scalar!("SELECT _project_resource_reblocked($1,$2,$3)", id, payload, side)
-                    .fetch_one(pool)
+                    .fetch_one(&mut *tx)
                     .await?;
             }
         }
         // An erasure deferred to this event (D14, see `apply_after`) applies now, after it.
         for (subject, erasure) in pending.remove(&id).unwrap_or_default() {
-            apply_resource_erasure(pool, subject, erasure).await?;
+            apply_resource_erasure(&mut tx, subject, erasure).await?;
         }
+        tx.commit().await?;
     }
     restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;
     Ok(())
@@ -1039,13 +1051,17 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
 /// `resource_erased` event's id. Macro form, like the PrincipalErased arm: a fixed function call
 /// with bound parameters — the audit's `dynamic-table` reason does not cover it, so it converts
 /// and gains a `.sqlx` entry.
-async fn apply_resource_erasure(pool: &PgPool, subject: Uuid, erasure: Uuid) -> Result<()> {
+async fn apply_resource_erasure(
+    conn: &mut sqlx::PgConnection,
+    subject: Uuid,
+    erasure: Uuid,
+) -> Result<()> {
     sqlx::query!(
         "SELECT _resource_erasure_apply_redaction($1,$2)",
         subject,
         erasure
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
     Ok(())
 }

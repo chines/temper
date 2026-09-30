@@ -23,7 +23,8 @@
 --     is unamended; kb_event_field_redactions does not exist yet. Every free-text path the act does
 --     NOT reach is computed into `ledger_remainder` by (event, path) — D12's shape, exactly what
 --     cut 2's completion pass reads. Replay stays byte-identical because step 9 applies the
---     PROJECTION-side sentinels at the event's ledger position.
+--     PROJECTION-side sentinels at the end of the act's correlated span within its transaction
+--     (D14).
 --   * REFUSALS ARE RECORDED (ruled 2026-09-29): `resource_erasure_refused` is appended for a
 --     non-operator, a charter resource — and for already-erased (the attempt and its refusal are
 --     part of the record; the effect is a no-op — nothing in the projection changes, no second
@@ -32,11 +33,18 @@
 --   * `targets` ATTESTS WHAT THE ACT DID (D8): one {target, outcome} per reached target, counts
 --     and verbs only, never content; the plan counts them pre-act, execute carries them.
 --
---   * THE ACT IS SERIALIZED AGAINST EVERY WRITER (D13): the act takes FOR UPDATE on R's row before
---     the plan; every content-bearing write re-checks `erased_at` under FOR KEY SHARE inside its own
---     transaction (Section W). A racing write lands before the act and is erased, or refuses after.
+--   * THE ACT IS SERIALIZED AGAINST EVERY WRITER (D13): the act takes FOR UPDATE on R's row, then
+--     on R's captured original remote sources, before the plan; every guarded write re-checks
+--     `erased_at` under FOR KEY SHARE inside its own transaction (Section W). A racing write lands
+--     before the act and is erased, or refuses after. The guarded writers:
+--     _recompute_resource_body_hash, _project_resource_finalized, _project_property_set,
+--     _project_property_asserted, _project_relationship_asserted, _project_relationship_retyped,
+--     _project_relationship_reweighted, _project_block_annotated, _project_citation_audited,
+--     _project_resource_updated, _project_data_artifact_committed, data_artifact_verdict_upsert —
+--     and, on the Rust side, project_property_unset, project_property_retracted and the embed
+--     drain's write-backs. The replay walk bypasses the guard (temper.replaying, Section W).
 --
--- Additive: no existing column or constraint is altered. Section W re-creates seven incumbent
+-- Additive: no existing column or constraint is altered. Section W re-creates twelve incumbent
 -- functions, each verbatim plus guard calls that raise only for an erased resource — a state an
 -- old binary cannot produce — so an old binary reads and writes every pre-existing row unchanged.
 
@@ -54,17 +62,28 @@
 --
 -- The guard reads `erased_at`, never `is_active`: replaying a historical ledger
 -- walks old writes to soft-deleted resources, and those must still project.
--- It guards a state floor, not an authorization decision.
+-- It guards a state floor, not an authorization decision. The replay walk
+-- sets the transaction-local `temper.replaying` to 'on' and the guard returns
+-- at once under it (see the function's COMMENT).
 --
 -- The incumbents re-created below are each their live definition verbatim
 -- plus the guard call (two for relationship assert, one per endpoint) as the
 -- body's first statement — nothing else changes:
 --   * `_recompute_resource_body_hash` — the tail of block mutate, segment
---     append, finalize and reblock (`_project_block_mutated`, `_project_blocks`,
+--     append and reblock (`_project_block_mutated`, `_project_blocks`,
 --     `_project_resource_reblocked` all call it);
---   * the non-content projectors: property set and assert (by owner),
---     relationship assert (both endpoints), block provenance annotate (by
---     block), `resource_updated`, data-artifact commit.
+--   * `_project_resource_finalized` — the finalize write (by resource);
+--   * the property projectors `_project_property_set` and
+--     `_project_property_asserted` (by owner);
+--   * the relationship projectors `_project_relationship_asserted` (both
+--     endpoints), `_project_relationship_retyped` and
+--     `_project_relationship_reweighted` (by edge);
+--   * the block projectors `_project_block_annotated` and
+--     `_project_citation_audited` (by block);
+--   * `_project_resource_updated` and `_project_data_artifact_committed` (by
+--     resource);
+--   * `data_artifact_verdict_upsert`, the verdict writer shape reconcile
+--     calls (by the artifact's resource).
 -- `_project_relationship_folded` and `_project_resource_deleted` are NOT
 -- guarded: a fold or a tombstone writes no content, and the act itself folds.
 -- The Rust projectors `project_property_unset` / `project_property_retracted`
@@ -76,6 +95,9 @@ RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_erased timestamptz;
 BEGIN
+    IF current_setting('temper.replaying', true) = 'on' THEN
+        RETURN;
+    END IF;
     -- One statement, so a wait on the act's FOR UPDATE re-reads the row version the act
     -- committed (READ COMMITTED re-check) and sees its erased_at. No row → nothing to guard;
     -- the caller's own write reports a missing resource on its own terms.
@@ -90,7 +112,12 @@ COMMENT ON FUNCTION _resource_write_guard(uuid) IS
 'the write guard (spec 2026-09-28 D13): FOR KEY SHARE on the kb_resources row, then RAISE
 ''resource % is erased; writes are refused'' when erased_at IS NOT NULL. Conflicts only with the
 erasure act''s FOR UPDATE. Reads erased_at, never is_active, so replay of historical writes to a
-soft-deleted resource never trips it.';
+soft-deleted resource never trips it. Returns at once when the transaction-local setting
+temper.replaying is ''on'', which the replay walk sets around each event it projects: a lawful write
+whose event committed before the act can sort after the act''s events in walk order (event ids are
+uuidv7, unordered across transactions within a millisecond on PG17), and replay must then diverge
+(D14) rather than abort. The bypass is not an authorization boundary: the guard is a state floor
+for the write paths, and a raw SQL session can write the tables directly with or without it.';
 
 CREATE FUNCTION _resource_write_guard_owner(p_table text, p_id uuid)
 RETURNS void LANGUAGE plpgsql AS $$
@@ -390,6 +417,110 @@ BEGIN
 END;
 $function$;
 
+-- _project_citation_audited: its live definition (last defined by 20260724000200), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_citation_audited(p_event uuid, p_payload jsonb)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_audit uuid;
+        v_occurred timestamptz;
+        v_profile uuid;
+BEGIN
+    PERFORM _resource_write_guard_owner('kb_content_blocks', (p_payload->>'block_id')::uuid);
+    -- Both event-derived facts, from the one row. See the header: this is the replay path, so every
+    -- projected value must come off the ledger and nothing may come off the ambient session.
+    SELECT e.occurred_at, en.profile_id
+      INTO v_occurred, v_profile
+      FROM kb_events   e
+      JOIN kb_entities en ON en.id = e.emitter_entity_id
+     WHERE e.id = p_event;
+
+    INSERT INTO kb_citation_audits (block_id, source_kind, source_id, value, reason,
+                                    audited_by_event_id, audited_by_profile_id, created)
+    VALUES (
+        (p_payload->>'block_id')::uuid,
+        (p_payload #>> '{source,kind}')::provenance_source_kind,
+        (p_payload #>> '{source,value}')::uuid,
+        (p_payload->>'value')::double precision,
+        p_payload->>'reason',
+        p_event,
+        v_profile,
+        v_occurred
+    )
+    ON CONFLICT (audited_by_event_id) DO NOTHING
+    RETURNING id INTO v_audit;
+
+    IF v_audit IS NULL THEN
+        SELECT id INTO v_audit FROM kb_citation_audits WHERE audited_by_event_id = p_event;
+    END IF;
+
+    RETURN v_audit;
+END;
+$function$;
+
+-- _project_resource_finalized: its live definition (last defined by 20260714000001), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_resource_finalized(p_event uuid, p_payload jsonb)
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+    PERFORM _resource_write_guard((p_payload->>'resource_id')::uuid);
+    UPDATE kb_resources SET ingest_state = 'complete'
+     WHERE id = (p_payload->>'resource_id')::uuid;
+END;
+$function$;
+
+-- data_artifact_verdict_upsert: its live definition (last defined by 20260822000020), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public.data_artifact_verdict_upsert(p_artifact_id uuid, p_shape_id uuid, p_shape_version integer, p_content_hash text, p_satisfied boolean, p_detail jsonb DEFAULT NULL::jsonb)
+ RETURNS void
+ LANGUAGE sql
+AS $function$
+    SELECT _resource_write_guard((SELECT resource_id FROM kb_data_artifacts WHERE id = p_artifact_id));
+    INSERT INTO kb_data_artifact_verdicts (artifact_id, shape_id, shape_version, content_hash,
+                                            satisfied, detail)
+    VALUES (p_artifact_id, p_shape_id, p_shape_version, p_content_hash, p_satisfied, p_detail)
+    ON CONFLICT (artifact_id) DO UPDATE
+      SET shape_id      = EXCLUDED.shape_id,
+          shape_version = EXCLUDED.shape_version,
+          content_hash  = EXCLUDED.content_hash,
+          satisfied     = EXCLUDED.satisfied,
+          detail        = EXCLUDED.detail,
+          checked_at    = now()
+$function$;
+
+-- _project_relationship_retyped: its live definition (last defined by 20260624000002), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_relationship_retyped(p_event uuid, p_payload jsonb)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+BEGIN
+    PERFORM _resource_write_guard_owner('kb_edges', v_edge);
+    UPDATE kb_edges SET
+        edge_kind = (p_payload->>'edge_kind')::edge_kind,
+        polarity  = (p_payload->>'polarity')::edge_polarity,
+        last_event_id = p_event
+        WHERE id = v_edge;
+    IF NOT FOUND THEN RAISE EXCEPTION 'relationship_retype: edge % not found', v_edge; END IF;
+    RETURN v_edge;
+END;
+$function$;
+
+-- _project_relationship_reweighted: its live definition (last defined by 20260624000002), verbatim, plus the guard.
+CREATE OR REPLACE FUNCTION public._project_relationship_reweighted(p_event uuid, p_payload jsonb)
+ RETURNS uuid
+ LANGUAGE plpgsql
+AS $function$
+DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+BEGIN
+    PERFORM _resource_write_guard_owner('kb_edges', v_edge);
+    UPDATE kb_edges SET weight = (p_payload->>'weight')::double precision, last_event_id = p_event
+        WHERE id = v_edge;
+    IF NOT FOUND THEN RAISE EXCEPTION 'relationship_reweight: edge % not found', v_edge; END IF;
+    RETURN v_edge;
+END;
+$function$;
+
 -- ---------------------------------------------------------------------------
 -- Section 0. The one redaction body (D2), given a scope. Event-free by design:
 -- the replay arm runs this beside the walk; only `resource_erasure_execute`
@@ -491,7 +622,7 @@ BEGIN
     -- ── (7) Formation watermarks nulled (D2 step 6, the principal act's rule UNCHANGED): the
     --     resource's home context and any cogmap holding it as a region member, so the next
     --     materialize recomputes centroids from survivors. Nulling in LEDGER ORDER (the walk arm
-    --     re-applies at the event's position; the later of the two events' stamps is what replay
+    --     re-applies at the end of the act's correlated span within its transaction (D14); the later of the two events' stamps is what replay
     --     leaves — an idempotent no-op either way, since replay also runs this body). ──────────
     UPDATE kb_contexts c
        SET shape_materialized_event_id = NULL
@@ -542,12 +673,11 @@ BEGIN
            SELECT da.id FROM kb_data_artifacts da WHERE da.resource_id = p_resource)
        AND v.detail IS NOT NULL;
 
-    -- ── (9) PROJECTION-SIDE SENTINELS, applied inside the same body at the caller's event
-    --     position (D2 step 9, D4's projection side). Before cut 2 ships, step (9a) is what keeps
-    --     replay byte-identical: the walk projects the original title from resource_created, then
-    --     the resource_erased arm reaches here and overwrites at its position — "apply at the
-    --     event's position", the reconciliation the PrincipalErased arm documents in replay.rs.
-    --     After cut 2 ships, the redacted payloads already project these values from genesis and
+    -- ── (9) PROJECTION-SIDE SENTINELS, applied inside the same body (D2 step 9, D4's projection
+    --     side). Before cut 2 ships, step (9a) is what keeps replay byte-identical: the walk
+    --     projects the original title from resource_created, then the resource_erased arm runs
+    --     this body at the end of the act's correlated span within its transaction (D14) and
+    --     overwrites it there. After cut 2 ships, the redacted payloads already project these values from genesis and
     --     this step becomes an idempotent no-op. ──────────────────────────────────────────────
 
     -- (9a) The husk: is_active cleared and erased_at set in the SAME UPDATE — the CHECK
@@ -581,7 +711,8 @@ BEGIN
     --      rows per key is what facet_set IS) would both map to (erased-key-n, "erased") and
     --      violate it. Folding is also what replay reproduces: the act's later, folded rows came
     --      from events that are themselves behind the erasure event in ledger order, so the
-    --      arm at the event's position sees the same family state the live act sees.
+    --      arm, run at the end of the act's correlated span within its transaction (D14), sees
+    --      the same family state the live act sees.
     --
     --      A key set → unset → re-set maps to one n: the numbering is per original key over the
     --      whole family, live and folded rows alike. last_event_id points at the erasure event
@@ -693,16 +824,18 @@ BEGIN
     --      replay of the redacted payloads never mints it. One that another resource's block
     --      still cites stays, and the survey names it by id (D8). Only the captured originals
     --      are considered — the act never deletes a remote source it did not orphan. Each one
-    --      is locked FOR UPDATE in its own
-    --      statement, and "does anything still cite it?" is asked in a SEPARATE, later
-    --      statement. Under READ COMMITTED each statement of this VOLATILE function reads a
-    --      fresh snapshot, and a concurrent citer's _upsert_remote_source holds this row's lock
-    --      (ON CONFLICT DO UPDATE) until it commits. So the lock waits for that citer, and the
-    --      existence check that follows sees its committed provenance row and keeps the source.
-    --      A single `DELETE … WHERE NOT EXISTS (…)` evaluates its subquery against the
-    --      statement's own snapshot, taken before the lock wait, and would delete a row a
-    --      citer committed during that wait. A citer that arrives after the lock waits on it;
-    --      if the row is deleted, its upsert re-inserts the URL as a fresh row. Ids are locked
+    --      is locked FOR UPDATE in its own statement, and "does anything still cite it?" is
+    --      asked in a SEPARATE, later statement. resource_erasure_execute has already locked
+    --      every captured original before the plan ran, so inside the act this lock is a
+    --      re-lock the transaction already holds; the lock-then-check shape is what keeps the
+    --      body correct on its own. Under READ COMMITTED each statement of this VOLATILE
+    --      function reads a fresh snapshot, and a concurrent citer's _upsert_remote_source holds
+    --      the row's lock (ON CONFLICT DO UPDATE) until it commits. So the lock waits for that
+    --      citer, and the existence check that follows sees its committed provenance row and
+    --      keeps the source. A single `DELETE … WHERE NOT EXISTS (…)` evaluates its subquery
+    --      against the statement's own snapshot, taken before the lock wait, and would delete a
+    --      row a citer committed during that wait. A citer that arrives after the lock waits on
+    --      it; if the row is deleted, its upsert inserts the URL as a fresh row. Ids are locked
     --      in uuid order, so two acts whose resources share originals take those locks in one
     --      order and cannot deadlock on them.
     FOR v_source IN
@@ -734,7 +867,8 @@ another resource''s byte-identical content is NEVER reached (the custody-never-b
 no hash enters kb_erased_content from this body. Cut 1 (2026-09-29): scope is p_blocks, and only
 NULL (the whole resource) is accepted — a non-NULL array raises; the block-set form with
 keep-current is the block history scrub''s (2e) and narrows THIS body, never forks it. Event-free:
-the replay arm (replay.rs ResourceErased) calls it at the event''s ledger position; only resource_erasure_execute appends events around it.';
+the replay arm (replay.rs ResourceErased) calls it at the end of the act''s correlated span within
+its transaction (D14); only resource_erasure_execute appends events around it.';
 
 -- ---------------------------------------------------------------------------
 -- Section 0b. THE trail-scope predicate (F2): "the resource's events" — the
@@ -827,14 +961,19 @@ LANGUAGE sql STABLE AS $$
                            WHEN 'block_provenance_annotated' THEN c.payload -> 'incorporated'
                            WHEN 'block_created'              THEN c.payload #> '{block,incorporated}'
                            WHEN 'resource_created' THEN
-                               (SELECT x -> 'incorporated'
-                                  FROM jsonb_array_elements(c.payload -> 'blocks') x
-                                 WHERE (x ->> 'block_id')::uuid = c.block_id)
+                               (SELECT jsonb_agg(inc.v ORDER BY x.i, inc.j)
+                                  FROM jsonb_array_elements(c.payload -> 'blocks') WITH ORDINALITY AS x(v, i)
+                                 CROSS JOIN LATERAL jsonb_array_elements(x.v -> 'incorporated')
+                                            WITH ORDINALITY AS inc(v, j)
+                                 WHERE (x.v ->> 'block_id')::uuid = c.block_id)
                            WHEN 'resource_reblocked' THEN
-                               (SELECT x -> 'attribution'
+                               (SELECT jsonb_agg(att.v ORDER BY x.i, att.j)
                                   FROM jsonb_array_elements(coalesce(c.payload -> 'created', '[]'::jsonb)
-                                                            || coalesce(c.payload -> 'kept', '[]'::jsonb)) x
-                                 WHERE (x ->> 'block_id')::uuid = c.block_id)
+                                                            || coalesce(c.payload -> 'kept', '[]'::jsonb))
+                                            WITH ORDINALITY AS x(v, i)
+                                 CROSS JOIN LATERAL jsonb_array_elements(x.v -> 'attribution')
+                                            WITH ORDINALITY AS att(v, j)
+                                 WHERE (x.v ->> 'block_id')::uuid = c.block_id)
                          END) WITH ORDINALITY AS el(v, ord)
                  WHERE el.v #>> '{source,kind}' = 'remote'
                    AND normalize_remote_uri(el.v #>> '{source,value}') = c.uri_normalized) AS pos
@@ -1324,6 +1463,11 @@ CREATE FUNCTION resource_erasure_refuse(
 ) RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid;
 BEGIN
+    -- The request reference is the refusal's correlation id; without one, _event_append
+    -- correlates the event to itself and the refusal pairs with nothing.
+    IF p_request_ref IS NULL THEN
+        RAISE EXCEPTION 'resource_erasure_refuse: p_request_ref is required';
+    END IF;
     IF p_reason NOT IN ('unauthorized','charter_resource','ingest_in_flight','already_erased') THEN
         RAISE EXCEPTION 'resource_erasure_refuse: % is not a resource-erasure refusal reason',
                         p_reason;
@@ -1404,6 +1548,12 @@ BEGIN
     IF p_resource IS NULL THEN
         RAISE EXCEPTION 'resource_erasure_execute: p_resource is required';
     END IF;
+    -- The request reference is the act's correlation id: every event the act appends carries
+    -- it, and replay finds the act's span by it (D14). Without one, _event_append correlates
+    -- each event to itself and the span is lost.
+    IF p_request_ref IS NULL THEN
+        RAISE EXCEPTION 'resource_erasure_execute: p_request_ref is required';
+    END IF;
 
     -- ── THE REFUSAL VERDICTS, read PRE-act (D5). A refusal here RAISES — the Rust caller
     --    catches the typed message and records it through resource_erasure_refuse, so the SQL
@@ -1425,6 +1575,16 @@ BEGIN
         RAISE EXCEPTION 'resource_erasure_execute: resource % not found', p_resource;
     END IF;
     PERFORM 1 FROM kb_resources WHERE id = p_resource FOR UPDATE;
+    -- R's captured original remote sources, locked BEFORE the plan reads them, in uuid order (the
+    -- order step (9e) locks them in, so two acts sharing originals cannot deadlock). A citer whose
+    -- _upsert_remote_source already holds one of these rows makes the act wait for its commit, so
+    -- the plan's shared/exclusive split and step (9e)'s delete decision read the same citers; a
+    -- citer arriving later waits on the act, and if the act deleted the row, its upsert inserts
+    -- the URL as a fresh row.
+    PERFORM 1 FROM kb_remote_sources rs
+     WHERE rs.id IN (SELECT o.source_id FROM _resource_erasure_remote_originals(p_resource) o)
+     ORDER BY rs.id
+       FOR UPDATE;
     SELECT c.telos_resource_id INTO v_charter FROM kb_cogmaps c WHERE c.telos_resource_id = p_resource;
     SELECT r.erased_at INTO v_erased_ts
       FROM kb_resources r WHERE r.id = p_resource;
@@ -1458,10 +1618,10 @@ BEGIN
     -- ── The operator-listed blob strikes, through the wrapper, PER ROW (D8: a blob is struck
     --    ONLY when the operator listed it; the act never infers a strike from a relation). Each
     --    strike carries the wrapper's verdict at ITS OWN moment — the byte-delete fence runs
-    --    inside — and its prose template is the ONE the fence parses by exact prefix. The plan's
-    --    would_strike rows are the scope; the plan itself predicts nothing here, because the
-    --    operator's list arrives at the act, not at the survey (the survey names related blobs;
-    --    the operator answers with the subset to strike).
+    --    inside — and its prose template is the ONE the fence parses by exact prefix. The plan
+    --    itself predicts nothing here, because the operator's list arrives at the act, not at
+    --    the survey (the survey names related blobs; the operator answers with the subset to
+    --    strike).
     --
     --    A listed blob the plan did NOT name is refused, not silently struck: the survey is the
     --    reviewed record of what the act may reach, and an operator widening it mid-act is a
@@ -1590,18 +1750,22 @@ every edge through its own relationship_folded (fixed reason ''resource_erased''
 correlation id), strikes only operator-listed blobs through blob_delete(''blob_erased'', …), appends
 the ONE NULL-anchored resource_erased event (references carry the subject + request reference;
 redacted_fields is EMPTY in cut 1, every unreached ledger path lives in ledger_remainder by (event,
-path) in the RedactedEventFields shape), then calls the ONE redaction body at the event''s ledger
-position; resource_erasure_refuse records the closed refusal vocabulary (unauthorized |
+path) in the RedactedEventFields shape), then calls the ONE redaction body;
+resource_erasure_refuse records the closed refusal vocabulary (unauthorized |
 charter_resource | ingest_in_flight (retired: an in-flight ingest ends with the erasure and
 targets names it) | already_erased) — a repeat erasure is a recorded refusal, not a silent no-op
 (ruled 2026-09-29). CUT 1 DOES NOT TOUCH THE LEDGER (D12): the append-only trigger
-is unamended; replay stays byte-identical through the projection-side sentinels applied at the
-event''s position. THE ACT IS SERIALIZED AGAINST EVERY WRITER (D13): resource_erasure_execute takes
-FOR UPDATE on the resource row before the plan, and _resource_write_guard (FOR KEY SHARE, RAISE when
-erased_at IS NOT NULL) with its owner-resolving companion _resource_write_guard_owner is called as
-the first statement of seven re-created incumbents — _recompute_resource_body_hash,
+is unamended; replay stays byte-identical through the projection-side sentinels, applied at the
+end of the act''s correlated span within its transaction (D14); a NULL request reference is
+refused by both execute and refuse. THE ACT IS SERIALIZED AGAINST EVERY WRITER (D13):
+resource_erasure_execute takes FOR UPDATE on the resource row, then on its captured original
+remote sources, before the plan, and _resource_write_guard (FOR KEY SHARE, RAISE when erased_at IS
+NOT NULL; returns at once under the replay walk''s transaction-local temper.replaying) with its
+owner-resolving companion _resource_write_guard_owner is called as the first statement of twelve
+re-created incumbents — _recompute_resource_body_hash, _project_resource_finalized,
 _project_property_set, _project_property_asserted, _project_relationship_asserted,
-_project_block_annotated, _project_resource_updated, _project_data_artifact_committed — each
-otherwise verbatim. Additive: no column or constraint is altered, and the guard raises only for an
+_project_relationship_retyped, _project_relationship_reweighted, _project_block_annotated,
+_project_citation_audited, _project_resource_updated, _project_data_artifact_committed,
+data_artifact_verdict_upsert — each otherwise verbatim. Additive: no column or constraint is altered, and the guard raises only for an
 erased resource, a state an old binary cannot produce.'
 );
