@@ -24,9 +24,12 @@
 --     cut 2's completion pass reads. Replay stays byte-identical because step 9 applies the
 --     PROJECTION-side sentinels at the event's ledger position.
 --   * REFUSALS ARE RECORDED (ruled 2026-09-29): `resource_erasure_refused` is appended for a
---     non-operator, a charter resource, an in-flight ingest — and for already-erased (the attempt
---     and its refusal are part of the record; the effect is a no-op — nothing in the projection
---     changes, no second `resource_erased` is minted).
+--     non-operator, a charter resource — and for already-erased (the attempt and its refusal are
+--     part of the record; the effect is a no-op — nothing in the projection changes, no second
+--     `resource_erased` is minted). Ingest state is NOT a refusal (D5): an in-flight ingest ends
+--     with the erasure, and the record's `targets` names it.
+--   * `targets` ATTESTS WHAT THE ACT DID (D8): one {target, outcome} per reached target, counts
+--     and verbs only, never content; the plan counts them pre-act, execute carries them.
 --
 --   * THE ACT IS SERIALIZED AGAINST EVERY WRITER (D13): the act takes FOR UPDATE on R's row before
 --     the plan; every content-bearing write re-checks `erased_at` under FOR KEY SHARE inside its own
@@ -502,16 +505,40 @@ BEGIN
             WHERE r.home_anchor_table = 'kb_cogmaps' AND NOT r.is_folded
               AND mem.member_table = 'kb_resources' AND mem.member_id = p_resource);
 
-    -- ── (8) Workflow jobs scoped to the resource (D2 step 7): pending/in-flight rows
-    --     deaded, payload excerpts emptied. Not replay inputs; excerpt carriers on the
-    --     personal-data surface. `in_progress` is reached deliberately: a leased job's
-    --     payload quotes R's content and would survive the act alive until lease expiry. ──
+    -- ── (8) Workflow jobs scoped to the resource (D2 step 7). Every row, in EVERY status, loses
+    --     its payload and last_error: the excerpt is the carrier, not the job's state, so a
+    --     `done` or `dead` row keeps its status but not its excerpts. Rows not yet finished
+    --     (`pending`, `waiting_for_retry`, `in_progress`) are also cancelled to `dead`;
+    --     `in_progress` is reached deliberately: a leased job would otherwise run on against the
+    --     husk until lease expiry. Not replay inputs; excerpt carriers on the personal-data
+    --     surface. ────────────────────────────────────────────────────────────────────────────
     UPDATE kb_workflow_jobs j
-       SET status     = 'dead',
-           payload    = '{}'::jsonb,
+       SET payload    = '{}'::jsonb,
            last_error = NULL
      WHERE j.resource_id = p_resource
+       AND (j.payload <> '{}'::jsonb OR j.last_error IS NOT NULL);
+
+    UPDATE kb_workflow_jobs j
+       SET status = 'dead'
+     WHERE j.resource_id = p_resource
        AND j.status IN ('pending', 'waiting_for_retry', 'in_progress');
+
+    -- ── (8a) The ingestion record and the artifact verdicts (D2 step 7a), both reachable by
+    --     foreign key from the resource. `kb_ingestion_records.source_uri` takes the origin_uri
+    --     class sentinel 'erased:<resource_id>' (the column is NOT NULL, and it carries the same
+    --     shape of text origin_uri does); `source_hash` is kept, like every hash. A verdict's
+    --     `detail` carries validator messages that quote instance values and keys, so it is
+    --     nulled on every verdict of every artifact of the resource. ─────────────────────────
+    UPDATE kb_ingestion_records ir
+       SET source_uri = 'erased:' || p_resource::text
+     WHERE ir.resource_id = p_resource
+       AND ir.source_uri <> 'erased:' || p_resource::text;
+
+    UPDATE kb_data_artifact_verdicts v
+       SET detail = NULL
+     WHERE v.artifact_id IN (
+           SELECT da.id FROM kb_data_artifacts da WHERE da.resource_id = p_resource)
+       AND v.detail IS NOT NULL;
 
     -- ── (9) PROJECTION-SIDE SENTINELS, applied inside the same body at the caller's event
     --     position (D2 step 9, D4's projection side). Before cut 2 ships, step (9a) is what keeps
@@ -694,7 +721,9 @@ COMMENT ON FUNCTION _resource_erasure_apply_redaction(uuid, uuid, uuid[]) IS
 'THE ONE row-anchored redaction body for resource erasure (spec 2026-09-28 D2, D4): chunk prose,
 header_path, block revision bytes, embeddings+embedded_with, search vector, data artifact content
 ({}::jsonb, EVERY artifact of the resource whatever its kind owner, intent or supersession — ruled
-2026-09-28), citation-audit projected reasons, formation watermark nulls, workflow-job scoping, and
+2026-09-28), citation-audit projected reasons, formation watermark nulls, workflow-job payloads and
+last_errors in every status (unfinished rows cancelled to dead), the ingestion record''s source_uri
+(erased:<id>, hash kept) and artifact verdict details (NULL), and
 the projection-side sentinels (husk title/origin_uri, property keys erased-key-<n> by ledger order
 of first appearance — the resource''s, and each touching edge''s numbered per edge whoever authored
 them — values ''erased''::jsonb, edge labels NULL, remote-source re-pointing to the
@@ -887,6 +916,10 @@ DECLARE
     v_remainder     jsonb := '[]'::jsonb;
     v_row           record;
     v_fingerprint   text;
+    v_targets       jsonb := '[]'::jsonb;
+    v_a             bigint;
+    v_b             bigint;
+    v_c             bigint;
 BEGIN
     SELECT id INTO v_exists FROM kb_resources WHERE id = p_resource;
     IF v_exists IS NULL THEN
@@ -922,9 +955,171 @@ BEGIN
         v_edges := v_edges || to_jsonb(v_row.id);
     END LOOP;
 
+    -- ── THE TARGETS (D8): what the act will reach, one {target, outcome} per D2 step that
+    --    reaches something, counted PRE-act here because the resource_erased payload is
+    --    appended before the redaction body runs and the act never computes twice (D10). Each
+    --    count reads the row set its step in _resource_erasure_apply_redaction updates, by the
+    --    same predicate. The outcome text is counts and verbs only: never a title, URL, key,
+    --    value or any other content (goal §8 — the record never repeats what it erased). A
+    --    table the act reaches nothing in is not claimed; the husk is always reached. execute
+    --    appends the blob strikes and the ended ingest to this list. ─────────────────────────
+    -- D2 step 1: chunk prose and heading trails.
+    SELECT count(*) INTO v_a FROM kb_chunk_content cc
+      JOIN kb_chunks c ON c.id = cc.chunk_id
+     WHERE c.resource_id = p_resource AND cc.content <> '';
+    SELECT count(*) INTO v_b FROM kb_chunks
+     WHERE resource_id = p_resource AND header_path IS NOT NULL;
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_chunk_content',
+            'outcome', v_a || ' chunk bodies emptied, hashes kept; '
+                       || v_b || ' heading paths nulled');
+    END IF;
+    -- D2 step 2: every revision's bytes.
+    SELECT count(*) INTO v_a FROM kb_block_content bc
+     WHERE bc.block_revision_id IN (
+           SELECT br.id FROM kb_block_revisions br
+             JOIN kb_content_blocks b ON b.id = br.block_id
+            WHERE b.resource_id = p_resource)
+       AND bc.content <> '';
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_block_content',
+            'outcome', v_a || ' block revision bodies emptied, hashes kept');
+    END IF;
+    -- D2 step 3: embeddings with their provenance.
+    SELECT count(*) INTO v_a FROM kb_chunks
+     WHERE resource_id = p_resource AND embedding IS NOT NULL;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_chunks.embedding',
+            'outcome', v_a || ' embeddings nulled with embedded_with');
+    END IF;
+    -- D2 step 4: the search vector.
+    SELECT count(*) INTO v_a FROM kb_resource_search_index
+     WHERE resource_id = p_resource AND search_vector <> '';
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_resource_search_index',
+            'outcome', v_a || ' search vector emptied');
+    END IF;
+    -- D2 step 5: every artifact's content.
+    SELECT count(*) INTO v_a FROM kb_data_artifact_content dac
+     WHERE dac.artifact_id IN (
+           SELECT da.id FROM kb_data_artifacts da WHERE da.resource_id = p_resource)
+       AND dac.content <> '{}'::jsonb;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_data_artifact_content',
+            'outcome', v_a || ' artifact bodies emptied to {}, hashes kept');
+    END IF;
+    -- D2 step 6: formation watermarks.
+    SELECT count(*) INTO v_a FROM kb_contexts c
+     WHERE c.shape_materialized_event_id IS NOT NULL
+       AND c.id = (SELECT h.anchor_id FROM kb_resource_homes h
+                    WHERE h.resource_id = p_resource AND h.anchor_table = 'kb_contexts');
+    SELECT count(*) INTO v_b FROM kb_cogmaps m
+     WHERE m.shape_materialized_event_id IS NOT NULL
+       AND m.id IN (
+           SELECT r.home_anchor_id FROM kb_cogmap_regions r
+             JOIN kb_cogmap_region_members mem ON mem.region_id = r.id
+            WHERE r.home_anchor_table = 'kb_cogmaps' AND NOT r.is_folded
+              AND mem.member_table = 'kb_resources' AND mem.member_id = p_resource);
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'formation watermarks',
+            'outcome', v_a || ' context and ' || v_b
+                       || ' cogmap shape_materialized_event_id nulled');
+    END IF;
+    -- D2 step 7: workflow jobs, every status.
+    SELECT count(*) FILTER (WHERE j.payload <> '{}'::jsonb OR j.last_error IS NOT NULL),
+           count(*) FILTER (WHERE j.status IN ('pending', 'waiting_for_retry', 'in_progress'))
+      INTO v_a, v_b
+      FROM kb_workflow_jobs j WHERE j.resource_id = p_resource;
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_workflow_jobs',
+            'outcome', v_a || ' jobs emptied of payload and last_error; '
+                       || v_b || ' unfinished jobs cancelled to dead');
+    END IF;
+    -- D2 step 7a: the ingestion record and the verdicts.
+    SELECT count(*) INTO v_a FROM kb_ingestion_records ir
+     WHERE ir.resource_id = p_resource AND ir.source_uri <> 'erased:' || p_resource::text;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_ingestion_records.source_uri',
+            'outcome', v_a || ' ingestion record source_uri sentineled, source_hash kept');
+    END IF;
+    SELECT count(*) INTO v_a FROM kb_data_artifact_verdicts v
+     WHERE v.artifact_id IN (
+           SELECT da.id FROM kb_data_artifacts da WHERE da.resource_id = p_resource)
+       AND v.detail IS NOT NULL;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_data_artifact_verdicts.detail',
+            'outcome', v_a || ' verdict details nulled');
+    END IF;
+    -- D2 step 8: projected citation-audit reasons.
+    SELECT count(*) INTO v_a FROM kb_citation_audits ca
+     WHERE ca.block_id IN (
+           SELECT b.id FROM kb_content_blocks b WHERE b.resource_id = p_resource)
+       AND ca.reason IS NOT NULL;
+    IF v_a > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_citation_audits.reason',
+            'outcome', v_a || ' audit reasons nulled');
+    END IF;
+    -- D2 step 9: the husk (always), the property sentinels, the edges, the remote sources.
+    v_targets := v_targets || jsonb_build_object('target', 'kb_resources',
+        'outcome', '1 husk: title and origin_uri sentineled, is_active cleared, erased_at set');
+    SELECT count(*) INTO v_a FROM kb_properties p
+      JOIN _resource_erasure_key_numbers('kb_resources', p_resource) k
+        ON k.property_key = p.property_key
+     WHERE p.owner_table = 'kb_resources' AND p.owner_id = p_resource;
+    SELECT count(*) INTO v_b
+      FROM kb_edges e
+     CROSS JOIN LATERAL _resource_erasure_key_numbers('kb_edges', e.id) k
+      JOIN kb_properties p
+        ON p.owner_table = 'kb_edges' AND p.owner_id = e.id AND p.property_key = k.property_key
+     WHERE (e.source_table = 'kb_resources' AND e.source_id = p_resource)
+        OR (e.target_table = 'kb_resources' AND e.target_id = p_resource);
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_properties',
+            'outcome', v_a || ' resource-owned and ' || v_b
+                       || ' edge-owned rows: keys erased-key-<n>, values erased, folded');
+    END IF;
+    SELECT count(*) INTO v_b FROM kb_edges e
+     WHERE e.label IS NOT NULL
+       AND ((e.source_table = 'kb_resources' AND e.source_id = p_resource)
+         OR (e.target_table = 'kb_resources' AND e.target_id = p_resource));
+    IF v_n_edges + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_edges',
+            'outcome', v_n_edges || ' edges folded by this act; ' || v_b || ' labels nulled');
+    END IF;
+    --    The remote sources, from the ONE capture step (9e) reads
+    --    (_resource_erasure_remote_originals): the provenance rows it re-points, the exclusive
+    --    originals it deletes, the shared ones it keeps. An exclusive original that is itself
+    --    some captured (block, n)'s sentinel row is re-pointed onto, so it stays cited and is
+    --    not deleted; the count leaves it out for that reason.
+    WITH o AS MATERIALIZED (
+        SELECT * FROM _resource_erasure_remote_originals(p_resource)
+    )
+    SELECT (SELECT count(*) FROM kb_block_provenance bp
+              JOIN o ON o.block_id = bp.block_id AND o.source_id = bp.source_id
+             WHERE bp.source_kind = 'remote'),
+           (SELECT count(DISTINCT o1.source_id) FROM o o1
+              JOIN kb_remote_sources rs ON rs.id = o1.source_id
+             WHERE NOT o1.shared
+               AND NOT EXISTS (
+                   SELECT 1 FROM o o2
+                    WHERE normalize_remote_uri('erased:' || o2.block_id::text || ':' || o2.n::text)
+                          = rs.uri_normalized)),
+           (SELECT count(DISTINCT o1.source_id) FROM o o1 WHERE o1.shared)
+      INTO v_c, v_a, v_b;
+    IF v_c > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_block_provenance',
+            'outcome', v_c || ' remote provenance rows re-pointed to erased:<block_id>:<n> sentinels');
+    END IF;
+    IF v_a + v_b > 0 THEN
+        v_targets := v_targets || jsonb_build_object('target', 'kb_remote_sources',
+            'outcome', v_a || ' exclusive remote sources deleted; '
+                       || v_b || ' shared remote sources kept, named in the remainder');
+    END IF;
+
     -- ── THE REFUSAL FACE (D5), computed here so execute consumes the verdict rather than
     -- re-deriving it: a charter resource (Q2 — the map-grain act is another task, named), an
-    -- in-flight ingest, an already-erased resource. ──────────────────────────────────────────
+    -- already-erased resource. The ingest state is reported, not refused: an in-flight ingest
+    -- ends with the erasure and execute names it in `targets`. ─────────────────────────────
     SELECT c.telos_resource_id INTO v_charter_of FROM kb_cogmaps c WHERE c.telos_resource_id = p_resource;
     SELECT r.ingest_state INTO v_ingest FROM kb_resources r WHERE r.id = p_resource;
 
@@ -1083,7 +1278,7 @@ BEGIN
         'n_artifacts',     v_n_artifacts,
         'n_edges',         v_n_edges,
         'edges',           v_edges,
-        'targets',         '[]'::jsonb,
+        'targets',         v_targets,
         'already_erased',  (SELECT r.erased_at IS NOT NULL FROM kb_resources r WHERE r.id = p_resource),
         'charter_of',      v_charter_of,
         'ingest_state',    v_ingest,
@@ -1155,9 +1350,12 @@ $$;
 COMMENT ON FUNCTION resource_erasure_refuse(uuid, uuid, uuid, uuid, text, text) IS
 'the resource-erasure act''s negative face (spec D5; the closed refusal vocabulary ruled
 2026-09-29): unauthorized | charter_resource | ingest_in_flight | already_erased — one recorded
-event, nothing else mutated. A repeat erasure is a recorded refusal, not a silent no-op: nothing
-in the projection changes and no second resource_erased is minted, but the attempt is part of the
-record, the same as every other refusal.';
+event, nothing else mutated. ingest_in_flight is RETIRED (D5, ruled 2026-09-29: ingest state is
+not a refusal; an in-flight ingest ends with the erasure): no path raises it, and it stays
+accepted because removing a value from a closed vocabulary is not additive. A repeat erasure is
+a recorded refusal, not a silent no-op: nothing in the projection changes and no second
+resource_erased is minted, but the attempt is part of the record, the same as every other
+refusal.';
 
 -- ---------------------------------------------------------------------------
 -- Section 4. THE ACT (D1/D5): consumes the ONE plan, refuses or completes, all
@@ -1219,15 +1417,16 @@ BEGIN
     --    write guard (Section W). The same lock serializes a second execute: its verdict read
     --    runs after the first commits, sees `erased_at`, and raises `already erased` rather than
     --    both passing the reads and double-completing.
-    --    PR 2's service parses these strings into refusal vocabulary; see the tombstone
-    --    paragraph below the ingest arm for the one overrule this file carries. ──
+    --    PR 2's service parses these strings into refusal vocabulary. Two states are NOT
+    --    refusals (D5): an in-flight ingest (below, where `targets` names it) and a tombstone
+    --    (the paragraph after the verdicts). ──
     SELECT count(*) > 0 INTO v_found FROM kb_resources r WHERE r.id = p_resource;
     IF NOT v_found THEN
         RAISE EXCEPTION 'resource_erasure_execute: resource % not found', p_resource;
     END IF;
     PERFORM 1 FROM kb_resources WHERE id = p_resource FOR UPDATE;
     SELECT c.telos_resource_id INTO v_charter FROM kb_cogmaps c WHERE c.telos_resource_id = p_resource;
-    SELECT r.ingest_state, r.erased_at INTO v_ingest, v_erased_ts
+    SELECT r.erased_at INTO v_erased_ts
       FROM kb_resources r WHERE r.id = p_resource;
     v_erased := v_erased_ts IS NOT NULL;
 
@@ -1236,9 +1435,6 @@ BEGIN
     END IF;
     IF v_erased THEN
         RAISE EXCEPTION 'resource_erasure_execute: already erased';
-    END IF;
-    IF v_ingest <> 'complete' THEN
-        RAISE EXCEPTION 'resource_erasure_execute: ingest % in flight; finalize or abandon first', v_ingest;
     END IF;
     -- A TOMBSTONE IS ERASABLE — arguably the flow's most common shape: the content was
     -- soft-deleted ("realized I shouldn't have persisted this"), and then the compliance
@@ -1261,6 +1457,7 @@ BEGIN
     --    the strike loop below consumes it. ──────────────────────────────────────────────────
     v_plan := resource_erasure_survey_plan(p_resource);
     v_targets := v_plan->'targets';
+    v_ingest := v_plan->>'ingest_state';
 
     -- ── The operator-listed blob strikes, through the wrapper, PER ROW (D8: a blob is struck
     --    ONLY when the operator listed it; the act never infers a strike from a relation). Each
@@ -1291,6 +1488,16 @@ BEGIN
             'target',  'kb_blobs',
             'outcome', blob_strike_outcome_text(v_rel, v_path)));
     END LOOP;
+
+    -- ── Ingest state is not a refusal (D5): a partial or in-flight ingest ends with the
+    --    erasure. The husk keeps its ingest_state; erased_at is authoritative, and the write
+    --    floor (Section W) refuses any later attempt to continue the ingest. The record names
+    --    the ingest the act ended. ─────────────────────────────────────────────────────────
+    IF v_ingest <> 'complete' THEN
+        v_targets := v_targets || jsonb_build_array(jsonb_build_object(
+            'target',  'kb_resources.ingest_state',
+            'outcome', 'ingest ' || v_ingest || '; ended by erasure; erased_at is authoritative'));
+    END IF;
 
     -- ── Per-edge folds: ONE relationship_folded per edge touching R (D1 — the incumbent verb,
     --    its OWN trail shows who ended it and why, another principal's view reads as
@@ -1356,8 +1563,9 @@ resource_erasure_survey_plan (ONE computation per act), folds every edge touchin
 through its own relationship_folded event (fixed reason ''resource_erased'', the act''s correlation
 id), strikes ONLY the operator-listed blobs through blob_delete(''blob_erased'', …), appends the ONE
 NULL-anchored resource_erased event (references carry the subject + the request reference;
-remainder, ledger_remainder, folded_edges read straight off the plan), then calls
-_resource_erasure_apply_redaction — all one transaction. Refusals RAISE here and the Rust caller
+targets, remainder, ledger_remainder, folded_edges read straight off the plan — targets extended
+by each blob strike and, when ingest_state is not complete, the ingest the erasure ended, which
+is not a refusal), then calls _resource_erasure_apply_redaction — all one transaction. Refusals RAISE here and the Rust caller
 records them through resource_erasure_refuse BEFORE reaching this function; legality is the Rust
 caller''s is_system_admin gate, never SQL''s. No hash enters kb_erased_content.';
 
@@ -1368,7 +1576,9 @@ SELECT declare_migration(
 row-anchored redaction body (_resource_erasure_apply_redaction — chunk prose + header_path, block
 revision bytes, embeddings+embedded_with, search vector, data artifact content emptied to
 ''{}''::jsonb for EVERY artifact of the resource, projected citation-audit reasons, formation
-watermark nulls, workflow-job scoping, and the projection-side sentinels: husk title/origin_uri
+watermark nulls, workflow-job payloads and last_errors in every status (unfinished rows cancelled
+to dead), the ingestion record''s source_uri (erased:<id>) and artifact verdict details, and the
+projection-side sentinels: husk title/origin_uri
 ''erased-<id>''/''erased:<id>'', property keys erased-key-<n> by ledger order of first appearance
 (_resource_erasure_key_numbers — the resource''s, and each touching edge''s numbered per edge),
 property values erased::jsonb, edge labels NULL, remote-source re-pointing to the sentinel
@@ -1376,16 +1586,17 @@ rows replay mints — ROW-ANCHORED on resource id, never a content hash; another
 byte-identical content is never reached, and NO hash enters kb_erased_content) and the ONE
 trail-scope predicate (_resource_erasure_trail_scope — the element-trail read''s predicate plus the
 edge-owned-properties arm), so the survey, the act and cut 2''s completion pass share one
-derivation; resource_erasure_survey_plan computes scope, refusals, remainder and ledger_remainder
-once per act and the survey door renders it; resource_erasure_execute consumes the plan — folds
+derivation; resource_erasure_survey_plan computes scope, refusals, targets (pre-act counts per
+reached target, never content), remainder and ledger_remainder once per act and the survey door renders it; resource_erasure_execute consumes the plan — folds
 every edge through its own relationship_folded (fixed reason ''resource_erased'', the act''s
 correlation id), strikes only operator-listed blobs through blob_delete(''blob_erased'', …), appends
 the ONE NULL-anchored resource_erased event (references carry the subject + request reference;
 redacted_fields is EMPTY in cut 1, every unreached ledger path lives in ledger_remainder by (event,
 path) in the RedactedEventFields shape), then calls the ONE redaction body at the event''s ledger
 position; resource_erasure_refuse records the closed refusal vocabulary (unauthorized |
-charter_resource | ingest_in_flight | already_erased) — a repeat erasure is a recorded refusal, not
-a silent no-op (ruled 2026-09-29). CUT 1 DOES NOT TOUCH THE LEDGER (D12): the append-only trigger
+charter_resource | ingest_in_flight (retired: an in-flight ingest ends with the erasure and
+targets names it) | already_erased) — a repeat erasure is a recorded refusal, not a silent no-op
+(ruled 2026-09-29). CUT 1 DOES NOT TOUCH THE LEDGER (D12): the append-only trigger
 is unamended; replay stays byte-identical through the projection-side sentinels applied at the
 event''s position. THE ACT IS SERIALIZED AGAINST EVERY WRITER (D13): resource_erasure_execute takes
 FOR UPDATE on the resource row before the plan, and _resource_write_guard (FOR KEY SHARE, RAISE when

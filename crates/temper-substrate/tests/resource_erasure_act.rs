@@ -19,8 +19,9 @@
 //!   * **9** — the property surface (Q3): values sentineled; a set→set→unset→set key maps to ONE
 //!     `erased-key-<n>`; two keys tied on occurred_at number by event id, never key text (D4);
 //!     replay reproduces it.
-//!   * **11 (SQL half)** — the closed refusals RAISE (already-erased, charter, ingest); the
-//!     recorded/typed refusal face is the service's, PR 2's witness.
+//!   * **11 (SQL half)** — the closed refusals RAISE (already-erased, charter); the two former
+//!     refusals complete — an in-flight ingest (its `targets` name the ended ingest) and a
+//!     tombstone; the recorded/typed refusal face is the service's, PR 2's witness.
 //!   * **12** — the joint-read columns: `header_path` NULL, artifact content `{}`::jsonb.
 //!   * **20** — no writer lands on the husk (D13): a block mutate holding its transaction makes
 //!     the act wait and is erased; a property set arriving while the act holds R's row refuses;
@@ -33,6 +34,9 @@
 //!   * **23** — edge-owned content is gone (goal §8): another principal's edges into R, live and
 //!     already folded, end folded with their structure intact, label NULL, and every edge-owned
 //!     key and value sentineled, numbered per edge; the other principal's resource is untouched.
+//!   * **24** — the record attests and never repeats (D8): the ingestion record's `source_uri`,
+//!     `done`/`dead` job excerpts and a verdict's `detail` are reached; `targets` names every
+//!     reached table and none it did not reach; the payload carries no planted string.
 //!
 //! The doors (Rust) land in PR 2; this file pins the SQL behavior the doors consume.
 
@@ -647,10 +651,12 @@ async fn a_soft_deleted_resource_is_not_an_erased_one(pool: sqlx::PgPool) {
     assert_eq!(already, Some(false), "the survey says NOT erased");
 }
 
-/// (11, SQL half) The closed refusals RAISE at the SQL surface: already-erased, a charter
-/// resource, an in-flight ingest. The recorded face is the service's.
+/// (11, SQL half) The closed refusals RAISE at the SQL surface: already-erased and a charter
+/// resource. The two former refusals complete (D5): a resource whose ingest is in flight is
+/// erased and the record's `targets` names the ingest the act ended, and a tombstone is erased.
+/// The recorded face is the service's.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
+async fn the_sql_refusals_raise_and_the_former_refusals_complete(pool: sqlx::PgPool) {
     common::reset_schema(&pool).await;
     temper_substrate::scenario::bootseed::seed_system(&pool)
         .await
@@ -727,7 +733,8 @@ async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
         "the charter refusal names itself"
     );
 
-    // an ingest in flight refuses (a segmented-ingest resource, not yet finalized)
+    // An ingest in flight is NOT a refusal (D5): a segmented-ingest resource, not yet
+    // finalized, is erased; the ingest ends with the erasure, and the record names it.
     let in_flight = writes::create_resource_with_mode(
         &pool,
         CreateParams {
@@ -752,20 +759,60 @@ async fn the_sql_refusals_raise(pool: sqlx::PgPool) {
     )
     .await
     .unwrap();
-    let flight =
-        sqlx::query_scalar::<sqlx::Postgres, Uuid>("SELECT resource_erasure_execute($1,$2,$3,$4)")
+    let ingest_before: String =
+        sqlx::query_scalar("SELECT ingest_state FROM kb_resources WHERE id = $1")
             .bind(in_flight.uuid())
-            .bind(owner.uuid())
-            .bind(emitter)
-            .bind(Uuid::now_v7())
             .fetch_one(&pool)
-            .await;
+            .await
+            .unwrap();
+    assert_eq!(
+        ingest_before, "in_progress",
+        "the witness needs an ingest actually in flight"
+    );
+    let flight_event = execute_act(&pool, in_flight.uuid()).await;
+    let (f_erased, f_ingest): (Option<chrono::DateTime<chrono::Utc>>, String) =
+        sqlx::query_as("SELECT erased_at, ingest_state FROM kb_resources WHERE id = $1")
+            .bind(in_flight.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(
-        flight
-            .unwrap_err()
-            .to_string()
-            .contains("in flight; finalize or abandon first"),
-        "the ingest-in-flight refusal says so"
+        f_erased.is_some(),
+        "the in-flight resource is erased; erased_at is authoritative"
+    );
+    assert_eq!(
+        f_ingest, "in_progress",
+        "the husk keeps its ingest_state (D5)"
+    );
+    let flight_prose: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM kb_chunk_content cc \
+                   JOIN kb_chunks c ON c.id = cc.chunk_id \
+                  WHERE c.resource_id = $1 AND cc.content <> '') \
+              + (SELECT count(*) FROM kb_block_content bc \
+                   JOIN kb_block_revisions br ON br.id = bc.block_revision_id \
+                   JOIN kb_content_blocks b ON b.id = br.block_id \
+                  WHERE b.resource_id = $1 AND bc.content <> '')",
+    )
+    .bind(in_flight.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(flight_prose, 0, "the in-flight resource's content is empty");
+    let flight_targets: serde_json::Value =
+        sqlx::query_scalar("SELECT payload->'targets' FROM kb_events WHERE id = $1")
+            .bind(flight_event)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        flight_targets
+            .as_array()
+            .expect("targets is an array")
+            .contains(&serde_json::json!({
+                "target": "kb_resources.ingest_state",
+                "outcome": "ingest in_progress; ended by erasure; erased_at is authoritative",
+            })),
+        "the record's targets name the ingest the erasure ended; got {flight_targets}"
     );
 
     // a nil resource cannot execute (not-found)
@@ -2635,4 +2682,225 @@ async fn a_block_citing_its_own_sentinel_literal_still_erases(pool: sqlx::PgPool
     );
 
     assert_replay_byte_identical(&pool, "of a block citing its own sentinel literal").await;
+}
+
+/// (24) The record attests and never repeats (D2 steps 7/7a, D8, goal §8). Beside `seed_leak`,
+/// the rows the act must also reach: an ingestion record whose `source_uri` is a local path, a
+/// `done` and a `dead` workflow job whose payload and `last_error` quote the leak, and an artifact
+/// whose verdict `detail` quotes the value a validator rejected. After the act, every one is
+/// reached (the jobs keep their status), the `resource_erased` payload's `targets` names each
+/// reached table and claims none it did not reach, and the payload text contains none of the
+/// planted strings.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_record_attests_every_target_and_repeats_nothing(pool: sqlx::PgPool) {
+    const INGEST_PATH: &str = "/Users/jane/medical/leak.pdf";
+    const EXCERPT: &str = "Jane: carcinoma";
+    const PROP_KEY: &str = "diagnosis_code";
+    const PROP_VALUE: &str = "C50.9-jane";
+
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "attest-home").await;
+    let leak = seed_leak(
+        &pool,
+        owner,
+        emitter,
+        home,
+        make_home(&pool, owner, "attest-twin").await,
+    )
+    .await;
+    writes::set_property(
+        &pool,
+        leak.resource,
+        PROP_KEY,
+        &serde_json::json!(PROP_VALUE),
+        emitter,
+    )
+    .await
+    .unwrap();
+
+    // The ingestion record, through its write path.
+    writes::upsert_ingestion_record(
+        &pool,
+        writes::IngestionRecord {
+            resource: leak.resource,
+            source_uri: INGEST_PATH,
+            source_mimetype: Some("application/pdf"),
+            conversion_tool: "kreuzberg",
+            conversion_version: "1",
+            source_hash: Some("5eed5eed"),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Finished jobs quoting the leak. kb_workflow_jobs is a work queue, not a projection: raw
+    // rows are the substrate precedent (invocation_envelope.rs `claimed_job`).
+    for status in ["done", "dead"] {
+        sqlx::query(
+            "INSERT INTO kb_workflow_jobs (resource_id, persona, dispatch_type, status, payload, last_error) \
+             VALUES ($1, 'ingest', 'embed', $2, $3, $4)",
+        )
+        .bind(leak.resource.uuid())
+        .bind(status)
+        .bind(serde_json::json!({ "excerpt": EXCERPT }))
+        .bind(format!("embed failed on: {EXCERPT}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    // A verdict whose detail quotes the rejected value: an advisory shape in the resource's home
+    // (an enforcing one refuses the commit, so no verdict row is written), then a
+    // non-conforming commit through the real path, which records the validator's messages.
+    writes::declare_shape(
+        &pool,
+        writes::DeclareShapeParams {
+            home: AnchorRef::context(home),
+            kind: "diagnosis",
+            kind_owner: Some(KindOwner::Profile(owner.uuid())),
+            schema: &serde_json::json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": { "dx": { "type": "integer" } },
+                "required": ["dx"]
+            }),
+            enforcement: payloads::EnforcementMode::Advisory,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    let diagnosis = writes::commit_data_artifact(
+        &pool,
+        CommitDataArtifactParams {
+            resource: leak.resource,
+            kind: "diagnosis",
+            kind_owner: Some(KindOwner::Profile(owner.uuid())),
+            intent: ArtifactIntent::Current,
+            precedence: 0.0,
+            content: &serde_json::json!({ "dx": EXCERPT }),
+            supersedes: &[],
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    let detail_before: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT detail FROM kb_data_artifact_verdicts WHERE artifact_id = $1")
+            .bind(Uuid::from(diagnosis))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        detail_before
+            .as_ref()
+            .is_some_and(|d| d.to_string().contains(EXCERPT)),
+        "the witness needs a verdict whose detail quotes the value; got {detail_before:?}"
+    );
+
+    let event = execute_act(&pool, leak.resource.uuid()).await;
+
+    // D2 step 7a: the ingestion record takes the origin_uri class sentinel, its hash kept.
+    let (source_uri, source_hash): (String, Option<String>) = sqlx::query_as(
+        "SELECT source_uri, source_hash FROM kb_ingestion_records WHERE resource_id = $1",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(source_uri, format!("erased:{}", leak.resource.uuid()));
+    assert_eq!(source_hash.as_deref(), Some("5eed5eed"), "the hash is kept");
+
+    // D2 step 7a: the verdict's detail is gone; the verdict itself stays.
+    let detail_after: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT detail FROM kb_data_artifact_verdicts WHERE artifact_id = $1")
+            .bind(Uuid::from(diagnosis))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(detail_after, None, "the verdict detail is nulled");
+
+    // D2 step 7: every job loses its excerpts, in every status; a finished job keeps its status.
+    let jobs: Vec<(String, serde_json::Value, Option<String>)> = sqlx::query_as(
+        "SELECT status, payload, last_error FROM kb_workflow_jobs \
+          WHERE resource_id = $1 ORDER BY status",
+    )
+    .bind(leak.resource.uuid())
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        jobs,
+        vec![
+            ("dead".to_string(), serde_json::json!({}), None),
+            ("done".to_string(), serde_json::json!({}), None),
+        ],
+        "both jobs are emptied and the done job is still done"
+    );
+
+    // D8: targets names every reached table, and claims none the act did not reach.
+    let payload: serde_json::Value =
+        sqlx::query_scalar("SELECT payload FROM kb_events WHERE id = $1")
+            .bind(event)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let named: std::collections::BTreeSet<&str> = payload["targets"]
+        .as_array()
+        .expect("targets is an array")
+        .iter()
+        .map(|t| t["target"].as_str().expect("every target is named"))
+        .collect();
+    for reached in [
+        "kb_chunk_content",
+        "kb_block_content",
+        "kb_chunks.embedding",
+        "kb_resource_search_index",
+        "kb_data_artifact_content",
+        "kb_data_artifact_verdicts.detail",
+        "kb_workflow_jobs",
+        "kb_ingestion_records.source_uri",
+        "kb_resources",
+        "kb_properties",
+        "kb_edges",
+        "kb_block_provenance",
+        "kb_remote_sources",
+    ] {
+        assert!(
+            named.contains(reached),
+            "targets names {reached}; got {named:?}"
+        );
+    }
+    for unreached in [
+        "kb_citation_audits.reason",
+        "formation watermarks",
+        "kb_resources.ingest_state",
+    ] {
+        assert!(
+            !named.contains(unreached),
+            "targets does not claim {unreached}, which this act reached nothing in; got {named:?}"
+        );
+    }
+
+    // Goal §8: the record never repeats what it erased.
+    let text = payload.to_string();
+    for planted in [
+        "M&A notes (leaked)",
+        URL,
+        "transient",
+        PROP_KEY,
+        PROP_VALUE,
+        "jane smith spoke to us",
+        INGEST_PATH,
+        EXCERPT,
+    ] {
+        assert!(
+            !text.contains(planted),
+            "the resource_erased payload repeats {planted:?}: {text}"
+        );
+    }
 }
