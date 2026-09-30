@@ -96,7 +96,7 @@ const OBLIGATION_OUTCOME_PREFIX: &str = "independent_obligation: ";
 
 /// The only payload target whose outcome this fence parses — every other target kind's
 /// outcome is other vocabulary entirely.
-const BLOB_TARGET: &str = "kb_blobs";
+pub(crate) const BLOB_TARGET: &str = "kb_blobs";
 
 /// The total classification of a `kb_blobs` outcome string against the pinned v1 vocabulary.
 ///
@@ -106,7 +106,7 @@ const BLOB_TARGET: &str = "kb_blobs";
 /// outcome matching NONE of the known shapes is therefore its own arm, counted in the seed
 /// summary and raised as an alertable cause in [`fence_channel_report`] — never quietly
 /// treated as known.
-fn classify_blob_outcome(outcome: &str) -> BlobOutcomeClass {
+pub(crate) fn classify_blob_outcome(outcome: &str) -> BlobOutcomeClass {
     if let Some(pathname) = outcome.strip_prefix(RELEASED_STRIKE_PREFIX) {
         // The template demands a path; a released verdict with an empty pathname is drift,
         // not a strike.
@@ -124,7 +124,7 @@ fn classify_blob_outcome(outcome: &str) -> BlobOutcomeClass {
     BlobOutcomeClass::Unrecognized
 }
 
-enum BlobOutcomeClass {
+pub(crate) enum BlobOutcomeClass {
     /// `erased; released=true; pathname=…` — the bytes were this act's to remove.
     Released(String),
     /// A known, non-seeding shape (held strike, already-erased, independent_obligation).

@@ -216,6 +216,7 @@ claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system
 claim crates/temper-services/src/services/connection_service.rs 9 connection
 claim crates/temper-services/src/services/context_service.rs 14 context_admin
 claim crates/temper-services/src/services/erasure_service.rs 2 is_system_admin
+claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/machine_authz.rs 7 machine
 claim crates/temper-services/src/services/machine_client_service.rs 4 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 5 machine

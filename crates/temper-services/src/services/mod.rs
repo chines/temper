@@ -33,6 +33,7 @@ pub mod materialize_service;
 pub mod profile_service;
 pub mod reassign_service;
 pub mod region_service;
+pub mod resource_erasure_service;
 pub mod resource_service;
 pub mod saml_provisioning_service;
 pub mod shape_service;
