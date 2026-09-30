@@ -61,8 +61,8 @@ async fn walk(
     // Every column takes `!`: sqlx types all six as nullable purely because they come from a
     // set-returning function, but the function's final SELECT (`\sf resource_lineage`) projects
     // `r.title`/`r.is_active` across an INNER `JOIN kb_resources` (both NOT NULL) and
-    // `w.resource_id`/`w.edge_id`/`w.edge_is_folded` off `kb_edges` columns that are NOT NULL,
-    // with `depth` a literal-seeded counter. None of the six can be NULL.
+    // `w.node`/`w.via`/`w.via_folded` off `kb_edges` columns that are NOT NULL, with `w.hops`
+    // the walk's hop counter. None of the six can be NULL.
     let rows = sqlx::query_as!(
         LineageRow,
         r#"SELECT resource_id AS "resource_id!",

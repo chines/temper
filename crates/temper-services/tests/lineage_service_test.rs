@@ -282,3 +282,160 @@ async fn unreadable_seed_is_not_found(pool: PgPool) -> sqlx::Result<()> {
 
     Ok(())
 }
+
+/// `resource_lineage` called directly, on one connection whose `statement_timeout` bounds it — so
+/// a walk that never finishes fails the test instead of hanging it. Rows: (node, depth, folded).
+async fn lineage_rows(
+    pool: &PgPool,
+    profile: Uuid,
+    seed: Uuid,
+    direction: Option<&str>,
+    depth: i32,
+) -> sqlx::Result<Vec<(Uuid, i32, bool)>> {
+    let mut conn = pool.acquire().await?;
+    sqlx::query("SET statement_timeout = '10s'")
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query_as(
+        "SELECT resource_id, depth, edge_is_folded FROM resource_lineage($1, $2, $3, $4)",
+    )
+    .bind(profile)
+    .bind(seed)
+    .bind(direction)
+    .bind(depth)
+    .fetch_all(&mut *conn)
+    .await
+}
+
+/// A lattice — 12 layers of 5, every node deriving from every node of the next layer — has 5^12
+/// simple paths from the seed but only 60 nodes. A walk that enumerates paths before collapsing
+/// them never answers at the default depth; a walk that visits each node once answers at once.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn lattice_lineage_answers_at_the_default_depth(pool: PgPool) -> sqlx::Result<()> {
+    let p = profile(&pool, "lin-lattice").await;
+    let ctx = personal_context(&pool, p, "ctx-lattice").await;
+    let ev = seed_event(&pool, p).await;
+
+    let seed = resource(&pool, "Lattice seed", ctx, p).await;
+    let mut previous = vec![seed];
+    let mut layers = Vec::new();
+    for layer in 1..=12 {
+        let mut nodes = Vec::new();
+        for i in 0..5 {
+            nodes.push(resource(&pool, &format!("L{layer}-{i}"), ctx, p).await);
+        }
+        for &from in &previous {
+            for &to in &nodes {
+                derived_from(&pool, from, to, "leads_to", "inverse", ctx, ev, false).await;
+            }
+        }
+        layers.push(nodes.clone());
+        previous = nodes;
+    }
+
+    let rows = lineage_rows(&pool, p, seed, Some("ancestors"), 16).await?;
+    let depth: HashMap<Uuid, i32> = rows.iter().map(|(n, d, _)| (*n, *d)).collect();
+    assert_eq!(rows.len(), 60, "every lattice node, once");
+    for (i, nodes) in layers.iter().enumerate() {
+        for n in nodes {
+            assert_eq!(
+                depth.get(n),
+                Some(&(i as i32 + 1)),
+                "a layer-{} node at its layer",
+                i + 1
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Only 'ancestors' and 'descendants' name a walk; any other value — including NULL and a
+/// miscased 'Ancestors' — walks nothing rather than silently picking a direction.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn unknown_direction_walks_nothing(pool: PgPool) -> sqlx::Result<()> {
+    let fx = build(&pool).await;
+    for direction in [None, Some(""), Some("sideways"), Some("Ancestors")] {
+        let rows = lineage_rows(&pool, fx.p_in, fx.a, direction, 16).await?;
+        assert!(
+            rows.is_empty(),
+            "direction {direction:?} walked {} rows",
+            rows.len()
+        );
+    }
+    // The two real directions still walk.
+    assert!(!lineage_rows(&pool, fx.p_in, fx.a, Some("ancestors"), 16)
+        .await?
+        .is_empty());
+    assert!(!lineage_rows(&pool, fx.p_in, fx.c, Some("descendants"), 16)
+        .await?
+        .is_empty());
+    Ok(())
+}
+
+/// When a node is reached at its shallowest depth over both a folded and a live edge, the answer
+/// names the live one: the lineage does not rest on a superseded edge while a live one stands.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_live_edge_is_reported_over_a_folded_parallel(pool: PgPool) -> sqlx::Result<()> {
+    let p = profile(&pool, "lin-parallel").await;
+    let ctx = personal_context(&pool, p, "ctx-parallel").await;
+    let ev = seed_event(&pool, p).await;
+    let seed = resource(&pool, "Parallel seed", ctx, p).await;
+    let mut targets = Vec::new();
+    for i in 0..10 {
+        let t = resource(&pool, &format!("Parallel {i}"), ctx, p).await;
+        // Folded first, so an order-dependent pick would tend to land on it.
+        derived_from(&pool, seed, t, "leads_to", "inverse", ctx, ev, true).await;
+        derived_from(&pool, seed, t, "leads_to", "inverse", ctx, ev, false).await;
+        targets.push(t);
+    }
+    let rows = lineage_rows(&pool, p, seed, Some("ancestors"), 16).await?;
+    assert_eq!(rows.len(), 10);
+    for (node, _, folded) in rows {
+        assert!(
+            !folded,
+            "{node} reported via its folded edge while a live one stands"
+        );
+    }
+    Ok(())
+}
+
+/// The gates bound the walk at every hop and in both directions: a node the caller cannot read
+/// is never returned and never walked *through*, so nothing beyond it is reached either.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_unreadable_intermediate_stops_the_walk_both_ways(pool: PgPool) -> sqlx::Result<()> {
+    let p_in = profile(&pool, "lin-mid-in").await;
+    let p_out = profile(&pool, "lin-mid-out").await;
+    let ctx_in = personal_context(&pool, p_in, "ctx-mid-in").await;
+    let ctx_out = personal_context(&pool, p_out, "ctx-mid-out").await;
+    let ev = seed_event(&pool, p_in).await;
+
+    // S df M df T, and T df M2 df U in reverse: M and M2 are unreadable to p_in.
+    let s = resource(&pool, "S", ctx_in, p_in).await;
+    let m = resource(&pool, "M", ctx_out, p_out).await;
+    let t = resource(&pool, "T", ctx_in, p_in).await;
+    let v = resource(&pool, "V", ctx_in, p_in).await;
+    derived_from(&pool, s, m, "leads_to", "inverse", ctx_in, ev, false).await;
+    derived_from(&pool, m, t, "leads_to", "inverse", ctx_in, ev, false).await;
+    // V df S over an edge homed where p_in cannot read.
+    derived_from(&pool, v, s, "leads_to", "inverse", ctx_out, ev, false).await;
+
+    assert!(
+        lineage_rows(&pool, p_in, s, Some("ancestors"), 16)
+            .await?
+            .is_empty(),
+        "neither M (unreadable) nor T (beyond it) is an ancestor p_in can see"
+    );
+    assert!(
+        lineage_rows(&pool, p_in, t, Some("descendants"), 16)
+            .await?
+            .is_empty(),
+        "neither M nor S (beyond it) is a descendant p_in can see"
+    );
+    assert!(
+        lineage_rows(&pool, p_in, s, Some("descendants"), 16)
+            .await?
+            .is_empty(),
+        "V derives from S only over an edge homed where p_in cannot read"
+    );
+    Ok(())
+}
