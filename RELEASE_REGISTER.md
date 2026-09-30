@@ -23,6 +23,24 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **Resource erasure 2b PR 2: an erased resource reads as `410 RESOURCE_ERASED` to a caller with standing; the operator erasure doors**
+  `GET /api/resources/{id}`, `/content` and `/meta` (which composes from the same read) gain a
+  `410` under the new code `RESOURCE_ERASED`, with a fixed message
+  naming only the id. It reaches only a caller who holds standing on the erased resource — its
+  owner, or a direct or team read grant (`resource_husk_held_by`, `20260930000060`). Every other
+  caller, including a member of the resource's context with no grant, keeps the `404` an unknown
+  id gets, byte for byte; a soft-deleted resource keeps its `404`. The `410` is additive: the three
+  operations' contracts grow a response, and no existing response changes. An older client sees a
+  generic `410` — temper-client's 410 arm reads it as `Gone` carrying the message, so MCP and the
+  CLI receive a gone error where they received not-found; keying on the code, and the CLI and MCP
+  rendering, are build order 2c. Two operator-only doors land out of the OpenAPI contract
+  (`POST /api/admin/resources/erasure` and `/survey`, gated by `is_system_admin` — no tenant axis
+  exists); a non-operator gets `404`. Who observes: the owner or a grant holder of an erased
+  resource, and the instance operator. User-visible: yes. Release relevance: signal-only.
+pr: self
+classes: additive,behavioral
+surfaces: http,clients,mcp,cli-stdout
+status: signal-only
 - **MCP list/read results carry `ttlMs` and `cacheScope`; edge trails carry edge-property events; lineage walks answer past depth 1**
   `tools/list`, `resources/list`, `resources/templates/list`, `resources/read` and the empty
   `prompts/list` gain the two fields MCP 2026-07-28 requires (SEP-2549) — additive keys on

@@ -4,6 +4,7 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use temper_core::types::error_details::{ErrorDetails, PlanRefusalDetails};
+use temper_core::types::ids::ResourceId;
 use temper_core::types::query::validate::PlanRefusal;
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +27,15 @@ pub enum ApiError {
     /// as "never existed", and the write face joins the read contract's named states.
     #[error("{0}")]
     Gone(String),
+    /// 410 under [`temper_core::error::RESOURCE_ERASED_CODE`] — the addressed resource was
+    /// erased, and the caller holds standing on the husk (`resource_husk_held_by`). Produced only
+    /// where the read would otherwise be [`Self::NotFound`], so a caller without standing keeps
+    /// the uniform 404 and the 410 is never an erasure oracle.
+    ///
+    /// Carries the id and nothing else. The message is fixed: no title (a sentinel anyway), no
+    /// `body_hash`, no `ingest_state`, no `erased_at`.
+    #[error("resource {0} was erased")]
+    ResourceErased(ResourceId),
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Forbidden")]
@@ -178,6 +188,9 @@ impl IntoResponse for ApiError {
         let (status, code) = match &self {
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             ApiError::Gone(_) => (StatusCode::GONE, "GONE"),
+            ApiError::ResourceErased(_) => {
+                (StatusCode::GONE, temper_core::error::RESOURCE_ERASED_CODE)
+            }
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
             ApiError::ForbiddenDetail(_) => (
@@ -255,6 +268,9 @@ impl IntoResponse for ApiError {
             }
             ApiError::Gone(_) => {
                 tracing::debug!(status_code, error_code = code, message = %bounded(&message), "gone (folded address)");
+            }
+            ApiError::ResourceErased(_) => {
+                tracing::debug!(status_code, error_code = code, message = %bounded(&message), "gone (erased resource)");
             }
             ApiError::PlanRefused { refusals } => {
                 // The count and the REASONS, never the refusals themselves — a composition is
@@ -365,6 +381,7 @@ impl From<ApiError> for temper_core::error::TemperError {
         match err {
             ApiError::NotFound(s) => TemperError::NotFound(s),
             ApiError::Gone(s) => TemperError::Gone(s),
+            ApiError::ResourceErased(id) => TemperError::ResourceErased(id),
             ApiError::Forbidden => TemperError::Forbidden,
             ApiError::ForbiddenDetail(s) => TemperError::ForbiddenDetail(s),
             ApiError::Unauthorized(s) => TemperError::Unauthorized(s),
@@ -415,6 +432,7 @@ impl From<temper_core::error::TemperError> for ApiError {
             // Clean cases that mirror the inbound conversion
             TemperError::NotFound(s) => ApiError::NotFound(s),
             TemperError::Gone(s) => ApiError::Gone(s),
+            TemperError::ResourceErased(id) => ApiError::ResourceErased(id),
             TemperError::Forbidden => ApiError::Forbidden,
             TemperError::ForbiddenDetail(s) => ApiError::ForbiddenDetail(s),
             TemperError::Unauthorized(s) => ApiError::Unauthorized(s),
@@ -762,6 +780,41 @@ mod tests {
             ApiError::Internal(s) => assert!(s.contains("vault not found")),
             other => panic!("expected Internal, got {other:?}"),
         }
+    }
+
+    /// An erased resource renders `410` under its own code, with the fixed message and no
+    /// `details`. FAILS IF the arm falls back to `GONE` (a client could not tell an erasure from
+    /// a folded block), or the message grows anything beyond the id.
+    #[tokio::test]
+    async fn an_erased_resource_renders_410_under_its_own_code_with_only_the_id() {
+        let id = ResourceId::from(uuid::Uuid::now_v7());
+        let (status, body) = rendered(ApiError::ResourceErased(id)).await;
+
+        assert_eq!(status, StatusCode::GONE);
+        assert_eq!(
+            body["error"]["code"],
+            temper_core::error::RESOURCE_ERASED_CODE
+        );
+        assert_eq!(
+            body["error"]["message"],
+            format!("resource {id} was erased")
+        );
+        assert!(
+            body["error"].get("details").is_none(),
+            "an erased resource carries no details: {body}"
+        );
+    }
+
+    /// Both conversions keep the variant, so a read that crosses `DbBackend` (ApiError →
+    /// TemperError → ApiError) still renders `410 RESOURCE_ERASED`, not a `GONE` or a `500`.
+    #[test]
+    fn resource_erased_survives_the_round_trip_through_temper_error() {
+        let id = ResourceId::from(uuid::Uuid::now_v7());
+        let t: TemperError = ApiError::ResourceErased(id).into();
+        assert!(matches!(t, TemperError::ResourceErased(got) if got == id));
+        assert_eq!(t.code(), temper_core::error::RESOURCE_ERASED_CODE);
+        let back: ApiError = t.into();
+        assert!(matches!(back, ApiError::ResourceErased(got) if got == id));
     }
 
     /// The 5xx body is client-facing, and the internal detail is server material — SQL,

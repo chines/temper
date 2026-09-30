@@ -39,6 +39,22 @@ pub const PLAN_REFUSED_CODE: &str = "PLAN_REFUSED";
 /// rather than two literals nothing checks.
 pub const DATA_ARTIFACT_REFUSAL_CODE: &str = "DATA_ARTIFACT_REFUSAL";
 
+/// The wire `error.code` a read of an erased resource travels under — a `410` rendered only to a
+/// caller who holds standing on the husk (`resource_husk_held_by`); every other caller gets the
+/// uniform `404` an unknown id gets, so the `410` is never an erasure oracle.
+///
+/// **The spelling.** The resource erasure spec's `resource_erased` names the *signal*, not this
+/// literal. The literal is upper snake, `RESOURCE_ERASED`, like every other code on the wire.
+///
+/// **A code of its own rather than `GONE`.** `GONE` is the folded-block `410`, whose row survives
+/// as history and can still be addressed. A client branches on the code to tell "this resource was
+/// erased" from "this block was folded"; reusing `GONE` would force it to sniff the message.
+///
+/// Spelled here for the same reason as [`FORBIDDEN_DETAIL_CODE`] — the producer
+/// (`temper-services`' `IntoResponse`) and the consumer (the client, from build order 2c) name one
+/// constant rather than two literals nothing checks.
+pub const RESOURCE_ERASED_CODE: &str = "RESOURCE_ERASED";
+
 /// Details from a system access gate rejection (CLI error rendering).
 ///
 /// Distinct from `types::access_gate::SystemAccessDetails` which carries
@@ -105,6 +121,14 @@ pub enum TemperError {
     /// existed". 410 on HTTP, named on every surface.
     #[error("{0}")]
     Gone(String),
+
+    /// The addressed resource was ERASED (`kb_resources.erased_at` is set) and the caller holds
+    /// standing on the husk. 410 on HTTP under [`RESOURCE_ERASED_CODE`]. Carries the id and
+    /// nothing else: the message is fixed, so no title, hash, ingest state or erasure time can
+    /// ride it. Distinct from [`Self::Gone`], which is a folded block, and produced only where the
+    /// read would otherwise have been [`Self::NotFound`] — a caller without standing keeps that.
+    #[error("resource {0} was erased")]
+    ResourceErased(crate::types::ids::ResourceId),
 
     #[error("Bad request: {0}")]
     BadRequest(String),
@@ -187,6 +211,7 @@ impl TemperError {
             Self::Network(_) => "network",
             Self::NotFound(_) => "not-found",
             Self::Gone(_) => "gone",
+            Self::ResourceErased(_) => RESOURCE_ERASED_CODE,
             Self::BadRequest(_) => "bad-request",
             Self::Conflict(_) => "conflict",
             Self::ContentIntegrity(_) => "content-integrity",

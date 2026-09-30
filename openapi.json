@@ -6857,6 +6857,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7910,6 +7920,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -8504,6 +8524,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404",
             "content": {
               "application/json": {
                 "schema": {

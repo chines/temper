@@ -716,38 +716,86 @@ pub async fn list_select(
 /// Deliberately **not** gated on `ingest_state`: an interrupted segmented ingest stays fully
 /// addressable and readable via `show` (which reports the state) even though list and search
 /// exclude it.
+///
+/// **A miss on an erased resource** answers `410` ([`ApiError::ResourceErased`]) to a caller who
+/// holds the husk, and the same `404` to everyone else — see `erased_or`. `get_meta_select`
+/// composes from this function, so it inherits the same answer.
 pub async fn show_view_select(
     pool: &PgPool,
     profile_id: ProfileId,
     id: ResourceId,
     sections: &SectionSet,
 ) -> ApiResult<ResourceView> {
-    let mut view = readback::hit_identities(pool, profile_id, &[id])
+    let hit = readback::hit_identities(pool, profile_id, &[id])
         .await
         .map_err(api_err)?
         .into_iter()
-        .next()
-        .ok_or_else(|| ApiError::NotFound(format!("resource {id} not found")))?;
+        .next();
+    let Some(mut view) = hit else {
+        let not_found = ApiError::NotFound(format!("resource {id} not found"));
+        return Err(erased_or(pool, profile_id, id, not_found).await);
+    };
     fill_sections(pool, profile_id, std::slice::from_mut(&mut view), sections).await?;
     Ok(view)
 }
 
 /// `get_content` — native markdown body for the resource. `managed_meta`/`open_meta` are `None`
 /// (the meta tier is `get_meta`).
+///
+/// `readback::body` reports a resource the caller cannot see as `ReadbackError::NotVisible`, which
+/// `map_readback_err` renders as the `404`. That arm, and only that arm, asks `erased_or`
+/// whether the miss is a husk the caller holds; a fault stays a fault.
 pub async fn get_content_select(
     pool: &PgPool,
     profile_id: ProfileId,
     resource_id: ResourceId,
 ) -> ApiResult<ContentResponse> {
-    let markdown = readback::body(pool, profile_id, resource_id)
-        .await
-        .map_err(|e| ApiError::from(map_readback_err(e)))?;
+    let markdown = match readback::body(pool, profile_id, resource_id).await {
+        Ok(markdown) => markdown,
+        Err(e @ readback::ReadbackError::NotVisible { .. }) => {
+            let not_found = ApiError::from(map_readback_err(e));
+            return Err(erased_or(pool, profile_id, resource_id, not_found).await);
+        }
+        Err(e) => return Err(ApiError::from(map_readback_err(e))),
+    };
     Ok(ContentResponse {
         resource_id,
         markdown,
         managed_meta: None,
         open_meta: None,
     })
+}
+
+/// What a resource read that found nothing answers: [`ApiError::ResourceErased`] (`410`) when
+/// the resource is an erased husk the caller holds standing on, else `not_found` unchanged.
+///
+/// Called only on the miss path, so a visible resource pays no extra query. Standing is
+/// `resource_husk_held_by` (migration `20260930000060`), called, never restated: the owner home, a
+/// direct profile grant, or a team grant. A caller who reached the resource only through its
+/// context or a cogmap, or who never reached it, gets `not_found` — the same `404` an unknown id
+/// gets — so the `410` cannot become an erasure oracle. A tombstone (soft-deleted, not erased) is
+/// not a husk and keeps its `404`.
+///
+/// `held!`: sqlx types a function-call column as nullable, but the function is `EXISTS (...) AND
+/// EXISTS (...)`, which is never NULL.
+async fn erased_or(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    id: ResourceId,
+    not_found: ApiError,
+) -> ApiError {
+    let held = sqlx::query_scalar!(
+        r#"SELECT resource_husk_held_by($1, $2) AS "held!""#,
+        profile_id.as_uuid(),
+        id.as_uuid(),
+    )
+    .fetch_one(pool)
+    .await;
+    match held {
+        Ok(true) => ApiError::ResourceErased(id),
+        Ok(false) => not_found,
+        Err(e) => ApiError::from(e),
+    }
 }
 
 /// `get_meta` — one resource with both metadata tiers, as a [`ResourceView`].

@@ -12813,6 +12813,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     delete_resource: {
@@ -13427,6 +13436,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     list_resource_edges: {
@@ -13781,6 +13799,15 @@ export interface operations {
             };
             /** @description Not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404 */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
