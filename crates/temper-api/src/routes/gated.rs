@@ -296,6 +296,16 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         // declined.
         .route("/api/admin/erasure", post(handlers::erasure::execute))
         .route("/api/admin/erasure/survey", post(handlers::erasure::survey))
+        // The resource-erasure pair: same posture as the principal pair above (plain `.route()`,
+        // allowlisted, gate-free handlers), over `resource_erasure_service`.
+        .route(
+            "/api/admin/resources/erasure",
+            post(handlers::resource_erasure::execute),
+        )
+        .route(
+            "/api/admin/resources/erasure/survey",
+            post(handlers::resource_erasure::survey),
+        )
         // Machine-principal registration (G3 Phase A). Mounted with plain `.route()`, like
         // `/api/access/admin/*` above, so it stays OUT of the OpenAPI contract. Its paths are
         // allowlisted in `.github/scripts/check-openapi-routes.sh`.

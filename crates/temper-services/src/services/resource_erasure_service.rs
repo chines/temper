@@ -142,7 +142,7 @@ pub enum ResourceErasureOutcome {
 }
 
 /// An edge touching the resource whose asserting principal is not the resource's owner.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct OtherAuthorEdge {
     pub edge_id: EdgeId,
     /// The profile behind the entity that emitted the edge's asserting event.
@@ -153,7 +153,7 @@ pub struct OtherAuthorEdge {
 }
 
 /// A property row owned by an edge touching the resource, asserted by another principal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct OtherAuthorEdgeProperty {
     pub property_id: PropertyId,
     pub edge_id: EdgeId,
@@ -161,7 +161,7 @@ pub struct OtherAuthorEdgeProperty {
 }
 
 /// A related blob and the other resources that hold a live edge to it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct BlobCoLinks {
     pub blob_id: BlobId,
     /// Empty when no other resource links the blob.
@@ -170,7 +170,7 @@ pub struct BlobCoLinks {
 
 /// The plan `resource_erasure_survey` renders, plus the display-only annotations. The act never
 /// consumes the annotations (D10's fingerprint posture): they are read after the plan, in Rust.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ResourceErasurePlan {
     pub n_blocks: i64,
     pub n_revisions: i64,
@@ -195,7 +195,7 @@ pub struct ResourceErasurePlan {
 /// The read-only survey. `plan` is `None` exactly when the resource was already erased when the
 /// survey began (the short-circuit); `already_erased` also reads true when an act lands between
 /// that read and the plan, and then the plan is present.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ResourceErasureSurvey {
     pub resource: ResourceId,
     pub already_erased: bool,
