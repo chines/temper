@@ -18,6 +18,9 @@ use rmcp::model::{
 use temper_client::TemperClient;
 use uuid::Uuid;
 
+use crate::cache_policy::{
+    CALLER_DATA_SCOPE, CALLER_DATA_TTL_MS, DEPLOYMENT_SURFACE_SCOPE, DEPLOYMENT_SURFACE_TTL_MS,
+};
 use crate::service::AcrossAuth;
 
 /// Page size for the resource-browsing list calls. MCP resource listing is a
@@ -53,11 +56,9 @@ pub async fn list_resources(
         })
         .collect();
 
-    Ok(ListResourcesResult {
-        resources,
-        next_cursor: None,
-        ..Default::default()
-    })
+    Ok(ListResourcesResult::with_all_items(resources)
+        .with_ttl_ms(CALLER_DATA_TTL_MS)
+        .with_cache_scope(CALLER_DATA_SCOPE))
 }
 
 /// Advertise URI templates that clients can use to construct resource URIs.
@@ -82,11 +83,9 @@ pub async fn list_resource_templates(
             .with_mime_type("application/json"),
     ];
 
-    Ok(ListResourceTemplatesResult {
-        resource_templates: templates,
-        next_cursor: None,
-        ..Default::default()
-    })
+    Ok(ListResourceTemplatesResult::with_all_items(templates)
+        .with_ttl_ms(DEPLOYMENT_SURFACE_TTL_MS)
+        .with_cache_scope(DEPLOYMENT_SURFACE_SCOPE))
 }
 
 /// Read a single resource by URI.
@@ -96,6 +95,19 @@ pub async fn list_resource_templates(
 /// - `temper://resources/{id}/content` — raw markdown only
 /// - `temper://contexts/{ref}/resources` — JSON list of resources in context (ref = UUID or `@owner/slug`)
 pub async fn read_resource(
+    client: &TemperClient,
+    request: ReadResourceRequestParams,
+) -> Result<ReadResourceResult, rmcp::ErrorData> {
+    read_resource_contents(client, request).await.map(|result| {
+        result
+            .with_ttl_ms(CALLER_DATA_TTL_MS)
+            .with_cache_scope(CALLER_DATA_SCOPE)
+    })
+}
+
+/// The URI dispatch behind [`read_resource`], which stamps every answer's cache policy
+/// once rather than at each of the returns below.
+async fn read_resource_contents(
     client: &TemperClient,
     request: ReadResourceRequestParams,
 ) -> Result<ReadResourceResult, rmcp::ErrorData> {
@@ -193,4 +205,36 @@ pub async fn read_resource(
         format!("Unknown resource URI: {uri}"),
         None,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::list_resource_templates;
+
+    /// `resources/templates/list` is a list result under the same MCP 2026-07-28 rule as
+    /// `tools/list`: `ttlMs` and `cacheScope` are required. The templates are the
+    /// deployment surface (identical for every caller), so they share its policy.
+    /// FAILS IF: either key is absent from the serialized answer.
+    #[tokio::test]
+    async fn resource_templates_list_carries_ttl_ms_and_cache_scope_on_the_wire() {
+        let wire = serde_json::to_value(
+            list_resource_templates(None)
+                .await
+                .expect("templates list answers"),
+        )
+        .expect("templates list serializes");
+
+        assert_eq!(
+            wire.get("ttlMs"),
+            Some(&serde_json::json!(
+                crate::cache_policy::DEPLOYMENT_SURFACE_TTL_MS
+            )),
+            "resources/templates/list must carry a numeric ttlMs: {wire}"
+        );
+        assert_eq!(
+            wire.get("cacheScope"),
+            Some(&serde_json::json!("public")),
+            "resources/templates/list must carry cacheScope: {wire}"
+        );
+    }
 }
