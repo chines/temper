@@ -1,28 +1,37 @@
--- resource_lineage walks breadth-first, visiting each node once.
+-- resource_lineage walks one indexed hop at a time.
 --
--- The reader (`20260712000080`) timed out whenever the seed had lineage and the walk was allowed
--- a second hop (a gateway 502 over MCP at depths 4 and 16). Two costs compounded:
+-- The reader (`20260712000080`) timed out in production whenever the seed had a lineage
+-- edge and the walk was allowed a second hop: `resource_lineage` over MCP answered at
+-- depth 1 and returned a gateway 502 at depth 4 and at the default 16 (found exercising the
+-- MCP surface live, 2026-09-30). The recursive term's plan was
 --
---   * every hop seq-scanned kb_edges: the only source/target indexes are partial on
---     `NOT is_folded`, and this walk deliberately includes folded edges (a superseded ancestor is
---     shown, flagged). The two indexes below serve exactly the population it reads;
---   * a recursive CTE can only guard cycles per PATH, so it enumerated every simple path before
---     `DISTINCT ON` collapsed them, running the scalar gates on each path-edge. A lattice of 12
---     layers of 5 has 5^12 paths over 60 nodes; indexes alone leave that exponential.
+--   Nested Loop  Join Filter: w.resource_id = e.source_id
+--     -> WorkTable Scan on walk
+--     -> Materialize -> Seq Scan on kb_edges
+--          Filter: label = 'derived_from' AND <all three visibility gates>
 --
--- So the walk is a plpgsql loop over a frontier with a visited set: each node is reached once, at
--- its shallowest depth, and each hop's gates run once over that hop's candidate edges. What a
--- later edit must not break:
+-- i.e. every hop sequentially scanned kb_edges and ran `anchor_readable_by_profile` plus two
+-- `endpoint_readable_by_profile` calls on EVERY derived_from edge in the deployment, before
+-- joining to the frontier. Two causes compound:
 --
---   * the gates are the same three conjuncts as every edge read: the home anchor via
---     `anchor_readable_by_profile`, both endpoints via `resources_visible_to` — the set form of
---     `endpoint_readable_by_profile`'s kb_resources arm, computed once per hop, not once per edge;
---   * label-keyed (never edge_kind); folded edges walked and flagged; the seed never re-emitted,
---     not even over a self-loop (the old first hop had no path guard and listed it at depth 1);
---   * depth 1 is always walked (a depth <= 0 or NULL answers depth 1, as before);
---   * a node reached over several edges at its shallowest depth reports a live edge before a
---     folded one, then the lowest edge id — previously the pick was arbitrary;
---   * any direction but 'ancestors' / 'descendants' walks nothing — previously NULL/unknown also did.
+--   * the only source/target indexes (`idx_kb_edges_source`, `idx_kb_edges_target`) are
+--     partial on `NOT is_folded`, and this walk deliberately includes folded edges (a
+--     superseded ancestor is shown, flagged), so no index can serve it;
+--   * direction was an `OR` over `p_direction` inside one join condition, which no index
+--     serves either.
+--
+-- Measured locally (15,000 derived_from among 45,000 edges): depth 1 in 570 ms, depth 2
+-- cancelled after 411 s. At depth 1 the recursive side never executes (`depth < 1` empties
+-- the worktable), which is why the shallow read looked healthy.
+--
+-- Fix:
+--   1. Two indexes scoped to resource-to-resource `derived_from` edges, folded or not — the
+--      exact population the walk reads, and a small fraction of kb_edges.
+--   2. The reader branches on direction (plpgsql), so each hop is a plain equality on the
+--      indexed column and the gates run only on the edges actually joined.
+-- Semantics are re-emitted verbatim: label-keyed (never edge_kind), folded edges walked and
+-- flagged, the path-array cycle guard, the depth bound, the per-edge home + both-endpoint
+-- gates, and DISTINCT ON the shallowest depth. Signature and return type are unchanged.
 
 CREATE INDEX idx_kb_edges_derived_from_source
     ON kb_edges (source_id)
@@ -49,102 +58,81 @@ CREATE OR REPLACE FUNCTION resource_lineage(
     edge_is_folded boolean,
     depth int
 ) LANGUAGE plpgsql STABLE AS $$
-#variable_conflict use_column
-DECLARE
-    v_ancestors boolean := p_direction = 'ancestors';
-    v_frontier  uuid[]  := ARRAY[p_resource];
-    v_visited   uuid[]  := ARRAY[p_resource];
-    v_hop       int     := 0;
-    v_nodes     uuid[]    := '{}';
-    v_vias      uuid[]    := '{}';
-    v_folded    boolean[] := '{}';
-    v_hops      int[]     := '{}';
-    h_nodes     uuid[];
-    h_vias      uuid[];
-    h_folded    boolean[];
 BEGIN
-    IF p_direction IS DISTINCT FROM 'ancestors' AND p_direction IS DISTINCT FROM 'descendants' THEN
-        RETURN;
-    END IF;
-
-    LOOP
-        v_hop := v_hop + 1;
-
-        WITH vis AS MATERIALIZED (
-            SELECT v.resource_id FROM resources_visible_to(p_profile) v
-        ),
-        -- One hop out of the frontier. `near` is the frontier end, `far` the node reached:
-        -- ancestors follow source -> target, descendants target -> source.
-        step AS (
-            SELECT e.id, e.is_folded, e.home_anchor_table, e.home_anchor_id,
-                   e.source_id AS near, e.target_id AS far
+    IF p_direction = 'ancestors' THEN
+        -- "What does this derive from": follow source = node -> target.
+        RETURN QUERY
+        WITH RECURSIVE walk AS (
+            SELECT e.target_id AS node, e.id AS via, e.is_folded AS via_folded, 1 AS hops,
+                   ARRAY[p_resource, e.target_id] AS path
             FROM kb_edges e
-            WHERE v_ancestors
-              AND e.label = 'derived_from'
+            WHERE e.label = 'derived_from'
               AND e.source_table = 'kb_resources'
               AND e.target_table = 'kb_resources'
-              AND e.source_id = ANY(v_frontier)
+              AND e.source_id = p_resource
+              AND anchor_readable_by_profile(p_profile, e.home_anchor_table, e.home_anchor_id)
+              AND endpoint_readable_by_profile(p_profile, e.source_table, e.source_id)
+              AND endpoint_readable_by_profile(p_profile, e.target_table, e.target_id)
+
             UNION ALL
-            SELECT e.id, e.is_folded, e.home_anchor_table, e.home_anchor_id,
-                   e.target_id, e.source_id
+
+            SELECT e.target_id, e.id, e.is_folded, w.hops + 1, w.path || e.target_id
+            FROM walk w
+            JOIN kb_edges e
+              ON e.label = 'derived_from'
+             AND e.source_table = 'kb_resources'
+             AND e.target_table = 'kb_resources'
+             AND e.source_id = w.node
+            WHERE w.hops < p_max_depth
+              AND e.target_id <> ALL(w.path)
+              AND anchor_readable_by_profile(p_profile, e.home_anchor_table, e.home_anchor_id)
+              AND endpoint_readable_by_profile(p_profile, e.source_table, e.source_id)
+              AND endpoint_readable_by_profile(p_profile, e.target_table, e.target_id)
+        )
+        SELECT DISTINCT ON (w.node) w.node, r.title, r.is_active, w.via, w.via_folded, w.hops
+        FROM walk w
+        JOIN kb_resources r ON r.id = w.node
+        ORDER BY w.node, w.hops;
+    ELSE
+        -- "What derives from this": follow target = node -> source.
+        RETURN QUERY
+        WITH RECURSIVE walk AS (
+            SELECT e.source_id AS node, e.id AS via, e.is_folded AS via_folded, 1 AS hops,
+                   ARRAY[p_resource, e.source_id] AS path
             FROM kb_edges e
-            WHERE NOT v_ancestors
-              AND e.label = 'derived_from'
+            WHERE e.label = 'derived_from'
               AND e.source_table = 'kb_resources'
               AND e.target_table = 'kb_resources'
-              AND e.target_id = ANY(v_frontier)
-        ),
-        cand AS (
-            SELECT s.*
-            FROM step s
-            WHERE NOT EXISTS (SELECT 1 FROM unnest(v_visited) AS seen(id) WHERE seen.id = s.far)
-              AND s.near IN (SELECT vis.resource_id FROM vis)
-              AND s.far  IN (SELECT vis.resource_id FROM vis)
-        ),
-        -- MATERIALIZED is load-bearing: inlined, the planner pushes the gate below the DISTINCT
-        -- and calls it once per candidate edge rather than once per distinct home.
-        homes AS MATERIALIZED (
-            SELECT DISTINCT c.home_anchor_table, c.home_anchor_id FROM cand c
-        ),
-        readable_homes AS (
-            SELECT h.home_anchor_table, h.home_anchor_id
-            FROM homes h
-            WHERE anchor_readable_by_profile(p_profile, h.home_anchor_table, h.home_anchor_id)
-        ),
-        picked AS (
-            SELECT DISTINCT ON (c.far) c.far, c.id, c.is_folded
-            FROM cand c
-            JOIN readable_homes rh
-              ON rh.home_anchor_table = c.home_anchor_table
-             AND rh.home_anchor_id = c.home_anchor_id
-            ORDER BY c.far, c.is_folded, c.id
+              AND e.target_id = p_resource
+              AND anchor_readable_by_profile(p_profile, e.home_anchor_table, e.home_anchor_id)
+              AND endpoint_readable_by_profile(p_profile, e.source_table, e.source_id)
+              AND endpoint_readable_by_profile(p_profile, e.target_table, e.target_id)
+
+            UNION ALL
+
+            SELECT e.source_id, e.id, e.is_folded, w.hops + 1, w.path || e.source_id
+            FROM walk w
+            JOIN kb_edges e
+              ON e.label = 'derived_from'
+             AND e.source_table = 'kb_resources'
+             AND e.target_table = 'kb_resources'
+             AND e.target_id = w.node
+            WHERE w.hops < p_max_depth
+              AND e.source_id <> ALL(w.path)
+              AND anchor_readable_by_profile(p_profile, e.home_anchor_table, e.home_anchor_id)
+              AND endpoint_readable_by_profile(p_profile, e.source_table, e.source_id)
+              AND endpoint_readable_by_profile(p_profile, e.target_table, e.target_id)
         )
-        SELECT array_agg(p.far), array_agg(p.id), array_agg(p.is_folded)
-          INTO h_nodes, h_vias, h_folded
-          FROM picked p;
-
-        EXIT WHEN h_nodes IS NULL;
-
-        v_nodes   := v_nodes || h_nodes;
-        v_vias    := v_vias || h_vias;
-        v_folded  := v_folded || h_folded;
-        v_hops    := v_hops || array_fill(v_hop, ARRAY[cardinality(h_nodes)]);
-        v_visited := v_visited || h_nodes;
-        v_frontier := h_nodes;
-
-        EXIT WHEN p_max_depth IS NULL OR v_hop >= p_max_depth;
-    END LOOP;
-
-    RETURN QUERY
-    SELECT w.node, r.title, r.is_active, w.via, w.via_folded, w.hops
-    FROM unnest(v_nodes, v_vias, v_folded, v_hops) AS w(node, via, via_folded, hops)
-    JOIN kb_resources r ON r.id = w.node
-    ORDER BY w.node;
+        SELECT DISTINCT ON (w.node) w.node, r.title, r.is_active, w.via, w.via_folded, w.hops
+        FROM walk w
+        JOIN kb_resources r ON r.id = w.node
+        ORDER BY w.node, w.hops;
+    END IF;
 END;
 $$;
 
 SELECT declare_migration(
     20260930000020,
     'additive',
-    'resource_lineage re-emitted as a breadth-first plpgsql walk over two new partial indexes on resource-to-resource derived_from edges (source_id, target_id; folded included). Signature and return type are unchanged. For both real directions the node set and depths are unchanged except that a seed with a derived_from self-loop is no longer listed as its own lineage; the edge reported for a node reached over several shallowest edges is now deterministic (live before folded), and an unknown or NULL direction now walks nothing — no caller passes one. The two CREATE INDEX statements take a brief write lock on kb_edges while they build.'
+    'resource_lineage re-emitted as a direction-branched plpgsql walk over two new partial indexes on resource-to-resource derived_from edges (source_id, target_id; folded included). Signature and return type are unchanged and the rows it returns are the same; only the plan changes. The two CREATE INDEX statements take a brief write lock on kb_edges while they build.'
 );

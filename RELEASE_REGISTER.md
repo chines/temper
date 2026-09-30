@@ -36,7 +36,8 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   error) past depth 1 — it returns the same nodes at the same depths (a seed with a self-loop is
   no longer listed as its own lineage), now reports a live edge before a folded one when a node is
   reached over both, and walks nothing for an unknown direction (no caller passes one). Both are
-  declared in their migrations (`20260930000010`, `20260930000020`). User-visible: yes, as fixes.
+  declared in their migrations (`20260930000010`, `20260930000020`, `20260930000030`;
+  `20260930000040` refreshes one COMMENT). User-visible: yes, as fixes.
   Release relevance: signal-only.
 pr: self
 classes: additive,behavioral
