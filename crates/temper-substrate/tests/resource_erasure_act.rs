@@ -17,7 +17,8 @@
 //!     soft-deleted resource is the flow's main shape; ruled by Pete over the draft's
 //!     refusal).
 //!   * **9** — the property surface (Q3): values sentineled; a set→set→unset→set key maps to ONE
-//!     `erased-key-<n>`; replay reproduces it.
+//!     `erased-key-<n>`; two keys tied on occurred_at number by event id, never key text (D4);
+//!     replay reproduces it.
 //!   * **11 (SQL half)** — the closed refusals RAISE (already-erased, charter, ingest); the
 //!     recorded/typed refusal face is the service's, PR 2's witness.
 //!   * **12** — the joint-read columns: `header_path` NULL, artifact content `{}`::jsonb.
@@ -29,6 +30,9 @@
 //!     distinct `erased:<block_id>:<n>` sentinels; a pre-minted look-alike sentinel does not stop
 //!     the re-point; a block citing its own sentinel literal still erases; a concurrent citer
 //!     keeps its remote source and its provenance stays readable; a shared source is named in the remainder by id, never by URL.
+//!   * **23** — edge-owned content is gone (goal §8): another principal's edges into R, live and
+//!     already folded, end folded with their structure intact, label NULL, and every edge-owned
+//!     key and value sentineled, numbered per edge; the other principal's resource is untouched.
 //!
 //! The doors (Rust) land in PR 2; this file pins the SQL behavior the doors consume.
 
@@ -984,8 +988,7 @@ async fn a_reset_key_maps_to_one_sentinel_key(pool: sqlx::PgPool) {
     .unwrap();
 
     // THE SAME original key, set → unset → re-set: three property events, ONE family
-    // position. (The earlier draft used two different keys touched once each — that
-    // exercised nothing about the numbering.)
+    // position.
     unset_via_update(&pool, resource, emitter).await.unwrap();
     writes::set_property(
         &pool,
@@ -996,6 +999,52 @@ async fn a_reset_key_maps_to_one_sentinel_key(pool: sqlx::PgPool) {
     )
     .await
     .unwrap();
+
+    // The tie-break (D4): two keys asserted in ONE transaction, their text sorting opposite to
+    // their event order — `zeta_diagnosis` first, then `alpha_name`. One transaction stamps
+    // both events with the same occurred_at (`_event_append` leaves it to the column default,
+    // now() = the transaction's start), so this IS the tie case: the event id must decide, and
+    // the key text must not. Numbering by key text would put alpha_name ahead.
+    let mut tx = pool.begin().await.unwrap();
+    for (key, value) in [("zeta_diagnosis", "stage 3"), ("alpha_name", "jane smith")] {
+        writes::set_property_in_tx(
+            &mut tx,
+            resource,
+            key,
+            &serde_json::json!(value),
+            emitter,
+            EventContext::default(),
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let tie_row = |key: &'static str| {
+        let pool = pool.clone();
+        let resource = resource.uuid();
+        async move {
+            sqlx::query_as::<_, (Uuid, Uuid, chrono::DateTime<chrono::Utc>)>(
+                "SELECT p.id, ev.id, ev.occurred_at FROM kb_properties p \
+                   JOIN kb_events ev ON ev.id = p.asserted_by_event_id \
+                  WHERE p.owner_table='kb_resources' AND p.owner_id=$1 AND p.property_key=$2",
+            )
+            .bind(resource)
+            .bind(key)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let (zeta_row, zeta_event, zeta_at) = tie_row("zeta_diagnosis").await;
+    let (alpha_row, alpha_event, alpha_at) = tie_row("alpha_name").await;
+    assert_eq!(
+        zeta_at, alpha_at,
+        "precondition: one transaction ties the two keys on occurred_at"
+    );
+    assert!(
+        zeta_event < alpha_event,
+        "precondition: zeta_diagnosis's event is first in ledger identity"
+    );
 
     execute_act(&pool, resource.uuid()).await;
 
@@ -1013,11 +1062,39 @@ async fn a_reset_key_maps_to_one_sentinel_key(pool: sqlx::PgPool) {
     keys.sort();
     assert_eq!(
         keys,
-        vec!["erased-key-1".to_owned(), "erased-key-2".to_owned()],
-        // key-1 is the resource's birth `doc_type` (earliest first_seen, and the
-        // (first_seen, property_key) tie-break makes the numbering total); key-2 is
-        // the alpha-key family. TWO keys, each ONE — that is the whole assertion.
+        vec![
+            "erased-key-1".to_owned(),
+            "erased-key-2".to_owned(),
+            "erased-key-3".to_owned(),
+            "erased-key-4".to_owned(),
+        ],
+        // key-1 is the resource's birth `doc_type` (the earliest first-asserting event);
+        // key-2 is the alpha-key family; key-3 and key-4 are the tied pair. FOUR keys,
+        // each ONE — the reset family did not split.
         "the reset key's family maps ONE erased-key-<n> per key; distinct keys now: {keys:?}"
+    );
+
+    // The tied pair numbers by ledger identity: zeta_diagnosis (first event) before
+    // alpha_name, whatever their text.
+    let key_of = |row: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT property_key FROM kb_properties WHERE id=$1")
+                .bind(row)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(
+        key_of(zeta_row).await,
+        "erased-key-3",
+        "zeta_diagnosis, asserted first in the tied transaction, takes the lower number"
+    );
+    assert_eq!(
+        key_of(alpha_row).await,
+        "erased-key-4",
+        "alpha_name, asserted second, takes the next number despite sorting first as text"
     );
 
     // The typed roundtrip contract is what catches a payload-shape drift like a
@@ -1220,6 +1297,269 @@ async fn a_pre_existing_folded_edge_does_not_abort_the_act(pool: sqlx::PgPool) {
         act_folds, 0,
         "the act folds only LIVE edges; the pre-existing fold keeps its own history"
     );
+}
+
+/// (23) Edge-owned content is gone (goal §8: an edge touching R is R's surface, whoever authored
+/// it). A second principal's resource S asserts an edge S→R carrying a label, an edge facet and a
+/// keyed edge property, plus a second S→R edge it folded itself before the act. After the act
+/// both edges are folded with their structure intact (kind, polarity, asserting event,
+/// endpoints) and their label NULL; every edge-owned row carries an `erased-key-<n>` key numbered
+/// within its edge by ledger identity and the `"erased"` value; S itself is untouched; replay is
+/// byte-identical.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_edge_from_another_principal_keeps_its_structure_and_loses_its_text(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "edge-text-home").await;
+    let r = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "the erased one",
+            origin_uri: "test://edge-text-r",
+            body: "r body",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+
+    // B is a REAL second principal — own profile, own emitter, own context (the
+    // `a_cross_principal_recommit_is_the_committers_own_row` setup in blobs.rs).
+    let owner_b = ProfileId::from(common::insert_profile(&pool, "edge-text-b").await);
+    let emitter_b = EntityId::from(
+        sqlx::query_scalar::<sqlx::Postgres, Uuid>(
+            "INSERT INTO kb_entities (profile_id, name, metadata) \
+             VALUES ($1, 'edge-text-b@web', '{}'::jsonb) RETURNING id",
+        )
+        .bind(owner_b.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+    );
+    let home_b = make_home(&pool, owner_b, "edge-text-b-home").await;
+    let s = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "B's own notes",
+            origin_uri: "test://edge-text-s",
+            body: "s body",
+            doc_type: "research",
+            home: AnchorRef::context(home_b),
+            owner: owner_b,
+            originator: owner_b,
+            emitter: emitter_b,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+
+    // The live edge S→R, authored by B: a label, an edge facet, a keyed edge property.
+    let edge = writes::assert_relationship(
+        &pool,
+        AssertParams {
+            src: s,
+            tgt: r,
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("source for jane smith"),
+            weight: 1.0,
+            home: home_b,
+            emitter: emitter_b,
+        },
+    )
+    .await
+    .unwrap();
+    let facet_rows = writes::set_facet(
+        &pool,
+        PropertyOwner::edge(edge),
+        &serde_json::json!({"diagnosis": "stage 3"}),
+        1.0,
+        emitter_b,
+    )
+    .await
+    .unwrap();
+    assert_eq!(facet_rows.len(), 1, "one mark, one row; got {facet_rows:?}");
+    let keyed_row = writes::assert_keyed_property_with(
+        &pool,
+        PropertyOwner::edge(edge),
+        "patient_ssn",
+        &serde_json::json!("123-45-6789"),
+        1.0,
+        emitter_b,
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+
+    // An S→R edge B folded itself before the act: its facet was folded with it by the fold
+    // projector, key and value intact — the act must still reach it.
+    let folded_edge = writes::assert_relationship(
+        &pool,
+        AssertParams {
+            src: s,
+            tgt: r,
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("earlier link to jane"),
+            weight: 1.0,
+            home: home_b,
+            emitter: emitter_b,
+        },
+    )
+    .await
+    .unwrap();
+    writes::set_facet(
+        &pool,
+        PropertyOwner::edge(folded_edge),
+        &serde_json::json!({"alias": "jd-alias"}),
+        1.0,
+        emitter_b,
+    )
+    .await
+    .unwrap();
+    writes::fold_relationship(&pool, folded_edge, Some("superseded"), emitter_b)
+        .await
+        .unwrap();
+
+    type Structure = (String, Uuid, String, Uuid, String, String, Uuid);
+    let structure = |e: EdgeId| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, Structure>(
+                "SELECT source_table::text, source_id, target_table::text, target_id, \
+                        edge_kind::text, polarity::text, asserted_by_event_id \
+                   FROM kb_edges WHERE id=$1",
+            )
+            .bind(e)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let s_state = |res: ResourceId| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, serde_json::Value>(
+                "SELECT jsonb_build_object( \
+                    'resource', (SELECT to_jsonb(x) FROM kb_resources x WHERE x.id=$1), \
+                    'properties', (SELECT coalesce(jsonb_agg(to_jsonb(p) ORDER BY p.id), '[]') \
+                                     FROM kb_properties p \
+                                    WHERE p.owner_table='kb_resources' AND p.owner_id=$1), \
+                    'chunks', (SELECT coalesce(jsonb_agg(cc.content ORDER BY c.id), '[]') \
+                                 FROM kb_chunks c \
+                                 JOIN kb_chunk_content cc ON cc.chunk_id = c.id \
+                                WHERE c.resource_id=$1))",
+            )
+            .bind(res.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let edge_before = structure(edge).await;
+    let folded_before = structure(folded_edge).await;
+    let s_before = s_state(s).await;
+
+    execute_act(&pool, r.uuid()).await;
+
+    // Structure stays: both edges folded, kind/polarity/asserting event/endpoints unchanged,
+    // label NULL.
+    for (e, before) in [(edge, &edge_before), (folded_edge, &folded_before)] {
+        assert_eq!(&structure(e).await, before, "edge {e} keeps its structure");
+        let (folded, label): (bool, Option<String>) =
+            sqlx::query_as("SELECT is_folded, label FROM kb_edges WHERE id=$1")
+                .bind(e)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(folded, "edge {e} ends folded");
+        assert_eq!(label, None, "edge {e} loses its label");
+    }
+
+    // Every edge-owned row is sentineled and folded; nothing of the original text survives.
+    let rows: Vec<(Uuid, Uuid, String, serde_json::Value, bool)> = sqlx::query_as(
+        "SELECT id, owner_id, property_key, property_value, is_folded FROM kb_properties \
+          WHERE owner_table='kb_edges' AND owner_id = ANY($1) ORDER BY owner_id, id",
+    )
+    .bind(vec![edge.uuid(), folded_edge.uuid()])
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows.len(),
+        3,
+        "two rows on the live edge, one on the folded; got {rows:?}"
+    );
+    for (id, owner_id, key, value, folded) in &rows {
+        assert!(
+            key.starts_with("erased-key-"),
+            "row {id} of edge {owner_id} keeps a sentinel key; got {key}"
+        );
+        assert_eq!(
+            value,
+            &serde_json::json!("erased"),
+            "row {id} value sentineled"
+        );
+        assert!(folded, "row {id} ends folded");
+    }
+    let leaked: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_properties \
+          WHERE (owner_table='kb_edges' AND property_key IN ('facet', 'patient_ssn')) \
+             OR property_value::text LIKE ANY (ARRAY['%diagnosis%', '%stage 3%', \
+                                                     '%123-45-6789%', '%jd-alias%'])",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(leaked, 0, "no row carries an original edge key or value");
+
+    // Numbering is WITHIN each edge by ledger identity: on the live edge the facet (asserted
+    // first) is erased-key-1 and patient_ssn erased-key-2; the folded edge's one key is its own
+    // erased-key-1.
+    let key_of = |row: Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT property_key FROM kb_properties WHERE id=$1")
+                .bind(row)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(key_of(facet_rows[0].uuid()).await, "erased-key-1");
+    assert_eq!(key_of(keyed_row.uuid()).await, "erased-key-2");
+    let folded_keys: Vec<String> = rows
+        .iter()
+        .filter(|(_, o, ..)| *o == folded_edge.uuid())
+        .map(|(_, _, k, ..)| k.clone())
+        .collect();
+    assert_eq!(folded_keys, vec!["erased-key-1".to_owned()]);
+
+    // S itself — B's resource, its properties, its chunks — is untouched.
+    assert_eq!(
+        s_state(s).await,
+        s_before,
+        "the other principal's resource is untouched"
+    );
+
+    assert_replay_byte_identical(&pool, "of an erasure reaching another principal's edges").await;
 }
 
 /// (14) THE BLOB STRIKE ARM + its list-verification fence, previously unwitnessed: a

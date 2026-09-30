@@ -541,8 +541,11 @@ BEGIN
     --      from ledger order, never from key text, so it reveals nothing; property_unset stays
     --      consistent because the same original key maps to the same n across property_set,
     --      property_asserted and property_unset events, which replay reproduces (the mapping is
-    --      a pure function of (owner, key) under a total ledger order of first-assertion
-    --      timestamps). EVERY family row — live and folded — is folded by this pass: the husk
+    --      a pure function of (owner, key) under the total order of each key's first-asserting
+    --      event: its occurred_at, then its id — keys asserted in one transaction share
+    --      occurred_at and the event id decides; the key text never does). The numbering is
+    --      _resource_erasure_key_numbers (Section 0d), the ONE definition this step and step
+    --      (9d) share. EVERY family row — live and folded — is folded by this pass: the husk
     --      keeps NO metadata (Q3), and folding avoids a UNIQUE-index collision the sentinel
     --      values would otherwise raise — uq_kb_properties_active is partial on NOT is_folded
     --      over (owner, key, value); two live rows of ONE key in the facet shape (several live
@@ -551,23 +554,13 @@ BEGIN
     --      from events that are themselves behind the erasure event in ledger order, so the
     --      arm at the event's position sees the same family state the live act sees.
     --
-    --      The key-grain projection: first appearance = the minimum occurred_at across the
-    --      property's asserted_by_event_id over the row's family. A key set → unset → re-set maps
-    --      to one n: the DISTINCT-on-key pass numbers each original key ONCE for the whole
-    --      family. last_event_id points at the erasure event (the property fold rides the act
-    --      — the trail records which event retired the property, the 20260727000030 shape).
-    WITH family AS (
-        SELECT DISTINCT p.property_key,
-               (SELECT min(e.occurred_at) FROM kb_events e
-                 WHERE e.id IN (
-                     SELECT pr.asserted_by_event_id FROM kb_properties pr
-                      WHERE pr.owner_table = 'kb_resources' AND pr.owner_id = p_resource
-                        AND pr.property_key = p.property_key)) AS first_seen
-          FROM kb_properties p
-         WHERE p.owner_table = 'kb_resources' AND p.owner_id = p_resource
-    ), ranked AS (
-        SELECT property_key, row_number() OVER (ORDER BY first_seen, property_key) AS n
-          FROM family
+    --      A key set → unset → re-set maps to one n: the numbering is per original key over the
+    --      whole family, live and folded rows alike. last_event_id points at the erasure event
+    --      (the property fold rides the act — the trail records which event retired the
+    --      property, the 20260727000030 shape).
+    WITH ranked AS (
+        SELECT k.property_key, k.n
+          FROM _resource_erasure_key_numbers('kb_resources', p_resource) k
     )
     UPDATE kb_properties p
        SET property_key   = 'erased-key-' || ranked.n::text,
@@ -581,18 +574,33 @@ BEGIN
     -- (9c) Edge labels: NULL on every edge at either end (D4 — kind and polarity survive; they
     --      are the structure; the "system vocabulary" alternative was rejected in the spec — no
     --      registry exists, and the edge is folded anyway at the act level).
+    --      Goal §8: an edge touching R is R's surface whoever authored it — its structure and its
+    --      fold event stay, all of its content goes.
     UPDATE kb_edges e
        SET label = NULL
      WHERE (e.source_table = 'kb_resources' AND e.source_id = p_resource)
         OR (e.target_table = 'kb_resources' AND e.target_id = p_resource);
 
-    -- (9d) Edge-owned property rows cascade-folded with their edges (the edge-owned-properties
-    --      discipline): the resource erasure does NOT redact edge-owned property VALUES' keys in
-    --      place — the fold event (`relationship_folded`, one per edge, emitted by the act under
-    --      its correlation id) carries the fold to the properties through the incumbent
-    --      _project_relationship_folded. No separate pass here: the fold is the edge's own
-    --      lifecycle event, and step (9b)'s resource-owned surface is the only surface this body
-    --      sentinels in place.
+    -- (9d) Edge-owned properties: keys AND values sentineled, the (9b) pass applied per edge
+    --      (D2 step 9; D4 "numbered per edge … whoever authored them", goal §8). Every edge with R
+    --      at either end — live or already folded — and every kb_edges-owned row of it, whoever
+    --      asserted it: keys map erased-key-<n> numbered WITHIN EACH EDGE by the same
+    --      ledger-identity order (_resource_erasure_key_numbers), values '"erased"'::jsonb, every
+    --      row folded (the same uq_kb_properties_active collision reason as (9b)), last_event_id
+    --      the erasure event. It runs after the act's relationship_folded events, whose projector
+    --      has already folded the live edges' rows; the fold only folds, so the key and value
+    --      text are this pass's to replace.
+    UPDATE kb_properties p
+       SET property_key   = 'erased-key-' || k.n::text,
+           property_value = '"erased"'::jsonb,
+           is_folded      = true,
+           last_event_id  = COALESCE(p_event, p.last_event_id)
+      FROM kb_edges e
+     CROSS JOIN LATERAL _resource_erasure_key_numbers('kb_edges', e.id) k
+     WHERE ((e.source_table = 'kb_resources' AND e.source_id = p_resource)
+         OR (e.target_table = 'kb_resources' AND e.target_id = p_resource))
+       AND p.owner_table = 'kb_edges' AND p.owner_id = e.id
+       AND p.property_key = k.property_key;
 
     -- (9e) The remote-source re-pointing (D4). Every remote provenance row of R's blocks
     --      re-points to the sentinel row replay's redacted incorporated[*].source.value upserts:
@@ -688,7 +696,8 @@ header_path, block revision bytes, embeddings+embedded_with, search vector, data
 ({}::jsonb, EVERY artifact of the resource whatever its kind owner, intent or supersession — ruled
 2026-09-28), citation-audit projected reasons, formation watermark nulls, workflow-job scoping, and
 the projection-side sentinels (husk title/origin_uri, property keys erased-key-<n> by ledger order
-of first appearance, values ''erased''::jsonb, edge labels NULL, remote-source re-pointing to the
+of first appearance — the resource''s, and each touching edge''s numbered per edge whoever authored
+them — values ''erased''::jsonb, edge labels NULL, remote-source re-pointing to the
 sentinel rows replay mints). ROW-ANCHORED: every join is on resource id, never a content hash —
 another resource''s byte-identical content is NEVER reached (the custody-never-bytes ruling), and
 no hash enters kb_erased_content from this body. Cut 1 (2026-09-29): scope is p_blocks, and only NULL (the whole resource) is accepted — a
@@ -818,6 +827,44 @@ in ledger order of first appearance (first contributing event''s occurred_at and
 element''s seq, the element''s position in that event''s per-type list); shared is true when
 another resource''s block also cites source_id. The ONE capture: the redaction body''s step (9e)
 re-points and deletes from it, and the survey plan names shared sources by id and counts from it.';
+
+-- ---------------------------------------------------------------------------
+-- Section 0d. The property-key sentinel numbering (D4): one row per distinct
+-- original key an owner's property rows carry (live and folded), with n for its
+-- sentinel erased-key-<n>. The redaction body's steps (9b) (the resource) and
+-- (9d) (each edge touching it) both read it; n is computed here and nowhere else.
+--
+-- n numbers the owner's keys in ledger order of first appearance: the
+-- first-asserting event's occurred_at, then that event's id. Every property
+-- event names exactly one key — _project_property_set and
+-- _project_property_asserted insert rows of p_payload->>'property_key' only,
+-- and _project_resource_created / _project_cogmap_seeded insert only doc_type —
+-- so two distinct keys of one owner never share a first-asserting event and the
+-- pair is total. Keys asserted in one transaction share occurred_at; the event
+-- id decides between them. The key text is never an ordering term.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION _resource_erasure_key_numbers(p_owner_table text, p_owner_id uuid)
+RETURNS TABLE (property_key text, n integer)
+LANGUAGE sql STABLE AS $$
+    WITH first_appearance AS (
+        SELECT DISTINCT ON (p.property_key)
+               p.property_key, ev.occurred_at, ev.id AS event_id
+          FROM kb_properties p
+          JOIN kb_events ev ON ev.id = p.asserted_by_event_id
+         WHERE p.owner_table = p_owner_table AND p.owner_id = p_owner_id
+         ORDER BY p.property_key, ev.occurred_at, ev.id
+    )
+    SELECT f.property_key,
+           (row_number() OVER (ORDER BY f.occurred_at, f.event_id))::integer
+      FROM first_appearance f;
+$$;
+
+COMMENT ON FUNCTION _resource_erasure_key_numbers(text, uuid) IS
+'The property-key sentinel numbering (spec 2026-09-28 D4): one row per distinct original key the
+owner''s kb_properties rows carry, live and folded, with n for erased-key-<n>, in ledger order of
+first appearance (the first-asserting event''s occurred_at, then its id; never the key text). The
+ONE definition: the redaction body''s step (9b) numbers the resource with it and step (9d) numbers
+each edge touching the resource with it.';
 
 -- ---------------------------------------------------------------------------
 -- Section 1. THE shared computation (D10): blocks, revisions, chunks, artifacts,
@@ -1322,7 +1369,8 @@ row-anchored redaction body (_resource_erasure_apply_redaction — chunk prose +
 revision bytes, embeddings+embedded_with, search vector, data artifact content emptied to
 ''{}''::jsonb for EVERY artifact of the resource, projected citation-audit reasons, formation
 watermark nulls, workflow-job scoping, and the projection-side sentinels: husk title/origin_uri
-''erased-<id>''/''erased:<id>'', property keys erased-key-<n> by ledger order of first appearance,
+''erased-<id>''/''erased:<id>'', property keys erased-key-<n> by ledger order of first appearance
+(_resource_erasure_key_numbers — the resource''s, and each touching edge''s numbered per edge),
 property values erased::jsonb, edge labels NULL, remote-source re-pointing to the sentinel
 rows replay mints — ROW-ANCHORED on resource id, never a content hash; another resource''s
 byte-identical content is never reached, and NO hash enters kb_erased_content) and the ONE
