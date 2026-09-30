@@ -546,6 +546,33 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
     )
     .fetch_all(pool)
     .await?;
+    // The resource erasure act's deferral (spec 2026-09-28, D14: "the replay arm for
+    // `resource_erased` applies the body only after every event that shares the act's
+    // correlation id, so the act's own folds are in place whichever order they sort in").
+    // Event ids come from `uuid_generate_v7()`, which on PG17/Neon has no order within a
+    // millisecond, so the act's `relationship_folded` events can sort AFTER its
+    // `resource_erased`. For each erasure, `apply_after` is the greatest walk-order id among the
+    // events sharing its correlation id; the body runs once the walk has projected that event.
+    // An erasure that is itself the greatest (or carries no correlation) applies at its own
+    // position. The known limit: an UNRELATED transaction's event that sorts inside the act's
+    // correlated span is projected before the body. That can only diverge for an event touching
+    // R, which the D13 write guard makes impossible after the act.
+    let apply_after: HashMap<Uuid, Uuid> = sqlx::query!(
+        r#"SELECT er.id,
+                  (SELECT s.id FROM kb_events s
+                    WHERE s.correlation_id = er.correlation_id
+                    ORDER BY s.id DESC LIMIT 1) AS "apply_after!"
+             FROM kb_events er JOIN kb_event_types et ON et.id = er.event_type_id
+            WHERE et.name = 'resource_erased' AND er.correlation_id IS NOT NULL"#
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .filter(|r| r.apply_after != r.id)
+    .map(|r| (r.id, r.apply_after))
+    .collect();
+    // Deferred applications, keyed by the event after which they run: (subject, erasure event).
+    let mut pending: HashMap<Uuid, Vec<(Uuid, Uuid)>> = HashMap::new();
     for r in events {
         let id: Uuid = r.get(0);
         let name: String = r.get(1);
@@ -942,40 +969,29 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // 2b, migration 20260929040730): its arm follows.
             | EventKind::ResourceErasureRefused
             | EventKind::BlockHistoryScrubbed => {}
-            // The act's completion (spec 2026-09-28, D2/D12). "Apply at the event's position",
-            // the PrincipalErased arm's reconciliation: the walk is ORDER BY e.id, so a trailing
-            // pass would wrongly redact what later events lawfully wrote. The set here needs no
-            // read-ahead scan — the payload names the resource, and the redaction body joins the
-            // projection by THAT id, so the idempotent call at the event's position reproduces
+            // The act's completion (spec 2026-09-28, D2/D12/D14). The body applies at the END of
+            // the act's correlated span, not at this event's position: after the last event
+            // sharing its correlation id (`apply_after`, above the walk), so the act's own folds
+            // are projected first whichever order their ids sort in (D14). An erasure that is
+            // already the last of its span applies here. Either way it is not a trailing pass
+            // over the whole ledger, which would wrongly redact what later events lawfully wrote.
+            // The set needs no read-ahead scan — the payload names the resource, and the
+            // redaction body joins the projection by THAT id, so the idempotent call reproduces
             // exactly what the live act left (the step-9 sentinels are the load-bearing half
             // before cut 2; the content empties are belt-and-braces idempotent no-ops against
-            // the snapshot's post-erasure sidecars). It calls THE ONE definition — re-implement
-            // any of it here and there are two erasures that drift.
+            // the snapshot's post-erasure sidecars). The call carries the ERASURE event's id,
+            // deferred or not: its `occurred_at` stamps the husk. It calls THE ONE definition —
+            // re-implement any of it here and there are two erasures that drift.
             EventKind::ResourceErased => {
-                // "Apply at the event's position", the PrincipalErased arm's reconciliation:
-                // the walk is ORDER BY e.id, so a trailing pass would wrongly redact what later
-                // events lawfully wrote. The set here needs no read-ahead scan — the payload
-                // names the resource, and the redaction body joins the projection by THAT id,
-                // so the idempotent call at the event's position reproduces exactly what the
-                // live act left (the sentinels in step 9 are the load-bearing half before cut
-                // 2; the content empties are belt-and-braces idempotent no-ops against the
-                // snapshot's post-erasure sidecars). It calls THE ONE definition — re-implement
-                // any of it here and there are two erasures that drift.
                 let subject: Uuid = payload["subject_id"]
                     .as_str()
                     .context("resource_erased payload missing subject_id")?
                     .parse()
                     .context("resource_erased subject_id is not a uuid")?;
-                // Macro form, like the PrincipalErased arm: a fixed function call with bound
-                // parameters — the audit's `dynamic-table` reason does not cover it, so it
-                // converts and gains a `.sqlx` entry.
-                sqlx::query!(
-                    "SELECT _resource_erasure_apply_redaction($1,$2)",
-                    subject,
-                    id
-                )
-                .fetch_one(pool)
-                .await?;
+                match apply_after.get(&id) {
+                    Some(after) => pending.entry(*after).or_default().push((subject, id)),
+                    None => apply_resource_erasure(pool, subject, id).await?,
+                }
             }
             // A received webhook (S2 chunk B) touches no _project_* cognition half: intake appends
             // the event and projects delivery rows in Rust, in the same transaction. Without this
@@ -1009,8 +1025,27 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .await?;
             }
         }
+        // An erasure deferred to this event (D14, see `apply_after`) applies now, after it.
+        for (subject, erasure) in pending.remove(&id).unwrap_or_default() {
+            apply_resource_erasure(pool, subject, erasure).await?;
+        }
     }
     restore_table(pool, "kb_team_cogmaps", &snap.team_cogmaps).await?;
+    Ok(())
+}
+
+/// The resource erasure body at replay: THE ONE redaction definition, called with the
+/// `resource_erased` event's id. Macro form, like the PrincipalErased arm: a fixed function call
+/// with bound parameters — the audit's `dynamic-table` reason does not cover it, so it converts
+/// and gains a `.sqlx` entry.
+async fn apply_resource_erasure(pool: &PgPool, subject: Uuid, erasure: Uuid) -> Result<()> {
+    sqlx::query!(
+        "SELECT _resource_erasure_apply_redaction($1,$2)",
+        subject,
+        erasure
+    )
+    .fetch_one(pool)
+    .await?;
     Ok(())
 }
 

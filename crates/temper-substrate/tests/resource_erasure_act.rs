@@ -27,6 +27,9 @@
 //!     the act wait and is erased; a property set arriving while the act holds R's row refuses;
 //!     the embed write-back after the act writes nothing and the drain finds nothing stale on
 //!     the husk; replay byte-identical after each race.
+//!   * **21** — replay does not depend on intra-transaction order (D14): with the act's
+//!     `resource_erased` sorted BEFORE its folds over two live R→T edges that differ only by
+//!     label, replay completes byte-identical.
 //!   * **22** — the remote-source re-point holds (D4): two sources at one seq in one event get
 //!     distinct `erased:<block_id>:<n>` sentinels; a pre-minted look-alike sentinel does not stop
 //!     the re-point; a block citing its own sentinel literal still erases; a concurrent citer
@@ -2903,4 +2906,151 @@ async fn the_record_attests_every_target_and_repeats_nothing(pool: sqlx::PgPool)
             "the resource_erased payload repeats {planted:?}: {text}"
         );
     }
+}
+
+/// (21) Replay does not depend on intra-transaction order (D14). The production-shaped ledger,
+/// built directly: R with two LIVE edges to one target, one kind, one home, different labels (the
+/// body's label NULL collides on `uq_kb_edges_assertion` while both are live). The act's events
+/// are appended with the erasure FIRST — `resource_erased`, then one `relationship_folded` per
+/// edge, all under one correlation id, in one transaction — so on local PG18 (native `uuidv7()`,
+/// monotonic per backend) the erasure's id sorts below its folds: exactly the inversion
+/// PG17/Neon's unordered-within-a-millisecond ids produce. Each fold projects the way
+/// `resource_erasure_execute` projects it, then the body runs with the erasure's id. Replay walks
+/// `ORDER BY e.id`, meets the erasure before either fold, and must still complete byte-identical.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "inverted-home").await;
+    let mut resources = Vec::new();
+    for (title, uri) in [("R", "test://inverted-r"), ("T", "test://inverted-t")] {
+        resources.push(
+            writes::create_resource_with(
+                &pool,
+                CreateParams {
+                    idempotency_key: None,
+                    title,
+                    origin_uri: uri,
+                    body: "body",
+                    doc_type: "research",
+                    home: AnchorRef::context(home),
+                    owner,
+                    originator: owner,
+                    emitter,
+                    properties: &[],
+                    chunks: None,
+                    sources: vec![],
+                },
+                EventContext::default(),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let (r, t) = (resources[0], resources[1]);
+    let mut edges = Vec::new();
+    for label in ["first label", "second label"] {
+        edges.push(
+            writes::assert_relationship(
+                &pool,
+                AssertParams {
+                    src: r,
+                    tgt: t,
+                    kind: EdgeKind::LeadsTo,
+                    polarity: EdgePolarity::Forward,
+                    label: Some(label),
+                    weight: 1.0,
+                    home,
+                    emitter,
+                },
+            )
+            .await
+            .unwrap()
+            .uuid(),
+        );
+    }
+
+    // The act's events, erasure first, one transaction (one backend), one correlation id.
+    let correlation = Uuid::now_v7();
+    let mut tx = pool.begin().await.unwrap();
+    let erasure: Uuid = sqlx::query_scalar(
+        "SELECT _event_append('resource_erased', $1, NULL, NULL, $2, \
+                              p_references => $3, p_correlation => $4)",
+    )
+    .bind(emitter)
+    .bind(serde_json::json!({
+        "subject_table": "kb_resources",
+        "subject_id": r.uuid(),
+        "actor": emitter,
+        "redacted_fields": [],
+        "folded_edges": edges,
+        "targets": [],
+        "remainder": [],
+        "ledger_remainder": [],
+        "propagated_to_clients": false,
+    }))
+    .bind(serde_json::json!([
+        {"rel": "subject", "target": {"kind": "kb_resources", "id": r.uuid()}},
+        {"rel": "request", "target": {"kind": "kb_events", "id": correlation}},
+    ]))
+    .bind(correlation)
+    .fetch_one(&mut *tx)
+    .await
+    .expect("append the erasure first");
+    for edge in &edges {
+        let payload = serde_json::json!({"edge_id": edge, "reason": "resource_erased"});
+        let fold: Uuid = sqlx::query_scalar(
+            "SELECT _event_append('relationship_folded', $1, 'kb_contexts', $2, $3, \
+                                  p_correlation => $4)",
+        )
+        .bind(emitter)
+        .bind(home)
+        .bind(&payload)
+        .bind(correlation)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("append the fold after the erasure");
+        sqlx::query("SELECT _project_relationship_folded($1, $2)")
+            .bind(fold)
+            .bind(&payload)
+            .execute(&mut *tx)
+            .await
+            .expect("project the fold as the act does");
+    }
+    sqlx::query("SELECT _resource_erasure_apply_redaction($1, $2)")
+        .bind(r.uuid())
+        .bind(erasure)
+        .execute(&mut *tx)
+        .await
+        .expect("the body runs with both edges folded");
+    tx.commit().await.unwrap();
+
+    // The precondition that makes this witness bite: the erasure sorts BELOW both of its folds,
+    // so the walk meets it first.
+    let folds_after: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'relationship_folded' AND e.correlation_id = $1 AND e.id > $2",
+    )
+    .bind(correlation)
+    .bind(erasure)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        folds_after, 2,
+        "both folds must sort after the erasure, or this ledger is not the inverted one"
+    );
+    let ended: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_edges WHERE id = ANY($1) AND is_folded AND label IS NULL",
+    )
+    .bind(&edges)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(ended, 2, "both edges end folded with their label gone");
+
+    assert_replay_byte_identical(&pool, "with the erasure sorted before its folds").await;
 }
