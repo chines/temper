@@ -38,11 +38,17 @@ pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(",")
         );
-        sqlx::query("UPDATE kb_chunks SET embedding = $1::vector WHERE id = $2")
-            .bind(vec_lit)
-            .bind(chunk_id)
-            .execute(pool)
-            .await?;
+        // The write guard (spec 2026-09-28 D13), as for `CHUNK_EMBEDDING_WRITE_BACK`.
+        sqlx::query(
+            "UPDATE kb_chunks SET embedding = $1::vector WHERE id = $2 \
+             AND EXISTS (SELECT 1 FROM kb_resources r \
+                          WHERE r.id = kb_chunks.resource_id AND r.erased_at IS NULL \
+                          FOR KEY SHARE)",
+        )
+        .bind(vec_lit)
+        .bind(chunk_id)
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }
@@ -103,8 +109,16 @@ pub const ERASED_HASH_EXCLUSION: &str = "NOT EXISTS ( \
 /// the new generation current and the old non-current, so a job — whenever it runs — only ever embeds
 /// the resource's *live* chunks.
 ///
-/// The erased-content exclusion at the end is [`ERASED_HASH_EXCLUSION`], interpolated by
+/// The erased-content exclusion near the end is [`ERASED_HASH_EXCLUSION`], interpolated by
 /// consumers and pinned here by test; see that const for why exclusion, not loop-skip.
+///
+/// The last clause excludes every chunk of an **erased resource** (`erased_at IS NOT NULL`, spec
+/// 2026-09-28 D13) — the same exclusion-not-skip reasoning. The resource-erasure act empties the
+/// chunks and nulls `embedded_with` but enters no hash in `kb_erased_content`, and the drain's
+/// write-backs refuse an erased resource ([`CHUNK_EMBEDDING_WRITE_BACK`] and the blank stamp).
+/// Without this clause those chunks would stay stale and unstampable forever: a job in flight
+/// across the act would report `remaining > 0` and re-enqueue every tick. With it, the husk's
+/// chunks are not work, and that job reports `remaining = 0` and completes.
 pub const STALE_CHUNK_PREDICATE: &str = "ch.is_current \
      AND NOT b.is_folded \
      AND ch.embedded_with IS DISTINCT FROM $2 \
@@ -112,7 +126,10 @@ pub const STALE_CHUNK_PREDICATE: &str = "ch.is_current \
          SELECT 1 FROM kb_erased_content ec \
           JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
            AND cc.content = '' \
-          WHERE ec.content_hash = ch.content_hash)";
+          WHERE ec.content_hash = ch.content_hash) \
+     AND NOT EXISTS ( \
+         SELECT 1 FROM kb_resources er \
+          WHERE er.id = ch.resource_id AND er.erased_at IS NOT NULL)";
 
 // STALE_CHUNK_PREDICATE cannot itself interpolate the exclusion const (`const &str` has no
 // concatenation), so its inline copy is pinned to the const by the test below — the pin is
@@ -130,6 +147,20 @@ mod predicate_pins {
         );
     }
 }
+
+/// The drain's vector write-back: the vector and its `embedded_with` provenance, together, for one
+/// chunk — **guarded against erasure** (spec 2026-09-28 D13). The drain computes a vector from prose
+/// it read before the inference; if the resource-erasure act commits in between, an unguarded
+/// write-back would put a vector computed from erased prose onto the husk the act just nulled. The
+/// `EXISTS … FOR KEY SHARE` re-reads the resource row under a lock that conflicts only with the
+/// act's `FOR UPDATE`: a write-back that races the act waits for it, then writes nothing.
+///
+/// A const so the erasure witness runs this exact statement.
+pub const CHUNK_EMBEDDING_WRITE_BACK: &str =
+    "UPDATE kb_chunks SET embedding = $1::vector, embedded_with = $2 WHERE id = $3 \
+     AND EXISTS (SELECT 1 FROM kb_resources r \
+                  WHERE r.id = kb_chunks.resource_id AND r.erased_at IS NULL \
+                  FOR KEY SHARE)";
 
 /// Default chunk allowance for ONE dispatch invocation — **not** per resource.
 ///
@@ -237,8 +268,12 @@ pub async fn embed_resource_chunks(
     }
 
     if !blank.is_empty() {
+        // The write guard (spec 2026-09-28 D13), as for `CHUNK_EMBEDDING_WRITE_BACK`.
         sqlx::query!(
-            "UPDATE kb_chunks SET embedded_with = $1 WHERE id = ANY($2)",
+            "UPDATE kb_chunks SET embedded_with = $1 WHERE id = ANY($2) \
+             AND EXISTS (SELECT 1 FROM kb_resources r \
+                          WHERE r.id = kb_chunks.resource_id AND r.erased_at IS NULL \
+                          FOR KEY SHARE)",
             model,
             &blank,
         )
@@ -279,15 +314,16 @@ pub async fn embed_resource_chunks(
             );
             // Vector and provenance are written together, always. Writing the vector without the stamp
             // would leave the chunk permanently stale and re-embedded on every tick forever.
-            sqlx::query(
-                "UPDATE kb_chunks SET embedding = $1::vector, embedded_with = $2 WHERE id = $3",
-            )
-            .bind(vec_lit)
-            .bind(model)
-            .bind(chunk_id)
-            .execute(pool)
-            .await?;
-            embedded += 1;
+            // Counted only when the row was written: a write-back the erasure guard refused
+            // embedded nothing.
+            let written = sqlx::query(CHUNK_EMBEDDING_WRITE_BACK)
+                .bind(vec_lit)
+                .bind(model)
+                .bind(chunk_id)
+                .execute(pool)
+                .await?
+                .rows_affected();
+            embedded += written;
         }
     }
 
