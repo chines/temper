@@ -118,10 +118,10 @@ pub async fn list(
 /// Create a subscription. The two-leg gate runs before the INSERT; a rejected create writes
 /// nothing.
 ///
-/// The selector is deserialized into a `temper_core::types::subscription::SubscriptionSelector`
-/// before storage, so an unknown `kind` or a malformed payload is a 400, not a silent untyped
-/// JSON write. The typed selector is then re-serialized to JSONB for storage — the column is the
-/// storage, the enum is the shape.
+/// The selector arrives typed (`temper_core::types::subscription::SubscriptionSelector`), so an
+/// unknown `kind` or a malformed payload is refused by the HTTP surface's JSON extractor (a 422)
+/// before this runs — never a silent untyped JSON write. The typed selector is re-serialized to
+/// JSONB for storage — the column is the storage, the enum is the shape.
 pub async fn create(
     pool: &PgPool,
     authed: &AuthenticatedProfile,

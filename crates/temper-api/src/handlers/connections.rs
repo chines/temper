@@ -1,6 +1,6 @@
 //! Connections — temper's authed link to a remote system (S1 of "external systems as subscribed
-//! emitters"). Out of the OpenAPI contract (plain `.route()` mounting), like
-//! `/api/machine-clients` and `/api/access/admin/*`: this is an admin surface, not a public one.
+//! emitters"), documented under the `Connections` tag. Not admin-only: a team owner manages the
+//! connections their team owns, so the family stays in `gated_routes`, apart from the admin group.
 //!
 //! **Authorization lives in the service, not here** — `connection_service` calls
 //! `machine_authz::authorize` (a system admin, or the OWNER of the connection's owning team;
@@ -18,19 +18,37 @@ use temper_core::types::connection::{
     AttachCredentialResponse, Connection, ConnectionCredential, GrantConnectionReachRequest,
     ProvisionConnectionRequest, SetToolManifestRequest, SetWebhookEventsRequest,
 };
-use temper_services::error::ApiResult;
+use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::connection_service;
 use temper_services::state::AppState;
 
 use crate::middleware::auth::AuthUser;
 
 /// Query flags for `GET /api/connections`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct ListQuery {
+    /// Include revoked connections. Default `false`.
     #[serde(default)]
     pub include_revoked: bool,
 }
 
+#[utoipa::path(
+    post,
+    operation_id = "provision_connection",
+    summary = "Provision a connection",
+    description = "Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.",
+    path = "/api/connections",
+    tag = "Connections",
+    request_body = ProvisionConnectionRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The provisioned connection", body = Connection),
+        (status = 400, description = "`provider` or `name` is empty, or `name` has no characters usable in a slug", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 409, description = "No free slug could be derived from `name`", body = ErrorBody),
+    )
+)]
 pub async fn provision(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -40,6 +58,21 @@ pub async fn provision(
     Ok(Json(connection))
 }
 
+#[utoipa::path(
+    get,
+    operation_id = "list_connections",
+    summary = "List connections",
+    description = "Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.",
+    path = "/api/connections",
+    tag = "Connections",
+    params(ListQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The connections visible to the caller", body = Vec<Connection>),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -50,6 +83,22 @@ pub async fn list(
     ))
 }
 
+#[utoipa::path(
+    get,
+    operation_id = "get_connection",
+    summary = "Get a connection",
+    description = "Returns one connection. Requires a system admin or the owner of the connection's owning team.",
+    path = "/api/connections/{id}",
+    tag = "Connections",
+    params(("id" = Uuid, Path, description = "Connection ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The connection", body = Connection),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such connection", body = ErrorBody),
+    )
+)]
 pub async fn get(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -60,6 +109,22 @@ pub async fn get(
     ))
 }
 
+#[utoipa::path(
+    delete,
+    operation_id = "revoke_connection",
+    summary = "Revoke a connection",
+    description = "Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team.",
+    path = "/api/connections/{id}",
+    tag = "Connections",
+    params(("id" = Uuid, Path, description = "Connection ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The revoked connection", body = Connection),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such connection", body = ErrorBody),
+    )
+)]
 pub async fn revoke(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -72,6 +137,25 @@ pub async fn revoke(
 
 /// Attach the credential — what flips `needs_credential` off. The body carries no secret: it names
 /// a broker and a connector that broker holds the secret for.
+#[utoipa::path(
+    post,
+    operation_id = "attach_connection_credential",
+    summary = "Attach a connection credential",
+    description = "Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent or an unconfigured broker is reported in `verification.note`. Requires a system admin or the owner of the connection's owning team.",
+    path = "/api/connections/{id}/credential",
+    tag = "Connections",
+    params(("id" = Uuid, Path, description = "Connection ID")),
+    request_body = ConnectionCredential,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The updated connection and the verification result", body = AttachCredentialResponse),
+        (status = 400, description = "`broker` or `connector` is empty, or the broker rejected the connector", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such connection", body = ErrorBody),
+        (status = 409, description = "The connection is revoked", body = ErrorBody),
+    )
+)]
 pub async fn attach_credential(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -95,6 +179,24 @@ pub async fn attach_credential(
 /// Its own endpoint rather than a field on a general update, because the two capability tiers are
 /// separately provisioned and both explicit — collapsing them into one PATCH would let a caller
 /// grant reach while believing they were only registering a webhook.
+#[utoipa::path(
+    post,
+    operation_id = "set_connection_webhook_events",
+    summary = "Set connection webhook events",
+    description = "Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team.",
+    path = "/api/connections/{id}/webhook-events",
+    tag = "Connections",
+    params(("id" = Uuid, Path, description = "Connection ID")),
+    request_body = SetWebhookEventsRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The updated connection", body = Connection),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such connection", body = ErrorBody),
+        (status = 409, description = "The connection is revoked", body = ErrorBody),
+    )
+)]
 pub async fn set_webhook_events(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -107,6 +209,24 @@ pub async fn set_webhook_events(
 }
 
 /// Declare the read-only remote tools. Non-empty ⇒ reach-capable.
+#[utoipa::path(
+    post,
+    operation_id = "set_connection_tool_manifest",
+    summary = "Set connection tool manifest",
+    description = "Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team.",
+    path = "/api/connections/{id}/tool-manifest",
+    tag = "Connections",
+    params(("id" = Uuid, Path, description = "Connection ID")),
+    request_body = SetToolManifestRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The updated connection", body = Connection),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such connection", body = ErrorBody),
+        (status = 409, description = "The connection is revoked", body = ErrorBody),
+    )
+)]
 pub async fn set_tool_manifest(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -120,6 +240,25 @@ pub async fn set_tool_manifest(
 
 /// Grant a TEAM read-reach on this connection. Owning a connection is not reaching it — this writes
 /// a `kb_access_grants` row so the named team's members inherit read on what the connection receives.
+#[utoipa::path(
+    post,
+    operation_id = "grant_connection_reach",
+    summary = "Grant a team read-reach on a connection",
+    description = "Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm.",
+    path = "/api/connections/{id}/reach",
+    tag = "Connections",
+    params(("id" = Uuid, Path, description = "Connection ID")),
+    request_body = GrantConnectionReachRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The connection, with any affirmation recorded", body = Connection),
+        (status = 400, description = "`affirm_reach` was given but the connection has no reach gap to acknowledge", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such connection, or no such receiving team", body = ErrorBody),
+        (status = 409, description = "The connection declares a remote reach that must be affirmed; resend with `affirm_reach`", body = ErrorBody),
+    )
+)]
 pub async fn grant_reach(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -133,6 +272,23 @@ pub async fn grant_reach(
 }
 
 /// Revoke a team's read-reach on this connection. Idempotent — an absent grant is a no-op.
+#[utoipa::path(
+    delete,
+    operation_id = "revoke_connection_reach",
+    summary = "Revoke a team's read-reach on a connection",
+    description = "Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed.",
+    path = "/api/connections/{id}/reach",
+    tag = "Connections",
+    params(("id" = Uuid, Path, description = "Connection ID")),
+    request_body = GrantConnectionReachRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The connection", body = Connection),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such connection", body = ErrorBody),
+    )
+)]
 pub async fn revoke_reach(
     State(state): State<AppState>,
     auth: AuthUser,

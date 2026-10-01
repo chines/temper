@@ -208,6 +208,10 @@ const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../
         (name = "Reblocking", description = "Corpus re-blocking — bounded, resumable, per-row-gated re-block steps (survey, act, re-survey)"),
         (name = "Slack Link", description = "Slack account-link disconnect — self-serve and admin"),
         (name = "Admin", description = "Operator surface — every route here requires the caller to be a system admin (the access-gate queues and standing acts, settings and governance, the profile directory, erasure, re-embed, machine-client rebind)"),
+        (name = "Admin Ledger", description = "The record of administrative acts — readable by subject (the act families the caller may read about it) or by actor (a caller's own acts; another's need a system admin)"),
+        (name = "Machine Clients", description = "Machine (client-credentials) principals — registration, issued secrets and revocation, managed by a system admin or the owner of the machine's owning team"),
+        (name = "Connections", description = "Connections to remote systems — provisioning, credential, webhook events, tool manifest and team read-reach, managed by a system admin or the owner of the connection's owning team"),
+        (name = "Subscriptions", description = "Subscriptions to a connection's events — declared and revoked by a system admin or an owner or maintainer of the authoring team"),
     ),
     info(
         title = "Temper Cloud API",
@@ -508,6 +512,29 @@ mod tests {
             assert!(
                 spec.paths.paths.contains_key(present),
                 "admin path {present} must be in the contract",
+            );
+        }
+
+        // The scoped operator families are documented as well: their gate is
+        // `is_system_admin OR <a scoped role>`, so a non-admin bearer reaches them.
+        for present in [
+            "/api/admin/ledger",
+            "/api/machine-clients",
+            "/api/machine-clients/{id}",
+            "/api/machine-clients/issue",
+            "/api/machine-clients/{id}/rotate-secret",
+            "/api/connections",
+            "/api/connections/{id}",
+            "/api/connections/{id}/credential",
+            "/api/connections/{id}/webhook-events",
+            "/api/connections/{id}/tool-manifest",
+            "/api/connections/{id}/reach",
+            "/api/subscriptions",
+            "/api/subscriptions/{id}",
+        ] {
+            assert!(
+                spec.paths.paths.contains_key(present),
+                "scoped operator path {present} must be in the contract",
             );
         }
 

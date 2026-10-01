@@ -23,6 +23,25 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **The scoped operator routes enter the OpenAPI contract: admin ledger, machine clients, connections, subscriptions**
+  The routes gated `is_system_admin OR <a scoped role>` — `GET /api/admin/ledger`, `/api/machine-clients`
+  (list, provision, get, revoke, issue, rotate-secret), `/api/connections` (list, provision, get,
+  revoke, credential, webhook-events, tool-manifest, reach grant/revoke) and `/api/subscriptions`
+  (list, create, get, revoke) — gain `#[utoipa::path]` documentation under four new tags
+  (`Admin Ledger`, `Machine Clients`, `Connections`, `Subscriptions`) and leave the
+  out-of-contract allowlist. They stay in `gated_routes`: a team owner, a team manager or the
+  actor themself reaches them, so they are not admin-only. Every existing operation and schema is
+  byte-identical; the contract only grows (20 new operations, their request/response schemas, four
+  new API classes in each generated SDK). The temper-core `Subscription` row publishes as
+  `ConnectionSubscription`, since the contract already carries the vault-config `Subscription`, and
+  `Connection` publishes as `RemoteConnection`, apart from the SDKs' own HTTP connection. No
+  route's path, method, gate, status codes or wire bytes change. Who observes: OpenAPI/SDK
+  consumers, who can now call these families with a bearer that passes their gate. User-visible:
+  no. Release relevance: signal-only.
+pr: self
+classes: additive
+surfaces: http,clients
+status: signal-only
 - **The system-admin surface enters the OpenAPI contract, isolated as its own route group**
   The routes whose only authorization is the `&SystemAdmin` proof — `/api/access/admin/*` (the
   join-request and reconsideration queues and their counts, full settings, promote/demote, the

@@ -1,9 +1,11 @@
 lib/temper/generated.rb
 lib/temper/generated/api/access_api.rb
 lib/temper/generated/api/admin_api.rb
+lib/temper/generated/api/admin_ledger_api.rb
 lib/temper/generated/api/auditor_api.rb
 lib/temper/generated/api/blobs_api.rb
 lib/temper/generated/api/cognitive_maps_api.rb
+lib/temper/generated/api/connections_api.rb
 lib/temper/generated/api/contexts_api.rb
 lib/temper/generated/api/data_artifact_shapes_api.rb
 lib/temper/generated/api/data_artifacts_api.rb
@@ -14,6 +16,7 @@ lib/temper/generated/api/health_api.rb
 lib/temper/generated/api/ingest_api.rb
 lib/temper/generated/api/invitations_api.rb
 lib/temper/generated/api/invocations_api.rb
+lib/temper/generated/api/machine_clients_api.rb
 lib/temper/generated/api/meta_api.rb
 lib/temper/generated/api/profile_api.rb
 lib/temper/generated/api/query_api.rb
@@ -24,6 +27,7 @@ lib/temper/generated/api/schema_api.rb
 lib/temper/generated/api/search_api.rb
 lib/temper/generated/api/slack_link_api.rb
 lib/temper/generated/api/steward_api.rb
+lib/temper/generated/api/subscriptions_api.rb
 lib/temper/generated/api/teams_api.rb
 lib/temper/generated/api_client.rb
 lib/temper/generated/api_error.rb
@@ -39,6 +43,8 @@ lib/temper/generated/models/actor_authority.rb
 lib/temper/generated/models/add_member_request.rb
 lib/temper/generated/models/admin_directory_entry.rb
 lib/temper/generated/models/admin_directory_list_response.rb
+lib/temper/generated/models/admin_ledger_entry.rb
+lib/temper/generated/models/admin_ledger_response.rb
 lib/temper/generated/models/admin_open_join_request.rb
 lib/temper/generated/models/admin_open_review_request.rb
 lib/temper/generated/models/admin_profile_auth_link.rb
@@ -65,6 +71,7 @@ lib/temper/generated/models/atlas_entry.rb
 lib/temper/generated/models/atlas_home.rb
 lib/temper/generated/models/atlas_node.rb
 lib/temper/generated/models/atlas_subgraph.rb
+lib/temper/generated/models/attach_credential_response.rb
 lib/temper/generated/models/audit_citation.rb
 lib/temper/generated/models/audit_sweep_row.rb
 lib/temper/generated/models/auditor_dispatch_tick_request.rb
@@ -129,6 +136,8 @@ lib/temper/generated/models/combine_op.rb
 lib/temper/generated/models/composition.rb
 lib/temper/generated/models/composition_trace.rb
 lib/temper/generated/models/confidence_band.rb
+lib/temper/generated/models/connection_credential.rb
+lib/temper/generated/models/connection_subscription.rb
 lib/temper/generated/models/content_response.rb
 lib/temper/generated/models/context_create_request.rb
 lib/temper/generated/models/context_owner_ref.rb
@@ -142,6 +151,8 @@ lib/temper/generated/models/create_cogmap_request.rb
 lib/temper/generated/models/create_invitation_request.rb
 lib/temper/generated/models/create_request_body.rb
 lib/temper/generated/models/create_review_body.rb
+lib/temper/generated/models/create_subscription_request.rb
+lib/temper/generated/models/credential_verification.rb
 lib/temper/generated/models/deactivated.rb
 lib/temper/generated/models/delete_response.rb
 lib/temper/generated/models/demote_admin_request.rb
@@ -188,7 +199,9 @@ lib/temper/generated/models/facet_retract_ack.rb
 lib/temper/generated/models/facet_set_request.rb
 lib/temper/generated/models/finalize_payload.rb
 lib/temper/generated/models/fold_relationship_request.rb
+lib/temper/generated/models/grant_connection_reach_request.rb
 lib/temper/generated/models/grant_outcome.rb
+lib/temper/generated/models/grant_spec.rb
 lib/temper/generated/models/graph_edge_row.rb
 lib/temper/generated/models/group_key_meta.rb
 lib/temper/generated/models/health_response.rb
@@ -221,12 +234,18 @@ lib/temper/generated/models/invocation_act_row.rb
 lib/temper/generated/models/invocation_close_ack.rb
 lib/temper/generated/models/invocation_summary.rb
 lib/temper/generated/models/invocation_view.rb
+lib/temper/generated/models/issue_machine_request.rb
+lib/temper/generated/models/issued_machine_credential.rb
 lib/temper/generated/models/join_request.rb
 lib/temper/generated/models/join_request_status.rb
 lib/temper/generated/models/join_request_with_profile.rb
 lib/temper/generated/models/kind_owner_input.rb
 lib/temper/generated/models/kind_owner_input_one_of.rb
 lib/temper/generated/models/kind_owner_input_one_of1.rb
+lib/temper/generated/models/ledger_ref.rb
+lib/temper/generated/models/ledger_ref_kind.rb
+lib/temper/generated/models/ledger_ref_rel.rb
+lib/temper/generated/models/ledger_ref_target.rb
 lib/temper/generated/models/lineage_node.rb
 lib/temper/generated/models/machine_client.rb
 lib/temper/generated/models/managed_meta.rb
@@ -265,6 +284,8 @@ lib/temper/generated/models/provenance_source.rb
 lib/temper/generated/models/provenance_source_one_of.rb
 lib/temper/generated/models/provenance_source_one_of1.rb
 lib/temper/generated/models/provenance_source_one_of2.rb
+lib/temper/generated/models/provision_connection_request.rb
+lib/temper/generated/models/provision_machine_request.rb
 lib/temper/generated/models/public_system_settings.rb
 lib/temper/generated/models/quantity_scale.rb
 lib/temper/generated/models/quantity_scale_one_of.rb
@@ -311,6 +332,7 @@ lib/temper/generated/models/region_disclosure.rb
 lib/temper/generated/models/region_hit.rb
 lib/temper/generated/models/relationship_ack.rb
 lib/temper/generated/models/relationship_target.rb
+lib/temper/generated/models/remote_connection.rb
 lib/temper/generated/models/remove_member_outcome.rb
 lib/temper/generated/models/rename_context_outcome.rb
 lib/temper/generated/models/rename_context_request.rb
@@ -353,6 +375,7 @@ lib/temper/generated/models/revoke_outcome.rb
 lib/temper/generated/models/revoke_principal_body.rb
 lib/temper/generated/models/revoked.rb
 lib/temper/generated/models/reweight_relationship_request.rb
+lib/temper/generated/models/rotate_secret_request.rb
 lib/temper/generated/models/score_kind.rb
 lib/temper/generated/models/scoring.rb
 lib/temper/generated/models/search_params.rb
@@ -364,6 +387,8 @@ lib/temper/generated/models/search_scope_info.rb
 lib/temper/generated/models/segment_info.rb
 lib/temper/generated/models/segmented_begin.rb
 lib/temper/generated/models/segmented_begin_response.rb
+lib/temper/generated/models/set_tool_manifest_request.rb
+lib/temper/generated/models/set_webhook_events_request.rb
 lib/temper/generated/models/shape_declare_request.rb
 lib/temper/generated/models/shape_emptiness.rb
 lib/temper/generated/models/shape_view.rb
@@ -390,6 +415,10 @@ lib/temper/generated/models/standing.rb
 lib/temper/generated/models/standing_shape.rb
 lib/temper/generated/models/subscription.rb
 lib/temper/generated/models/subscription_override.rb
+lib/temper/generated/models/subscription_selector.rb
+lib/temper/generated/models/subscription_selector_one_of.rb
+lib/temper/generated/models/subscription_selector_one_of1.rb
+lib/temper/generated/models/subscription_selector_one_of2.rb
 lib/temper/generated/models/system_access_details.rb
 lib/temper/generated/models/system_settings.rb
 lib/temper/generated/models/team_create_request.rb
@@ -400,6 +429,7 @@ lib/temper/generated/models/team_member_row.rb
 lib/temper/generated/models/team_member_source.rb
 lib/temper/generated/models/team_role.rb
 lib/temper/generated/models/team_row.rb
+lib/temper/generated/models/team_spec.rb
 lib/temper/generated/models/team_update_request.rb
 lib/temper/generated/models/territory.rb
 lib/temper/generated/models/territory_kind.rb

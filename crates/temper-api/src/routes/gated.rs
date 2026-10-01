@@ -13,8 +13,6 @@ use crate::handlers;
 use temper_services::state::AppState;
 
 pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
-    use axum::routing::{get, post};
-
     OpenApiRouter::new()
         .routes(routes!(
             handlers::resources::list,
@@ -193,20 +191,15 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::schema::describe_open_meta))
         .routes(routes!(handlers::search::search))
         .merge(super::query::query_routes())
-        // The admin ledger's read surface — plain `.route()` and OUT of the OpenAPI contract.
-        // Not in the admin group despite its path: `list_by_actor` is self-gating (an actor reads
-        // their own acts) and `list_by_subject` dispatches per act family, so a non-admin can be
-        // answered. Authorization is in `admin_ledger_service`, which gates per act family rather
-        // than with a prelude, and denies with 404 so a refusal discloses nothing about the
-        // subject.
-        .route("/api/admin/ledger", get(handlers::admin_ledger::list))
-        // Machine-principal registration (G3 Phase A). Mounted with plain `.route()`, so it stays
-        // OUT of the OpenAPI contract. Its paths are allowlisted in
-        // `.github/scripts/check-openapi-routes.sh`.
-        //
-        // NOT admin-only. The gate is
-        // `is_system_admin OR owner of the machine's owning team` (`machine_authz::authorize`),
-        // so any authenticated profile that owns any team can reach `provision`, `issue`, and
+        // The admin ledger's read surface. Not in the admin group despite its path:
+        // `list_by_actor` is self-gating (an actor reads their own acts) and `list_by_subject`
+        // dispatches per act family, so a non-admin can be answered. Authorization is in
+        // `admin_ledger_service`, which gates per act family rather than with a prelude, and
+        // denies with 404 so a refusal discloses nothing about the subject.
+        .routes(routes!(handlers::admin_ledger::list))
+        // Machine-principal registration (G3 Phase A). NOT admin-only: the gate is
+        // `is_system_admin OR owner of the machine's owning team` (`machine_authz::authorize`), so
+        // any authenticated profile that owns any team can reach `provision`, `issue`, and
         // `apply_reach`. Only `rebind` is admin-only (`machine_registration_service::rebind`), and
         // it is mounted by the admin group (`admin.rs`), not here.
         //
@@ -216,66 +209,120 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         // excludes is an operational setting an instance can change at any time, so the service
         // check is the only guarantee that does not move. Do not relax it on the strength of a
         // configuration value read at some past moment.
-        .route(
-            "/api/machine-clients",
-            get(handlers::machine_clients::list).post(handlers::machine_clients::provision),
-        )
-        .route(
-            "/api/machine-clients/{id}",
-            get(handlers::machine_clients::get).delete(handlers::machine_clients::revoke),
-        )
-        .route(
-            "/api/machine-clients/issue",
-            post(handlers::machine_clients::issue),
-        )
-        .route(
-            "/api/machine-clients/{id}/rotate-secret",
-            post(handlers::machine_clients::rotate_secret),
-        )
-        // Operator-only connection provisioning (external systems as subscribed emitters, S1).
-        // Same shape as machine-clients above and for the same reasons: plain `.route()`, out of
-        // the OpenAPI contract, allowlisted in `.github/scripts/check-openapi-routes.sh`, and
-        // gated inside the service (`machine_authz::authorize`, verbatim — a connection is a
-        // machine principal wearing an integration's clothes).
-        .route(
-            "/api/connections",
-            get(handlers::connections::list).post(handlers::connections::provision),
-        )
-        .route(
-            "/api/connections/{id}",
-            get(handlers::connections::get).delete(handlers::connections::revoke),
-        )
+        .routes(routes!(
+            handlers::machine_clients::list,
+            handlers::machine_clients::provision
+        ))
+        .routes(routes!(
+            handlers::machine_clients::get,
+            handlers::machine_clients::revoke
+        ))
+        .routes(routes!(handlers::machine_clients::issue))
+        .routes(routes!(handlers::machine_clients::rotate_secret))
+        // Connection provisioning (external systems as subscribed emitters, S1). Same shape as
+        // machine-clients above and for the same reasons: gated inside the service
+        // (`machine_authz::authorize`, verbatim — a connection is a machine principal wearing an
+        // integration's clothes).
+        .routes(routes!(
+            handlers::connections::list,
+            handlers::connections::provision
+        ))
+        .routes(routes!(
+            handlers::connections::get,
+            handlers::connections::revoke
+        ))
         // The credential and the two capability tiers, each its own endpoint. They are separately
         // provisioned and both explicit — folding them into one PATCH would let a caller grant
         // reach while believing they were only registering a webhook.
-        .route(
-            "/api/connections/{id}/credential",
-            post(handlers::connections::attach_credential),
-        )
-        .route(
-            "/api/connections/{id}/webhook-events",
-            post(handlers::connections::set_webhook_events),
-        )
-        .route(
-            "/api/connections/{id}/tool-manifest",
-            post(handlers::connections::set_tool_manifest),
-        )
+        .routes(routes!(handlers::connections::attach_credential))
+        .routes(routes!(handlers::connections::set_webhook_events))
+        .routes(routes!(handlers::connections::set_tool_manifest))
         // A team's read-reach on the connection, its own endpoint (a `kb_access_grants` write, not
         // a connection-row mutation). Owning ≠ reaching, so this is separate from provisioning.
         // Grant and revoke share the path — POST adds, DELETE removes — both carrying the team.
-        .route(
-            "/api/connections/{id}/reach",
-            post(handlers::connections::grant_reach).delete(handlers::connections::revoke_reach),
-        )
-        // Operator-only subscription management (external systems as subscribed emitters, S2).
-        // Same shape as connections above: plain .route(), out of the OpenAPI contract, gated
-        // inside the service (require_manage_on_team + kb_access_grants reach-grant read).
-        .route(
-            "/api/subscriptions",
-            get(handlers::subscriptions::list).post(handlers::subscriptions::create),
-        )
-        .route(
-            "/api/subscriptions/{id}",
-            get(handlers::subscriptions::get).delete(handlers::subscriptions::revoke),
-        )
+        .routes(routes!(
+            handlers::connections::grant_reach,
+            handlers::connections::revoke_reach
+        ))
+        // Subscription management (external systems as subscribed emitters, S2). Same shape as
+        // connections above, gated inside the service (`SubscriptionAuthority` on the authoring
+        // team, plus the `kb_access_grants` reach-grant read on create).
+        .routes(routes!(
+            handlers::subscriptions::list,
+            handlers::subscriptions::create
+        ))
+        .routes(routes!(
+            handlers::subscriptions::get,
+            handlers::subscriptions::revoke
+        ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::gated_routes;
+
+    /// The scoped operator families' documented surface, pinned by operation id and tag. A dropped
+    /// method (one handler out of a shared-path `routes!` pair), a retag (which renames a generated
+    /// SDK class), or a move back to an undocumented plain mount changes this set and fails.
+    const SCOPED_OPERATOR_OPERATIONS: [(&str, &str); 20] = [
+        ("list_admin_ledger", "Admin Ledger"),
+        ("list_machine_clients", "Machine Clients"),
+        ("provision_machine_client", "Machine Clients"),
+        ("get_machine_client", "Machine Clients"),
+        ("revoke_machine_client", "Machine Clients"),
+        ("issue_machine_credential", "Machine Clients"),
+        ("rotate_machine_client_secret", "Machine Clients"),
+        ("list_connections", "Connections"),
+        ("provision_connection", "Connections"),
+        ("get_connection", "Connections"),
+        ("revoke_connection", "Connections"),
+        ("attach_connection_credential", "Connections"),
+        ("set_connection_webhook_events", "Connections"),
+        ("set_connection_tool_manifest", "Connections"),
+        ("grant_connection_reach", "Connections"),
+        ("revoke_connection_reach", "Connections"),
+        ("list_subscriptions", "Subscriptions"),
+        ("create_subscription", "Subscriptions"),
+        ("get_subscription", "Subscriptions"),
+        ("revoke_subscription", "Subscriptions"),
+    ];
+
+    const SCOPED_OPERATOR_TAGS: [&str; 4] = [
+        "Admin Ledger",
+        "Machine Clients",
+        "Connections",
+        "Subscriptions",
+    ];
+
+    #[test]
+    fn the_scoped_operator_families_document_exactly_the_pinned_operations() {
+        let spec = gated_routes().split_for_parts().1;
+        let mut actual = BTreeSet::new();
+        for (path, item) in spec.paths.paths {
+            for op in [item.get, item.post, item.put, item.patch, item.delete]
+                .into_iter()
+                .flatten()
+            {
+                let tag = op
+                    .tags
+                    .as_ref()
+                    .and_then(|t| t.first())
+                    .cloned()
+                    .unwrap_or_default();
+                if SCOPED_OPERATOR_TAGS.contains(&tag.as_str()) {
+                    let id = op
+                        .operation_id
+                        .unwrap_or_else(|| panic!("{path} has no operation_id"));
+                    actual.insert((id, tag));
+                }
+            }
+        }
+        let expected: BTreeSet<(String, String)> = SCOPED_OPERATOR_OPERATIONS
+            .iter()
+            .map(|(id, tag)| (id.to_string(), tag.to_string()))
+            .collect();
+        assert_eq!(actual, expected);
+    }
 }

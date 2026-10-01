@@ -48,9 +48,12 @@ fi
 #
 # The system-admin surface is NOT here and must not come back: an admin door is
 # not a secret in a public repository, so it is documented (routes/admin.rs) and
-# protected by its `&SystemAdmin` gate and the tests that pin it. "Operator-only"
-# is not by itself a reason to allowlist a route — "no bearer can reach it" (a
-# shared-secret cron, an HMAC-signed internal call, a third-party webhook) is.
+# protected by its `&SystemAdmin` gate and the tests that pin it. Neither are the
+# scoped operator families (the admin ledger, machine clients, connections,
+# subscriptions): a team owner or the actor themself reaches them, so they are
+# documented under their own tags (routes/gated.rs). "Operator-only" is not by
+# itself a reason to allowlist a route — "no bearer can reach it" (a shared-secret
+# cron, an HMAC-signed internal call, a third-party webhook) is.
 #
 # On /api/intake/webhook: its caller is Vercel Connect forwarding a third-party system's
 # event. Connect reads no contract of ours -- it POSTs to a trigger path configured on the
@@ -59,20 +62,7 @@ fi
 # who can. Its request shape is also not ours to publish: the body is the remote provider's
 # verbatim payload, which has no schema temper owns (the same reason its kb_event_types row
 # carries a NULL payload_schema).
-ALLOWLIST='/api/admin/ledger
-/api/machine-clients
-/api/machine-clients/{id}
-/api/machine-clients/issue
-/api/machine-clients/{id}/rotate-secret
-/api/connections
-/api/connections/{id}
-/api/connections/{id}/credential
-/api/connections/{id}/webhook-events
-/api/connections/{id}/tool-manifest
-/api/connections/{id}/reach
-/api/subscriptions
-/api/subscriptions/{id}
-/internal/saml/reconcile
+ALLOWLIST='/internal/saml/reconcile
 /internal/principal/resolve
 /internal/slack/link-state
 /internal/slack/mint
