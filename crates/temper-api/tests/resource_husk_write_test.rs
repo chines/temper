@@ -39,7 +39,12 @@
 //! * the owner is refused grant administration on a dead resource: revoke on a tombstone `403`,
 //!   on a husk `410`, and an all-false grant on a tombstone `403` (the owner's derived `grant`
 //!   arm floors on liveness, migration `20261001000010`);
-//! * `remove_member`'s residual warning and the team handoff count live resources only.
+//! * `remove_member`'s residual warning and the team handoff count live resources only;
+//! * a create that replays its idempotency key onto a resource since erased or deleted: a
+//!   segmented begin answers the owner `410` (erased) or `403` (deleted) from the ingestion
+//!   record's floor; a one-shot create (`POST /api/ingest`, `POST /api/resources`) answers `410`
+//!   (erased) or `404` (deleted) from its readback. The key is owner-scoped, so only the owner can
+//!   replay it.
 //!
 //! Plus the races (resource erasure spec D13: "a write that races the act either lands before it
 //! or refuses after it"), each with the act held open on R and the write shown waiting on R's row
@@ -61,7 +66,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ingest::{
-    pack_chunks, AppendBlockPayload, FinalizePayload, IngestPayload, PackedChunk,
+    pack_chunks, AppendBlockPayload, FinalizePayload, IngestPayload, PackedChunk, SegmentedBegin,
 };
 
 const TITLE: &str = "Husk Write Subject Title";
@@ -376,6 +381,20 @@ fn doors(resource: Uuid) -> Vec<Door> {
                 "can_grant": false,
             })),
         },
+        // The revoke verb of the same door: one authority (`GrantAuthority`) gates both verbs,
+        // its refusal is classified by the same `erased_or_refused`, and the same in-transaction
+        // subject floor runs before the delete. Revocation is not attenuated, so only the
+        // authority arm or the floor can refuse it. An absent grant row would be a no-op `200`,
+        // so an admission here would read `200`, never a false refusal.
+        Door {
+            name: "DELETE /api/resources/{id}/grants",
+            method: Method::DELETE,
+            path: format!("/api/resources/{resource}/grants"),
+            body: Some(json!({
+                "principal_table": "kb_profiles",
+                "principal_id": Uuid::now_v7(),
+            })),
+        },
     ]
 }
 
@@ -457,7 +476,8 @@ async fn title_of(app: &common::TestApp, who: &Caller, resource: Uuid) -> String
 /// the visibility-gated `native_resource_identity` / readback answer the husk `404` first. For
 /// `POST /api/relationships`, restore `self.check_can_modify_next(src_next)` ahead of the
 /// transaction in `assert_relationship`. For the grant door, return the refusal unclassified in
-/// `access_service::grant_capability` (drop its `erased_or_refused` call).
+/// `access_service::grant_capability` (drop its `erased_or_refused` call); for its revoke verb, the
+/// same in `access_service::revoke_capability`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_owner_of_an_erased_resource_gets_410_on_every_write_door(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -1784,5 +1804,309 @@ async fn remove_member_and_team_reassign_leave_out_a_husk_and_a_tombstone(pool: 
         body["resource_ids"],
         json!([live]),
         "the handoff moves the live resource only; body: {body}"
+    );
+}
+
+// ── WITNESS: a create replaying its idempotency key onto a dead resource ──────────────────────
+
+/// A segmented begin (`POST /api/ingest` with `segmented` set) by `owner` into `context`, carrying
+/// `key`: the status and the parsed body. Block 0 is [`BODY`] with its real chunk, so no ONNX.
+async fn segmented_begin(
+    app: &common::TestApp,
+    owner: &Caller,
+    context: Uuid,
+    key: Uuid,
+) -> (u16, Value) {
+    let payload = IngestPayload {
+        idempotency_key: Some(key),
+        segmented: Some(SegmentedBegin {
+            total_blocks_hint: Some(2),
+            block_budget: 262_144,
+            source_hash: None,
+        }),
+        title: TITLE.to_string(),
+        origin_uri: format!("test://husk-write-segmented-{}", Uuid::new_v4()),
+        context_ref: context.to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        content_hash: None,
+        content: BODY.to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[chunk(BODY)]).expect("pack")),
+        goal: None,
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+    call(
+        app,
+        owner,
+        Method::POST,
+        "/api/ingest".to_string(),
+        Some(serde_json::to_value(payload).expect("segmented begin body")),
+    )
+    .await
+}
+
+/// The resource a segmented begin answered with.
+fn begun(status: u16, body: &Value) -> Uuid {
+    assert_eq!(
+        status, 200,
+        "the owner begins a segmented ingest; body: {body}"
+    );
+    Uuid::parse_str(body["resource_id"].as_str().expect("resource_id")).expect("resource uuid")
+}
+
+/// A segmented begin that replays its idempotency key converges on the already-created resource
+/// (`create_resource_unread` returns the claimed id without minting) and then writes the
+/// ingestion record through its floor — before any read of the resource. So a replay onto a
+/// since-deleted resource is the write floor's `403`, and onto a since-erased one the floor's
+/// classification: `410 RESOURCE_ERASED` to its owner, a husk holder. The key is owner-scoped
+/// (`kb_idempotency_keys`' PK), so no one else can replay it.
+///
+/// FAILS IF a replay onto a dead resource answers anything else. The bites: in
+/// `DbBackend::begin_segmented_ingest`, read the resource back before recording the source
+/// (replace `self.create_resource_unread(cmd, true).await?` with
+/// `ResourceId::from(self.create_resource_inner(cmd, true).await?.value.id)`) — the deleted replay
+/// then answers the readback's `404`; or delete the `write_floor::modify_floor_in_tx(..)` call in
+/// `record_ingestion_source` — the deleted replay then answers `200`, writing a record onto a
+/// tombstone.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_segmented_replay_onto_a_deleted_resource_answers_403(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let key = Uuid::now_v7();
+
+    let (status, body) = segmented_begin(&app, &owner, own_context, key).await;
+    let resource = begun(status, &body);
+    delete(&app, &owner, resource).await;
+
+    let (status, body) = segmented_begin(&app, &owner, own_context, key).await;
+    assert_eq!(
+        status, 403,
+        "the replay converges on the tombstone and its record's floor refuses; body: {body}"
+    );
+    assert_eq!(body["error"]["code"], "FORBIDDEN", "body: {body}");
+
+    let (is_active, erased): (bool, bool) =
+        sqlx::query_as("SELECT is_active, erased_at IS NOT NULL FROM kb_resources WHERE id = $1")
+            .bind(resource)
+            .fetch_one(&app.pool)
+            .await
+            .expect("tombstone probe");
+    assert!(!is_active && !erased, "the resource stayed a tombstone");
+}
+
+/// The erased half of [`a_segmented_replay_onto_a_deleted_resource_answers_403`]: the owner's
+/// replay onto a since-erased resource answers `410 RESOURCE_ERASED`, the fixed message naming the
+/// id. The bite: in `write_floor::erased_or_forbidden`, answer `Forbidden` unconditionally — the
+/// replay then answers `403`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_segmented_replay_onto_an_erased_resource_answers_its_owner_410(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let key = Uuid::now_v7();
+
+    let (status, body) = segmented_begin(&app, &owner, own_context, key).await;
+    let resource = begun(status, &body);
+    erase(&app, resource).await;
+
+    let (status, body) = segmented_begin(&app, &owner, own_context, key).await;
+    assert_eq!(
+        status, 410,
+        "the replay names a husk the owner holds; body: {body}"
+    );
+    assert_eq!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+    assert_eq!(
+        body["error"]["message"],
+        format!("resource {resource} was erased"),
+        "the fixed message names the id and nothing else"
+    );
+}
+
+/// The two one-shot create doors, carrying `key`, by `owner` into `context`: the status and the
+/// parsed body. Both are bodiless, so no ONNX.
+async fn one_shot_creates(
+    app: &common::TestApp,
+    owner: &Caller,
+    context: Uuid,
+    ingest_key: Uuid,
+    resources_key: Uuid,
+) -> [(&'static str, u16, Value); 2] {
+    let ingest = IngestPayload {
+        idempotency_key: Some(ingest_key),
+        segmented: None,
+        title: TITLE.to_string(),
+        origin_uri: format!("test://husk-write-oneshot-{}", Uuid::new_v4()),
+        context_ref: context.to_string(),
+        home_cogmap_id: None,
+        doc_type_name: "research".to_string(),
+        content_hash: None,
+        content: String::new(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: None,
+        goal: None,
+        act: Default::default(),
+        sources: Vec::new(),
+    };
+    let (ingest_status, ingest_body) = call(
+        app,
+        owner,
+        Method::POST,
+        "/api/ingest".to_string(),
+        Some(serde_json::to_value(ingest).expect("one-shot ingest body")),
+    )
+    .await;
+    let (resources_status, resources_body) = call(
+        app,
+        owner,
+        Method::POST,
+        "/api/resources".to_string(),
+        Some(json!({
+            "kb_context_id": context,
+            "doc_type": "research",
+            "origin_uri": format!("test://husk-write-create-{}", Uuid::new_v4()),
+            "title": TITLE,
+            "idempotency_key": resources_key,
+        })),
+    )
+    .await;
+    [
+        ("POST /api/ingest (one-shot)", ingest_status, ingest_body),
+        ("POST /api/resources", resources_status, resources_body),
+    ]
+}
+
+/// A one-shot create that replays its idempotency key converges on the already-created resource
+/// and answers with its readback (`native_resource_view` → `show_view_select`, the read door's
+/// classifier): `410 RESOURCE_ERASED` to the owner of a since-erased resource, and the read side's
+/// `404` for a since-deleted one (a tombstone is never an erasure). Pinned on both create doors.
+///
+/// FAILS IF a one-shot replay onto an erased id answers its owner anything but `410`, or onto a
+/// tombstone anything but `404`. The bite: in `substrate_read::show_view_select`, return the
+/// miss's `not_found` instead of `erased_or(pool, profile_id, .., not_found)` — the erased replays
+/// then answer `404`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_one_shot_replay_onto_a_dead_resource_answers_410_erased_and_404_deleted(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+
+    for (dead, expected) in [("erased", 410u16), ("deleted", 404u16)] {
+        let (ingest_key, resources_key) = (Uuid::now_v7(), Uuid::now_v7());
+        let first = one_shot_creates(&app, &owner, own_context, ingest_key, resources_key).await;
+        let mut created = Vec::new();
+        for (name, status, body) in &first {
+            assert_eq!(*status, 200, "{name}: the owner creates; body: {body}");
+            let id = Uuid::parse_str(body["id"].as_str().expect("id")).expect("resource uuid");
+            match dead {
+                "erased" => erase(&app, id).await,
+                _ => delete(&app, &owner, id).await,
+            }
+            created.push(id);
+        }
+
+        let replays = one_shot_creates(&app, &owner, own_context, ingest_key, resources_key).await;
+        for ((name, status, body), id) in replays.iter().zip(&created) {
+            assert_eq!(
+                *status, expected,
+                "{name}: a replay onto a {dead} resource; body: {body}"
+            );
+            if expected == 410 {
+                assert_eq!(
+                    body["error"]["code"], RESOURCE_ERASED,
+                    "{name}; body: {body}"
+                );
+                assert_eq!(
+                    body["error"]["message"],
+                    format!("resource {id} was erased"),
+                    "{name}: the replay converged on the erased id"
+                );
+            } else {
+                assert_ne!(
+                    body["error"]["code"], RESOURCE_ERASED,
+                    "{name}; body: {body}"
+                );
+            }
+        }
+    }
+}
+
+// ── WITNESS: a write racing a soft delete waits for it, then is refused 403 ───────────────────
+
+/// Hold a soft delete open on `resource`, as the delete door does it: `FOR UPDATE` on the row,
+/// then the `ResourceDelete` seed, inside a transaction this test commits when it chooses.
+async fn hold_the_delete(
+    app: &common::TestApp,
+    owner: &Caller,
+    resource: Uuid,
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let emitter: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id \
+          WHERE e.profile_id = $1 AND e.name = p.handle || '@web'",
+    )
+    .bind(owner.profile)
+    .fetch_one(&app.pool)
+    .await
+    .expect("the owner's web emitter");
+    let mut tx = app.pool.begin().await.expect("begin the delete");
+    sqlx::query("SELECT id FROM kb_resources WHERE id = $1 FOR UPDATE")
+        .bind(resource)
+        .execute(&mut *tx)
+        .await
+        .expect("the delete's row lock");
+    temper_substrate::writes::delete_resource_in_tx(
+        &mut tx,
+        resource.into(),
+        emitter.into(),
+        temper_substrate::events::EventContext::default(),
+    )
+    .await
+    .expect("the tombstone flip inside the open transaction");
+    tx
+}
+
+/// FAILS IF a write that races a soft delete lands on the tombstone, or answers anything but the
+/// write side's uniform `403` (never `410`: a tombstone is not an erasure). The delete door takes
+/// `FOR UPDATE` on the row first, so the write floor's `FOR KEY SHARE` waits for the delete to
+/// commit and then sees `is_active = false`. The bite: drop the `FOR UPDATE` (here, mirroring
+/// `DbBackend::delete_resource`). The write is then admitted by the floor on the pre-delete
+/// snapshot, blocks only at its own row UPDATE, lands on the tombstone once the delete commits,
+/// and answers `404` from its readback — this test's `403` assertion fails.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_write_racing_a_soft_delete_waits_for_it_and_answers_403(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+
+    let delete = hold_the_delete(&app, &owner, resource).await;
+    let (status, body) = raced_by_the_act(
+        &app,
+        delete,
+        &owner,
+        Method::PATCH,
+        format!("/api/resources/{resource}"),
+        json!({ "title": "raced-onto-a-tombstone" }),
+    )
+    .await;
+
+    assert_eq!(
+        status, 403,
+        "the write after the delete is refused; body: {body}"
+    );
+    assert_ne!(
+        body["error"]["code"], RESOURCE_ERASED,
+        "a tombstone is never erased: {body}"
+    );
+    let title: String = sqlx::query_scalar("SELECT title FROM kb_resources WHERE id = $1")
+        .bind(resource)
+        .fetch_one(&app.pool)
+        .await
+        .expect("read the title");
+    assert_ne!(
+        title, "raced-onto-a-tombstone",
+        "nothing landed on the tombstone"
     );
 }
