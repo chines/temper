@@ -915,3 +915,158 @@ async fn a_fully_erased_re_delivery_converges_as_unchanged(pool: PgPool) {
         "zero new events: the convergence writes nothing"
     );
 }
+
+// ── authorship: reconcile requires authorship of the map ─────────────────────────────
+
+/// Genesis an ordinary map (not L0, not joined to any team) as the system admin, whose creator
+/// grant is the only grant on it. Returns its id.
+async fn ordinary_map(pool: &PgPool) -> Uuid {
+    let be = backend(pool).await;
+    be.create_cognitive_map(temper_workflow::operations::CreateCognitiveMap {
+        request: temper_core::types::reconcile::CreateCogmapRequest {
+            cogmap_id: None,
+            telos_resource_id: None,
+            name: "An ordinary map".to_string(),
+            telos_title: "Ordinary telos".to_string(),
+            telos: None,
+        },
+        origin: Surface::ApiHttp,
+    })
+    .await
+    .expect("genesis an ordinary map")
+    .value
+    .cogmap_id
+}
+
+/// Grant `profile` read (and only read) on `cogmap`.
+async fn grant_cogmap_read_only(pool: &PgPool, cogmap: Uuid, profile: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_access_grants (subject_table, subject_id, principal_table, principal_id, \
+                                       can_read, can_write, granted_by_profile_id) \
+         VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, false, $2)",
+    )
+    .bind(cogmap)
+    .bind(profile)
+    .execute(pool)
+    .await
+    .expect("grant cogmap read");
+}
+
+/// One landmark entry — what each authorship case tries to deliver.
+fn one_landmark() -> ReconcileCogmapRequest {
+    request(vec![entry(
+        Uuid::now_v7(),
+        "temper://kernel/concept/authorship",
+        "authorship",
+        "A landmark delivered by reconcile.",
+        "ab",
+        serde_json::json!({ "layer": "concept" }),
+        vec![],
+    )])
+}
+
+/// The map's kernel slice size and the instance's total event count — together, "did anything
+/// change". The event count includes the envelope's open/close, so a refused run that opened an
+/// envelope and rolled back still shows zero.
+async fn map_state(pool: &PgPool, cogmap: Uuid) -> (usize, i64) {
+    let slice = temper_substrate::readback::kernel_slice(pool, cogmap.into())
+        .await
+        .expect("kernel slice");
+    (slice.len(), total_event_count(pool).await)
+}
+
+/// A principal who can neither read nor author an ordinary map is refused in the argument-free
+/// dialect (the map's existence is not disclosed), and the map is unchanged.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_by_a_non_reader_is_refused_and_writes_nothing(pool: PgPool) {
+    let map = ordinary_map(&pool).await;
+    let stranger =
+        common::fixtures::create_test_profile(&pool, "reconcile-stranger@example.com").await;
+    let be = DbBackend::new(pool.clone(), ProfileId::from(stranger));
+
+    let before = map_state(&pool, map).await;
+    let denied = be
+        .reconcile_cognitive_map(cmd(map, one_landmark()))
+        .await
+        .expect_err("a principal who cannot read the map may not reconcile it");
+    assert!(
+        matches!(denied, temper_core::error::TemperError::Forbidden),
+        "a non-reader gets the argument-free refusal, never one that names the map: {denied:?}"
+    );
+    assert_eq!(
+        map_state(&pool, map).await,
+        before,
+        "a refused reconcile changes nothing"
+    );
+}
+
+/// A principal who reads an ordinary map but holds no write grant on it is refused in the
+/// disclosing dialect, and the map is unchanged.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_by_a_reader_who_is_not_an_author_is_refused_and_writes_nothing(pool: PgPool) {
+    let map = ordinary_map(&pool).await;
+    let reader = common::fixtures::create_test_profile(&pool, "reconcile-reader@example.com").await;
+    grant_cogmap_read_only(&pool, map, reader).await;
+    let be = DbBackend::new(pool.clone(), ProfileId::from(reader));
+
+    let before = map_state(&pool, map).await;
+    let denied = be
+        .reconcile_cognitive_map(cmd(map, one_landmark()))
+        .await
+        .expect_err("reading a map confers no authorship of it");
+    assert!(
+        matches!(denied, temper_core::error::TemperError::ForbiddenDetail(_)),
+        "a reader is told which capability it lacks: {denied:?}"
+    );
+    assert_eq!(
+        map_state(&pool, map).await,
+        before,
+        "a refused reconcile changes nothing"
+    );
+}
+
+/// A non-admin author of an ordinary map reconciles it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_by_a_non_admin_author_is_applied(pool: PgPool) {
+    let map = ordinary_map(&pool).await;
+    let author = common::fixtures::create_test_profile(&pool, "reconcile-author@example.com").await;
+    common::fixtures::grant_cogmap_write(&pool, map, author).await;
+    let be = DbBackend::new(pool.clone(), ProfileId::from(author));
+
+    let out = be
+        .reconcile_cognitive_map(cmd(map, one_landmark()))
+        .await
+        .expect("an author reconciles the map")
+        .value;
+    assert_eq!(out.created, 1, "the author's landmark is created");
+}
+
+/// A system admin who does not author an ordinary map is refused like anyone else (ruled
+/// 2026-10-01: reach on an ordinary map comes from a grant; the admin-only regime covers only the
+/// L0 kernel and maps joined to the gating team), and the map is unchanged.
+///
+/// FAILS IF a system admin is admitted to an ordinary map they hold no write grant on. The bite:
+/// in `DbBackend::reconcile_cognitive_map`, admit a system admin ahead of `check_cogmap_authorable`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reconcile_by_a_system_admin_who_is_not_an_author_is_refused(pool: PgPool) {
+    let map = ordinary_map(&pool).await;
+    let admin =
+        common::fixtures::create_test_profile(&pool, "reconcile-other-admin@example.com").await;
+    common::fixtures::make_test_admin(&pool, admin).await;
+    let be = DbBackend::new(pool.clone(), ProfileId::from(admin));
+
+    let before = map_state(&pool, map).await;
+    let denied = be
+        .reconcile_cognitive_map(cmd(map, one_landmark()))
+        .await
+        .expect_err("a system admin who does not author an ordinary map may not reconcile it");
+    assert!(
+        matches!(denied, temper_core::error::TemperError::Forbidden),
+        "a non-reading admin gets the argument-free refusal: {denied:?}"
+    );
+    assert_eq!(
+        map_state(&pool, map).await,
+        before,
+        "a refused reconcile changes nothing"
+    );
+}

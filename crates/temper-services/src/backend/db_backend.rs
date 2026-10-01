@@ -3446,8 +3446,16 @@ impl Backend for DbBackend {
     /// structurally impossible — any error before commit drops the transaction → Postgres rolls back
     /// EVERYTHING (mutations + the open), so there is no Failed-close path and no stale-open lock.
     /// SERIALIZABLE makes concurrent reconciles abort-and-retry (SQLSTATE 40001 → `Conflict`) instead of
-    /// corrupting state — the old app-level open-invocation "mutex" is gone. No HTTP/authz here (the
-    /// handler gates first); this is the backend command.
+    /// corrupting state — the old app-level open-invocation "mutex" is gone.
+    ///
+    /// **Reconcile requires authorship of the map, by regime** (ruled 2026-10-01). A map in the
+    /// admin-only regime (the L0 kernel, or a map joined to the gating team — nobody authors those
+    /// by design) is gated by `access_service::require_cogmap_write_admin` at the handler, as
+    /// before. Every other map is gated HERE, on the shared write path, by `check_cogmap_authorable`
+    /// — for a system admin too: reach on an ordinary map comes from a grant, as everywhere else in
+    /// the map model. The gate runs first, ahead of the system-actor resolution and of the
+    /// pre-flight, which reads the map's contents: a caller who may not author the map learns
+    /// nothing from how its manifest would have failed.
     #[act_span]
     async fn reconcile_cognitive_map(
         &self,
@@ -3455,6 +3463,13 @@ impl Backend for DbBackend {
     ) -> Result<CommandOutput<ReconcileOutcome>, TemperError> {
         let cogmap_uuid = uuid::Uuid::from(cmd.cogmap_id);
         let cogmap = CogmapId::from(cogmap_uuid);
+
+        if !crate::services::access_service::cogmap_write_requires_admin(&self.pool, cogmap)
+            .await
+            .map_err(TemperError::from)?
+        {
+            self.check_cogmap_authorable(cogmap_uuid).await?;
+        }
 
         // The system actor: every kernel mutation fires under (owner = system profile, emitter = system
         // entity) — the L0 birth migration's actor.

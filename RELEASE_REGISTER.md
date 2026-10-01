@@ -56,15 +56,19 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   an erasure waits for it and is then refused: the edge and blob doors answer `404` where they
   answered `500`, and the grant doors answer `410`/`403` where the grant landed on the erased
   resource. `DELETE /api/teams/{id}/members/{profile_id}` counts only live resources in
-  `residual_owned`, where it counted the departing member's deleted and erased ones. Who observes:
+  `residual_owned`, where it counted the departing member's deleted and erased ones.
+  `PUT /api/cognitive-maps/{id}` (reconcile) requires authorship of the map: an ordinary map is
+  refused (`403`) to any caller without a write grant on it, a system admin included, where it was
+  applied; the L0 kernel and maps joined to the gating team keep requiring a system admin. Who observes:
   the owner or a grant
   holder of an erased resource; a caller whose goal link is refused; a team admin reassigning or
-  removing a departing member; a system admin granting on a deleted resource; the owner of a
+  removing a departing member; a system admin granting on a deleted resource; a caller reconciling a
+  cognitive map they do not author; the owner of a
   deleted resource administering its grants. User-visible: yes.
   Release relevance: signal-only.
 pr: self
-classes: behavioral
-surfaces: http,mcp
+classes: additive,behavioral
+surfaces: http,mcp,clients
 status: signal-only
 - **Resource erasure 2b PR 2: an erased resource reads as `410 RESOURCE_ERASED` to a caller with standing; the operator erasure doors**
   `GET /api/resources/{id}`, `/content` and `/meta` (which composes from the same read) gain a

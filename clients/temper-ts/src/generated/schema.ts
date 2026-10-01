@@ -9891,7 +9891,7 @@ export interface operations {
                     "application/json": components["schemas"]["ReconcileOutcome"];
                 };
             };
-            /** @description Caller is not a system admin for this root-team map */
+            /** @description Caller does not author this map, or is not a system admin for an L0 or root-team map */
             403: {
                 headers: {
                     [name: string]: unknown;

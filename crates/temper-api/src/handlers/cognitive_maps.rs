@@ -52,7 +52,7 @@ pub struct ShapeQuery {
     request_body = ReconcileCogmapRequest,
     responses(
         (status = 200, description = "Reconcile applied", body = ReconcileOutcome),
-        (status = 403, description = "Caller is not a system admin for this root-team map"),
+        (status = 403, description = "Caller does not author this map, or is not a system admin for an L0 or root-team map"),
         (status = 409, description = "A reconcile is already in progress on this map"),
     )
 )]
