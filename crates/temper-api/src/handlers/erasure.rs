@@ -4,7 +4,7 @@
 //!
 //! **The doors reject a non-admin at the wire.** Every erasure service function takes the sealed
 //! `&SystemAdmin` proof, so each door mints it with `require_system_admin` before it dispatches
-//! ([`require_erasure_operator`], shared with [`crate::handlers::resource_erasure`]), the
+//! (`require_erasure_operator`, shared with [`crate::handlers::resource_erasure`]), the
 //! `admin_directory` shape. A caller the gate declines is answered **404, never 403** (a 403 would
 //! confirm an erasure door exists and who it refuses), before any lookup, so every subject id gets
 //! the same body. The only record of that attempt is one `tracing` line: no ledger event of any
@@ -109,7 +109,7 @@ pub struct ErasureExecuteResponse {
 
 /// `POST /api/admin/erasure` — the operator's execute door.
 ///
-/// The gate runs here, before dispatch ([`require_erasure_operator`]); the service takes the proof
+/// The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof
 /// and attributes the act to `admin.actor()`.
 ///
 /// The request reference tolerates retries: a retried POST with the SAME reference re-executes
@@ -167,7 +167,7 @@ pub struct ErasureSurveyResponse {
 /// `POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task
 /// 01a09628 item 2).
 ///
-/// Gated here like execute ([`require_erasure_operator`]): a caller who is not a system admin
+/// Gated here like execute (`require_erasure_operator`): a caller who is not a system admin
 /// gets the same 404 and no event. The survey is witnessed read-only: no events, no projection
 /// change — it previews, it never prepares.
 pub async fn survey(

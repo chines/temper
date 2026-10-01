@@ -3,7 +3,7 @@
 //! doors in [`crate::handlers::erasure`] and their posture is documented there.
 //!
 //! **A non-admin is rejected at the wire, like the principal doors.** Each door mints the sealed
-//! `&SystemAdmin` proof through [`crate::handlers::erasure::require_erasure_operator`] before it
+//! `&SystemAdmin` proof through `require_erasure_operator` before it
 //! dispatches, and the service functions take that proof. A caller the gate declines gets a 404
 //! (never 403) and one telemetry line, and the ledger gains nothing. The refused caller learns
 //! nothing about the RESOURCE: the gate answers before any lookup and before the service checks
