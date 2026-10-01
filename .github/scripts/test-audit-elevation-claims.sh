@@ -38,7 +38,8 @@ trap 'rm -rf "$WORK"' EXIT
 # enough to run five of them in CI.
 make_fixture() {
     local dest="$1"
-    mkdir -p "$dest"/crates/{temper-cli,temper-api,temper-mcp,temper-services}/src
+    mkdir -p "$dest"/crates/{temper-cli,temper-api,temper-core,temper-mcp,temper-services}/src
+    cp -R "$REPO_ROOT"/crates/temper-core/src/types "$dest"/crates/temper-core/src/
     cp -R "$REPO_ROOT"/crates/temper-cli/src/cli.rs "$dest"/crates/temper-cli/src/
     cp -R "$REPO_ROOT"/crates/temper-cli/src/commands "$dest"/crates/temper-cli/src/
     cp -R "$REPO_ROOT"/crates/temper-api/src/openapi.rs "$dest"/crates/temper-api/src/

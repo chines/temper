@@ -42,6 +42,7 @@ pub struct JoinRequest {
 /// A join request with the requesting profile's display info (for admin queue).
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct JoinRequestWithProfile {
     pub id: Uuid,
@@ -75,6 +76,7 @@ pub struct JoinRequestWithProfile {
 /// handled and moves no standing (D15); the admin's actual answer is a separate `Approve`.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ReviewRequestWithProfile {
     pub id: Uuid,
@@ -95,6 +97,7 @@ pub struct ReviewRequestWithProfile {
 // admission to a global switch — which is exactly what standing replaced.
 
 /// Instance-wide system settings (singleton row).
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct SystemSettings {
     pub id: i32,
@@ -258,12 +261,9 @@ pub struct SystemAccessDetails {
 /// "not yours to see" stays distinguishable from "yours to see, and empty". A count endpoint
 /// that answered a non-admin with `0` would erase that difference silently, which is the one
 /// thing the primer's `Option` fields exist to prevent.
-///
-/// No `utoipa` derive, matching [`ReviewRequestWithProfile`] and every other type on this
-/// operator-only surface: those routes are mounted with a plain `.route(...)` and stay off the
-/// documented contract on purpose.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueCount {
     /// `i32` for the same reason as [`crate::types::invitation::PendingInvitationCounts::count`]: a 64-bit count reaches
@@ -275,12 +275,9 @@ pub struct QueueCount {
 /// `POST /api/access/admin/auto-join/reconcile` and `temper admin access reconcile-auto-join`.
 /// The roster drift it repairs was silent (profiles approved through the direct-grant door
 /// never joined the `everyone` pool); the repair names what it did.
-///
-/// No `utoipa` derive, matching [`QueueCount`] and every other type on this operator-only
-/// surface: those routes are mounted with a plain `.route(...)` and stay off the documented
-/// contract on purpose.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoJoinReconcileRow {
     pub team_slug: String,
@@ -293,12 +290,9 @@ pub struct AutoJoinReconcileRow {
 /// the profile holds natively — so on a SAML-mapped auto-join team every pair in `added`
 /// permanently pre-empts the IdP's role assertions for that pair (native-wins-skip). The
 /// verb names those teams so the operator sees the conversion the repair is making.
-///
-/// No `utoipa` derive, matching [`AutoJoinReconcileRow`] and every other type on this
-/// operator-only surface: those routes are mounted with a plain `.route(...)` and stay off
-/// the documented contract on purpose.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReconcileAutoJoinOutcome {
     pub added: Vec<AutoJoinReconcileRow>,

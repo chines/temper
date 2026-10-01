@@ -7,10 +7,6 @@ import type { Standing } from "./admission";
  * `POST /api/access/admin/auto-join/reconcile` and `temper admin access reconcile-auto-join`.
  * The roster drift it repairs was silent (profiles approved through the direct-grant door
  * never joined the `everyone` pool); the repair names what it did.
- *
- * No `utoipa` derive, matching [`QueueCount`] and every other type on this operator-only
- * surface: those routes are mounted with a plain `.route(...)` and stay off the documented
- * contract on purpose.
  */
 export type AutoJoinReconcileRow = { team_slug: string, profile_handle: string, };
 
@@ -99,10 +95,6 @@ export type PublicSystemSettings = { terms_version: string | null, terms_resourc
  * "not yours to see" stays distinguishable from "yours to see, and empty". A count endpoint
  * that answered a non-admin with `0` would erase that difference silently, which is the one
  * thing the primer's `Option` fields exist to prevent.
- *
- * No `utoipa` derive, matching [`ReviewRequestWithProfile`] and every other type on this
- * operator-only surface: those routes are mounted with a plain `.route(...)` and stay off the
- * documented contract on purpose.
  */
 export type QueueCount = { 
 /**
@@ -118,10 +110,6 @@ count: number, };
  * the profile holds natively — so on a SAML-mapped auto-join team every pair in `added`
  * permanently pre-empts the IdP's role assertions for that pair (native-wins-skip). The
  * verb names those teams so the operator sees the conversion the repair is making.
- *
- * No `utoipa` derive, matching [`AutoJoinReconcileRow`] and every other type on this
- * operator-only surface: those routes are mounted with a plain `.route(...)` and stay off
- * the documented contract on purpose.
  */
 export type ReconcileAutoJoinOutcome = { added: Array<AutoJoinReconcileRow>, saml_mapped_teams: Array<string>, };
 

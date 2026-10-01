@@ -54,6 +54,10 @@ pub const IMMUTABLE_CACHE_MAX_AGE: u32 = 365 * 24 * 60 * 60;
 /// shape for exactly this, see `CredentialBroker` — boxes each future: the allocation is
 /// noise next to provider I/O, and the Send guarantee the RPITIT shape existed to make is
 /// what `async_trait`'s default produces.
+// `#[async_trait]` stamps a bare `#[must_use]` on each method whose return it boxes into a
+// `Pin<Box<dyn Future>>` — already `#[must_use]` — which clippy 1.99's `double_must_use` rejects.
+// The attribute is the macro's, not ours; the allow is scoped to this trait's expansion.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait BlobStore: Send + Sync + std::fmt::Debug {
     /// Does the provider hold an object at this content-addressed pathname? The commit gate:

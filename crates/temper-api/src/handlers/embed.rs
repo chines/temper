@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use temper_core::types::admin::{ReembedRequest, ReembedSummary};
 use temper_core::types::workflow_job::EmbedDispatchSummary;
-use temper_services::error::{ApiError, ApiResult};
+use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::embed_service::{self, ReembedScope};
 use temper_services::state::AppState;
 
@@ -183,8 +183,24 @@ pub async fn warm(
 /// this is a human operator action, and it should work with the operator's normal login instead of
 /// requiring them to hold a deploy secret.
 ///
-/// Deliberately NOT in the OpenAPI contract (plain `.route()`, no `#[utoipa::path]`) — same posture as
-/// the rest of the `/api/*/admin/*` surface.
+/// Documented under the `Admin` tag with the rest of the operator surface (`routes/admin.rs`). The
+/// drain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.
+#[utoipa::path(
+    post,
+    operation_id = "admin_reembed",
+    summary = "Re-embed stale chunks",
+    description = "Enqueues embedding jobs for chunks whose vector is missing or came from a model the server no longer embeds with, scoped to one resource, one context, or everything. `dry_run` reports what is stale without enqueuing. Bounded by `limit` per call and safe to repeat. Requires a system admin.",
+    path = "/api/embed/admin/reembed",
+    tag = "Admin",
+    request_body = ReembedRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "What is stale in scope, and the resources enqueued (none on `dry_run`)", body = ReembedSummary),
+        (status = 400, description = "Not exactly one of `resource_id`, `context_id`, `all`", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+    )
+)]
 pub async fn reembed(
     State(state): State<AppState>,
     auth: AuthUser,

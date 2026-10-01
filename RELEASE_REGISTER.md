@@ -78,6 +78,45 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
 pr: self
 classes: additive,behavioral
 surfaces: http,mcp,clients,cli-stdout,schema
+- **The scoped operator routes enter the OpenAPI contract: admin ledger, machine clients, connections, subscriptions**
+  The routes gated `is_system_admin OR <a scoped role>` — `GET /api/admin/ledger`, `/api/machine-clients`
+  (list, provision, get, revoke, issue, rotate-secret), `/api/connections` (list, provision, get,
+  revoke, credential, webhook-events, tool-manifest, reach grant/revoke) and `/api/subscriptions`
+  (list, create, get, revoke) — gain `#[utoipa::path]` documentation under four new tags
+  (`Admin Ledger`, `Machine Clients`, `Connections`, `Subscriptions`) and leave the
+  out-of-contract allowlist. They stay in `gated_routes`: a team owner, a team manager or the
+  actor themself reaches them, so they are not admin-only. Every existing operation and schema is
+  byte-identical; the contract only grows (20 new operations, their request/response schemas, four
+  new API classes in each generated SDK). The temper-core `Subscription` row publishes as
+  `ConnectionSubscription`, since the contract already carries the vault-config `Subscription`, and
+  `Connection` publishes as `RemoteConnection`, apart from the SDKs' own HTTP connection. No
+  route's path, method, gate, status codes or wire bytes change. Who observes: OpenAPI/SDK
+  consumers, who can now call these families with a bearer that passes their gate. User-visible:
+  no. Release relevance: signal-only.
+pr: self
+classes: additive
+surfaces: http,clients
+status: signal-only
+- **The system-admin surface enters the OpenAPI contract, isolated as its own route group**
+  The routes whose only authorization is the `&SystemAdmin` proof — `/api/access/admin/*` (the
+  join-request and reconsideration queues and their counts, full settings, promote/demote, the
+  four standing acts, auto-join reconcile, the profile directory), `POST /api/admin/erasure`,
+  `POST /api/admin/resources/erasure` and their `/survey` doors, `POST /api/embed/admin/reembed`
+  and `POST /api/machine-clients/{id}/rebind` — gain `#[utoipa::path]` documentation under a new
+  `Admin` tag and move from `gated_routes` to a new `admin_routes` group at the same gated tier.
+  `POST /api/admin/slack/links/disconnect` (already documented, `Slack Link` tag) moves with them
+  unchanged. Every existing path's operation is byte-identical; the contract only grows (23 new
+  operations, their request/response schemas, an `AdminApi` in each generated SDK). No route's
+  path, method, gate, status codes or wire bytes change: `GET /api/access/admin/profiles` now
+  returns an untagged enum that serializes exactly as the page or card it returned before. One
+  request relaxation rides along: `RebindMachineRequest`'s `from_machine_client_id` (always
+  overwritten by the path `{id}`) and `keep_old_active` (documented default `false`) gain
+  `#[serde(default)]`, so a body may omit them; bodies that send them are read exactly as before.
+  Who observes: OpenAPI/SDK consumers, who can now call the operator surface with an admin bearer.
+  User-visible: no. Release relevance: signal-only.
+pr: self
+classes: additive
+surfaces: http,clients
 status: signal-only
 - **Resource erasure 2b PR 2: an erased resource reads as `410 RESOURCE_ERASED` to a caller with standing; the operator erasure doors**
   `GET /api/resources/{id}`, `/content` and `/meta` (which composes from the same read) gain a

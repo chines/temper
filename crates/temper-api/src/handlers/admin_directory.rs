@@ -1,9 +1,8 @@
 //! Handlers for the operator directory — `GET /api/access/admin/profiles` (the list, §5) and
 //! `GET /api/access/admin/profiles/{profile_id}` (the state card, §6).
 //!
-//! Out of the OpenAPI contract (plain `.route()` mounting), like the rest of
-//! `/api/access/admin/*` — its paths are on the allowlist in
-//! `.github/scripts/check-openapi-routes.sh`.
+//! Documented in the OpenAPI contract under the `Admin` tag, like the rest of
+//! `/api/access/admin/*` (mounted by `routes/admin.rs`).
 //!
 //! **Authorization is the service signature, not this file.** Every directory function takes a
 //! sealed `&SystemAdmin` (minted here by `require_system_admin` and dispatched immediately), so
@@ -24,8 +23,8 @@
 //! nothing else: it is dispatched first, and it refuses to coexist with `email_contains`.
 
 use axum::extract::{Path, Query, State};
-use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Serialize;
 use uuid::Uuid;
 
 use temper_core::types::admin::{
@@ -34,17 +33,46 @@ use temper_core::types::admin::{
 use temper_core::types::ids::ProfileId;
 
 use crate::middleware::auth::AuthUser;
-use temper_services::error::{ApiError, ApiResult};
+use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::admin_directory_service;
 use temper_services::state::AppState;
 
+/// The list route's two answers. Untagged, so each arm serializes exactly as its inner type does
+/// — the wire is the page or the card, never an envelope around them — and the contract states
+/// both shapes as a `oneOf` rather than leaving a client to discover the second one.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub enum AdminProfilesListAnswer {
+    /// The directory page (no `email` in the query).
+    Page(AdminDirectoryListResponse),
+    /// The single state card `?email=` resolved.
+    Card(Box<AdminProfileCard>),
+}
+
 /// GET /api/access/admin/profiles — the directory list, or the state card when `?email=`
 /// resolves exactly one verified address.
+#[utoipa::path(
+    get,
+    operation_id = "admin_list_profiles",
+    summary = "List profiles in the operator directory",
+    description = "A filtered, paged directory of profiles with admission state, admin status and default verified email. With `email`, resolves exactly one verified address and answers that profile's state card instead of a page. Requires a system admin.",
+    path = "/api/access/admin/profiles",
+    tag = "Admin",
+    params(AdminProfilesListQuery),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "A directory page, or — when `email` is given — the one matching profile's state card", body = AdminProfilesListAnswer),
+        (status = 400, description = "Invalid filter, or both `email` and `email_contains` given", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "`email` matched no profile, or more than one", body = ErrorBody),
+    )
+)]
 pub async fn list_profiles(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(q): Query<AdminProfilesListQuery>,
-) -> ApiResult<Response> {
+) -> ApiResult<Json<AdminProfilesListAnswer>> {
     let admin = temper_services::auth::require_system_admin(&state.pool, &auth.0).await?;
 
     // ?email= is the identity-resolution act: exact, server-side, ambiguity-refusing. It is a
@@ -57,15 +85,31 @@ pub async fn list_profiles(
         }
         let card: AdminProfileCard =
             admin_directory_service::profile_card_by_email(&state.pool, &admin, email).await?;
-        return Ok(Json(card).into_response());
+        return Ok(Json(AdminProfilesListAnswer::Card(Box::new(card))));
     }
 
     let page: AdminDirectoryListResponse =
         admin_directory_service::list_profiles(&state.pool, &admin, &q).await?;
-    Ok(Json(page).into_response())
+    Ok(Json(AdminProfilesListAnswer::Page(page)))
 }
 
 /// GET /api/access/admin/profiles/{profile_id} — the principal state card.
+#[utoipa::path(
+    get,
+    operation_id = "admin_show_profile",
+    summary = "Show a profile's state card",
+    description = "One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.",
+    path = "/api/access/admin/profiles/{profile_id}",
+    tag = "Admin",
+    params(("profile_id" = Uuid, Path, description = "Profile ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The principal state card", body = AdminProfileCard),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such profile", body = ErrorBody),
+    )
+)]
 pub async fn show_profile(
     State(state): State<AppState>,
     auth: AuthUser,

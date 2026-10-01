@@ -16,7 +16,7 @@ temperkb-telemetry.workspace = true
 temper-macros = { path = "../temper-macros" }
 temperkb-principal.workspace = true
 temperkb-workflow = { workspace = true, features = ["web-api"] }
-temper-substrate = { path = "../temper-substrate" }
+temper-substrate = { path = "../temper-substrate", features = ["web-api"] }
 # Re-exported as `temper_services::MIGRATOR` for `#[sqlx::test(migrator = ...)]`.
 temper-migrate = { path = "../temper-migrate" }
 # The embedder is already linked transitively via temper-substrate → temper-ingest(embed);

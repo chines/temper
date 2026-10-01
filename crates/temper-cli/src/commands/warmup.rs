@@ -646,10 +646,10 @@ mod tests {
     /// **The third `403` arm — and the one that matters most, because it is the newcomer's.**
     ///
     /// `handlers::invitations::list_mine` is mounted in `auth_only_routes()`, while the two operator
-    /// queues are in `gated_routes()` behind `require_system_access`. So a principal who has signed
-    /// in but holds no approved standing reads their invitations fine and gets
-    /// `403 SYSTEM_ACCESS_REQUIRED` from both queues — a *third* arm, checked before the other two
-    /// in `http.rs`.
+    /// queues are in `admin_routes()` (the gated tier) behind `require_system_access`. So a
+    /// principal who has signed in but holds no approved standing reads their invitations fine and
+    /// gets `403 SYSTEM_ACCESS_REQUIRED` from both queues — a *third* arm, checked before the other
+    /// two in `http.rs`.
     ///
     /// Propagating it collapsed the whole block to `None`, which then silenced
     /// [`context_failure_hint`] — so the one population this feature exists for, the invited

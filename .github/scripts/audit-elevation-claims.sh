@@ -80,6 +80,7 @@ claim_files() {
      crates/temper-cli/src/commands/*.rs \
      crates/temper-api/src/openapi.rs \
      crates/temper-api/src/handlers/*.rs \
+     crates/temper-core/src/types/*.rs \
      crates/temper-mcp/src/service.rs \
      crates/temper-mcp/src/tools/*.rs \
      crates/temper-services/src/services/*.rs 2>/dev/null
@@ -118,6 +119,7 @@ fingerprint() {
 #   file:<path>              the whole module, comments stripped
 #   block:enum:<N>:<path>    just enum N { … }, brace-counted
 #   block:fn:<N>:<path>      just fn N(…) { … }, brace-counted
+#   block:const:<N>:<path>   just const N: T = …; — up to the first `;` (no braces to count)
 #
 # Blocks rather than whole files for the split parts, so unrelated edits to a large service module
 # do not red claims bound to the gate that happens to live in it.
@@ -130,8 +132,9 @@ audit_gate|file:crates/temper-services/src/authz/audit_gate.rs
 connection|file:crates/temper-services/src/authz/connection.rs
 context_admin|file:crates/temper-services/src/authz/context_admin.rs
 grant|file:crates/temper-services/src/authz/grant.rs;block:enum:GrantAuthority:crates/temper-services/src/services/access_service.rs
-machine|file:crates/temper-services/src/authz/machine.rs;block:enum:MachineAuthority:crates/temper-services/src/services/machine_authz.rs
+machine|file:crates/temper-services/src/authz/machine.rs;block:enum:MachineAuthority:crates/temper-services/src/services/machine_authz.rs;block:const:MAX_MACHINE_TEAM_ROLE:crates/temper-services/src/services/machine_authz.rs;block:fn:authorize_registration:crates/temper-services/src/services/machine_authz.rs;block:fn:contain_target_team:crates/temper-services/src/services/machine_authz.rs;block:fn:contain_reach:crates/temper-services/src/services/machine_authz.rs
 read_gates|file:crates/temper-services/src/authz/read_gates.rs
+ledger_subject|block:fn:readable_event_types:crates/temper-services/src/services/admin_ledger_service.rs
 subscription|file:crates/temper-services/src/authz/subscription.rs
 two_sided|file:crates/temper-services/src/authz/two_sided.rs
 require_cogmap_write_admin|block:fn:require_cogmap_write_admin:crates/temper-services/src/services/access_service.rs
@@ -145,13 +148,16 @@ EOF
 extract_block() {
   local kind="$1" name="$2" file="$3"
   awk -v kind="$kind" -v nm="$name" '
-    BEGIN { anchor = "(^|[^a-zA-Z0-9_])" kind "[[:space:]]+" nm "[[:space:]]*[({<]" }
+    BEGIN { anchor = "(^|[^a-zA-Z0-9_])" kind "[[:space:]]+" nm "[[:space:]]*[({<:]" }
     !inside && $0 ~ anchor { inside = 1 }
     inside {
       print
       n = gsub(/\{/, "{"); m = gsub(/\}/, "}")
       depth += n - m
       if (seen_open || n > 0) { seen_open = 1; if (depth <= 0) exit }
+      # A brace-less item (a `const`) ends at its `;`. Never reached by a `fn`/`enum`, whose
+      # declaration lines open a brace before any line ends in `;`.
+      if (!seen_open && $0 ~ /;[[:space:]]*$/) exit
     }
   ' "$file"
 }
@@ -186,23 +192,38 @@ current_gates() {
 # under trigger 1, and it is counted out loud on the OK line so the gap cannot read as coverage.
 #
 # The bindings below were read against the gate on 2026-08-23, for the files the elevation review
-# actually opened. Everything else is honestly `-`.
+# actually opened. Everything else is honestly `-`. The temper-core types rows (2026-10-01) bind the
+# prose those types publish as OpenAPI schema descriptions.
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 #
 # REVIEWED 2026-10-01 (resource erasure 2c, Step 3) — `grant` f1de797e6695 -> 38fca1c55861. The gate
 # NARROWED: `GrantAuthority::resolve`'s system-admin arm now refuses a dead `kb_resources` subject
-# (tombstone or erased husk). No claim in this baseline binds `grant`, so no prose could have
-# become an over-claim.
+# (tombstone or erased husk), and the owner's derived grant arm floors on liveness (20261001000010).
+# Re-read against the claims bound to `grant` (admin_ledger.rs, openapi.rs): a system admin's ledger
+# read short-circuits on is_system_admin before can_administer_grant, so "a system admin reads all
+# of them" holds; "a caller who may administer grants on the subject reads its grant acts" holds,
+# the population now excluding a dead resource's owner. No over-claim.
 read -r -d '' BASELINE <<'EOF' || true
-claim crates/temper-api/src/handlers/access.rs 14 is_system_admin
+claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
+claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
+claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 require_cogmap_write_admin
-claim crates/temper-api/src/handlers/connections.rs 1 connection
-claim crates/temper-api/src/handlers/erasure.rs 2 is_system_admin
-claim crates/temper-api/src/handlers/resource_erasure.rs 2 is_system_admin
+claim crates/temper-api/src/handlers/connections.rs 19 connection,machine,require_manage_on_team,can_manage
+claim crates/temper-api/src/handlers/embed.rs 2 is_system_admin
+claim crates/temper-api/src/handlers/erasure.rs 6 is_system_admin
+claim crates/temper-api/src/handlers/machine_clients.rs 14 is_system_admin,machine,require_manage_on_team,can_manage
+claim crates/temper-api/src/openapi.rs 5 is_system_admin,machine,connection,subscription,read_gates,grant,ledger_subject
+claim crates/temper-api/src/handlers/resource_erasure.rs 6 is_system_admin
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
+claim crates/temper-api/src/handlers/subscriptions.rs 9 subscription
 claim crates/temper-api/src/handlers/teams.rs 1 -
+claim crates/temper-core/src/types/admin.rs 5 is_system_admin,read_gates
+claim crates/temper-core/src/types/connection.rs 2 machine,connection
+claim crates/temper-core/src/types/machine.rs 1 machine
+claim crates/temper-core/src/types/subscription.rs 1 subscription
+claim crates/temper-core/src/types/team.rs 1 -
 claim crates/temper-cli/src/cli.rs 14 -
 claim crates/temper-cli/src/commands/admin.rs 4 -
 claim crates/temper-cli/src/commands/admin_connection.rs 2 connection
@@ -235,8 +256,9 @@ gate audit_gate 05a9b61226c4
 gate connection 1281bf5040ff
 gate context_admin 6bd5aa70ab69
 gate grant 38fca1c55861
-gate machine 18570f26a292
+gate machine 358b8ebb066d
 gate read_gates 5b394645d054
+gate ledger_subject 595564c89c9c
 gate subscription efe0d95990a8
 gate two_sided 4fb1fb73d559
 gate require_cogmap_write_admin 0e739e3f803f
