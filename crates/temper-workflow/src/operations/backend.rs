@@ -36,6 +36,10 @@ use super::surface::Surface;
 /// (in temper-cli). Each command method takes a command struct, executes it
 /// against the backend's persistence, and returns a `CommandOutput<T>` with
 /// the typed value plus emitted events.
+// `#[async_trait]` stamps a bare `#[must_use]` on each method whose return it boxes into a
+// `Pin<Box<dyn Future>>` — already `#[must_use]` — which clippy 1.99's `double_must_use` rejects.
+// The attribute is the macro's, not ours; the allow is scoped to this trait's expansion.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait Backend: Send + Sync {
     async fn create_resource(

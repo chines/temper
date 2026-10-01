@@ -1,6 +1,7 @@
 //! The admin ledger's read surface. Out of the OpenAPI contract (plain `.route()` mounting),
-//! like `/api/access/admin/*` and `/api/machine-clients*` — its path is on the allowlist in
-//! `.github/scripts/check-openapi-routes.sh`.
+//! like `/api/machine-clients*` — its path is on the allowlist in
+//! `.github/scripts/check-openapi-routes.sh`. Not in the admin route group (`routes/admin.rs`)
+//! despite its path: the gate below admits the actor axis and per-family readers, not only admins.
 //!
 //! **Authorization lives in the service, not here.** `admin_ledger_service` gates both axes
 //! itself, and it does so by *dispatching per act family* rather than with a single prelude:

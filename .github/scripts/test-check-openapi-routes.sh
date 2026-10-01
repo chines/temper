@@ -56,8 +56,8 @@ fn gated_routes() -> OpenApiRouter<AppState> {
 
     OpenApiRouter::new()
         .routes(routes!(handlers::resources::list))
-        // Allowlisted operator surface — fine.
-        .route("/api/access/admin/promote", post(handlers::access::promote_admin))
+        // Allowlisted server-to-server surface — fine.
+        .route("/api/embed/dispatch", post(handlers::embed::dispatch))
         // Undocumented public route — MUST fail the gate.
         .route("/api/secret", get(handlers::secret::leak))
 }
@@ -94,15 +94,25 @@ ALL_ALLOWED="${FIXTURE_DIR}/all_allowed.rs"
 cat > "$ALL_ALLOWED" <<'EOF'
 fn gated_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .route("/api/access/admin/requests", get(a))
-        .route("/api/access/admin/requests/{id}", patch(b))
-        .route("/api/access/admin/settings", get(c).patch(d))
-        .route("/api/access/admin/promote", post(e))
+        .route("/api/admin/ledger", get(a))
+        .route("/api/machine-clients/{id}", get(b).delete(c))
+        .route("/api/connections/{id}/reach", post(d).delete(e))
         .route("/internal/saml/reconcile", post(f))
         .route("/api/embed/dispatch", get(g).post(g))
 }
 EOF
 run_test "all allowlisted plain .route()s: passes" "$ALL_ALLOWED" 0
+
+# --- the system-admin surface is documented, never allowlisted: a plain mount of one of its
+# paths is a regression to the undocumented posture and MUST fail ---
+ADMIN_PLAIN="${FIXTURE_DIR}/admin_plain.rs"
+cat > "$ADMIN_PLAIN" <<'EOF'
+fn admin_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .route("/api/access/admin/promote", post(handlers::access::promote_admin))
+}
+EOF
+run_test "system-admin path mounted plain: fails" "$ADMIN_PLAIN" 1
 
 # --- a fixture with no .route( at all passes (nothing to check) ---
 EMPTY="${FIXTURE_DIR}/empty.rs"

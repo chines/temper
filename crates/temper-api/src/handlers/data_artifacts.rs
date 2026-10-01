@@ -125,6 +125,10 @@ pub async fn get(
         (status = 404, description = "Not found or not visible", body = ErrorBody),
     )
 )]
+// The `[get](get)` link above is what rustdoc 1.99's `redundant_explicit_links` flags. The doc
+// comment is also this operation's published OpenAPI description, so rewording it would move the
+// contract; the allow keeps the contract byte-identical.
+#[allow(rustdoc::redundant_explicit_links)]
 pub async fn get_by_id(
     State(state): State<AppState>,
     auth: AuthUser,

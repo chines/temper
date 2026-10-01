@@ -17,7 +17,7 @@ use temper_core::types::machine::{
     IssueMachineRequest, IssuedMachineCredential, MachineClient, ProvisionMachineRequest,
     RebindMachineRequest, RotateSecretRequest,
 };
-use temper_services::error::ApiResult;
+use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::{machine_client_service, machine_registration_service};
 use temper_services::state::AppState;
 
@@ -39,6 +39,28 @@ pub async fn provision(
     Ok(Json(client))
 }
 
+/// POST /api/machine-clients/{id}/rebind — point a fresh IdP `client_id` at the agent profile an
+/// existing machine client holds (system admin only). Mounted by `routes/admin.rs`, apart from its
+/// owner-gated siblings: team ownership cannot bound the reach a rebind inherits.
+#[utoipa::path(
+    post,
+    operation_id = "admin_rebind_machine_client",
+    summary = "Rebind a machine client to a new client ID",
+    description = "Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.",
+    path = "/api/machine-clients/{id}/rebind",
+    tag = "Admin",
+    params(("id" = Uuid, Path, description = "The machine client whose profile the new client id inherits")),
+    request_body = RebindMachineRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The new machine client, bound to the inherited profile", body = MachineClient),
+        (status = 400, description = "The source client cannot be rebound (e.g. already revoked)", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such machine client", body = ErrorBody),
+        (status = 409, description = "The new `client_id` is already registered", body = ErrorBody),
+    )
+)]
 pub async fn rebind(
     State(state): State<AppState>,
     auth: AuthUser,

@@ -167,6 +167,10 @@ pub enum BrokerError {
 /// `Debug` is a supertrait so an `Arc<dyn CredentialBroker>` can live on the
 /// `Debug`-deriving [`crate::state::AppState`]; every impl redacts its secret in
 /// `Debug`.
+// `#[async_trait]` stamps a bare `#[must_use]` on each method whose return it boxes into a
+// `Pin<Box<dyn Future>>` — already `#[must_use]` — which clippy 1.99's `double_must_use` rejects.
+// The attribute is the macro's, not ours; the allow is scoped to this trait's expansion.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait CredentialBroker: Send + Sync + std::fmt::Debug {
     /// temper → remote: mint a scoped token for the connection's credential.

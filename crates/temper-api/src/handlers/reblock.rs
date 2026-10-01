@@ -6,9 +6,9 @@
 //! is the shared seam, so the deployment-wide `all` scope is `is_system_admin`-gated inside
 //! `DbBackend::reblock_resources` (a 403 surfacing through this route) while the resource and
 //! context scopes enumerate through the caller's own visibility. This differs from the
-//! operator-only `/api/embed/admin/reembed` trigger, which is admin-enclosed and deliberately
-//! undocumented: re-blocking is a per-row-gated operator verb whose contract is the receipt, so
-//! it is a documented route in the OpenAPI contract.
+//! operator-only `/api/embed/admin/reembed` trigger, which is admin-enclosed (the system-admin
+//! group, `routes/admin.rs`): re-blocking is a per-row-gated verb whose contract is the receipt,
+//! so it rides the general gated group.
 
 use axum::extract::State;
 use axum::Json;

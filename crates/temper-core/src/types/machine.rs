@@ -9,6 +9,7 @@ use uuid::Uuid;
 ///
 /// No secret is stored, in this phase or ever (D1). `team_id` is the machine's
 /// OWNER, never its reach (D6).
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct MachineClient {
     pub id: Uuid,
@@ -51,14 +52,19 @@ pub struct ProvisionMachineRequest {
 }
 
 /// Point a fresh `client_id` at an existing agent profile (D8).
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RebindMachineRequest {
     /// The new IdP client id.
     pub client_id: String,
-    /// The existing `kb_machine_clients.id` whose profile is inherited.
+    /// The existing `kb_machine_clients.id` whose profile is inherited. On
+    /// `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it,
+    /// so the HTTP body may omit it (it defaults to the nil UUID and is replaced before dispatch).
+    #[serde(default)]
     pub from_machine_client_id: Uuid,
     pub label: String,
-    /// When false (the default), the old row is revoked in the same transaction.
+    /// When false (the default when omitted), the old row is revoked in the same transaction.
+    #[serde(default)]
     pub keep_old_active: bool,
 }
 

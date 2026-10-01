@@ -63,10 +63,10 @@ pub struct PromoteAdminRequest {
 /// The governance twin of [`PromoteAdminRequest`]: it revokes the system-admin grant. Not
 /// team-scoped — governance is keyed on the profile alone, so it carries no team.
 ///
-/// Leaner derives than its sibling on purpose: this is an operator-only endpoint, excluded from the
-/// OpenAPI contract (no `#[utoipa::path]`), fronted by no MCP tool, and consumed by no UI — so it
-/// carries only the wire derives, not the `typescript`/`web-api`/`mcp` set that would generate
-/// surface nothing consumes.
+/// It carries the `web-api` derive because the admin surface is part of the documented contract,
+/// but not the `typescript`/`mcp` set: it is fronted by no MCP tool and consumed by no UI, so those
+/// derives would generate surface nothing consumes.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DemoteAdminRequest {
     /// Profile to demote (revoke its system-admin governance grant).
@@ -168,8 +168,8 @@ mod tests {
 
 // ── re-embed trigger (operator-only) ──────────────────────────────────────────
 //
-// Deliberately NOT in the OpenAPI contract: the handler is mounted with a plain `.route()`, like the
-// rest of `/api/*/admin/*`. It is an operator action, not part of the product surface.
+// Documented under the OpenAPI `Admin` tag with the rest of the system-admin surface
+// (`routes/admin.rs`): an operator action, gated by the `&SystemAdmin` proof.
 
 /// Body for `POST /api/embed/admin/reembed`.
 ///
@@ -180,6 +180,7 @@ mod tests {
 /// Nothing is *marked* dirty. Staleness is derived — a chunk is stale when it has no vector, or when
 /// its `embedded_with` is not the model the server embeds with — so this only ever enqueues work for
 /// chunks that genuinely need it, and it is safe to re-run at any time.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReembedRequest {
     /// Re-embed just this resource.
@@ -200,6 +201,7 @@ pub struct ReembedRequest {
 }
 
 /// Result of a re-embed trigger — and, on `dry_run`, just the survey.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReembedSummary {
     /// Resources in scope still holding stale chunks.
@@ -403,6 +405,7 @@ pub struct AdminLedgerInput {
 /// separate parameters with separate semantics — never aliases. The server refuses a request
 /// naming both rather than picking one.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 pub struct AdminProfilesListQuery {
     /// Filter by admission state: `denied|requested|approved|revoked|deactivated|needs-access|all`.
     /// Default `needs-access` — every non-approved state INCLUDING no standing row (the

@@ -42,10 +42,15 @@ else
     exit 1
 fi
 
-# The operator-only / server-to-server surfaces deliberately mounted with plain
-# `.route()` and kept OUT of the OpenAPI contract. Keep in sync with the
-# comments in the routes module (gated.rs / internal.rs / embed_internal.rs /
-# webhook_intake_routes).
+# The surfaces deliberately mounted with plain `.route()` and kept OUT of the
+# OpenAPI contract. Keep in sync with the comments in the routes module (gated.rs /
+# internal.rs / embed_internal.rs / webhook_intake_routes).
+#
+# The system-admin surface is NOT here and must not come back: an admin door is
+# not a secret in a public repository, so it is documented (routes/admin.rs) and
+# protected by its `&SystemAdmin` gate and the tests that pin it. "Operator-only"
+# is not by itself a reason to allowlist a route — "no bearer can reach it" (a
+# shared-secret cron, an HMAC-signed internal call, a third-party webhook) is.
 #
 # On /api/intake/webhook: its caller is Vercel Connect forwarding a third-party system's
 # event. Connect reads no contract of ours -- it POSTs to a trigger path configured on the
@@ -54,26 +59,9 @@ fi
 # who can. Its request shape is also not ours to publish: the body is the remote provider's
 # verbatim payload, which has no schema temper owns (the same reason its kb_event_types row
 # carries a NULL payload_schema).
-ALLOWLIST='/api/access/admin/requests
-/api/access/admin/requests/count
-/api/access/admin/requests/{id}
-/api/access/admin/reviews
-/api/access/admin/reviews/count
-/api/access/admin/reviews/{id}
-/api/access/admin/settings
-/api/access/admin/promote
-/api/access/admin/demote
-/api/access/admin/principals/{id}/approve
-/api/access/admin/principals/{id}/revoke
-/api/access/admin/principals/{id}/deactivate
-/api/access/admin/principals/{id}/reactivate
-/api/access/admin/auto-join/reconcile
-/api/access/admin/profiles
-/api/access/admin/profiles/{profile_id}
-/api/admin/ledger
+ALLOWLIST='/api/admin/ledger
 /api/machine-clients
 /api/machine-clients/{id}
-/api/machine-clients/{id}/rebind
 /api/machine-clients/issue
 /api/machine-clients/{id}/rotate-secret
 /api/connections
@@ -91,15 +79,10 @@ ALLOWLIST='/api/access/admin/requests
 /api/auth/slack/callback
 /api/embed/dispatch
 /api/embed/warm
-/api/embed/admin/reembed
 /api/slack/intents/reap
 /api/as/reap
 /api/internal-calls/health
 /api/region/dispatch
-/api/admin/erasure
-/api/admin/erasure/survey
-/api/admin/resources/erasure
-/api/admin/resources/erasure/survey
 /api/erasure/drain
 /api/intake/webhook'
 
@@ -164,4 +147,4 @@ if [ -n "$OFFENDERS" ]; then
     exit 1
 fi
 
-echo "check-openapi-routes: all plain .route(...) mounts are on the operator-only allowlist"
+echo "check-openapi-routes: all plain .route(...) mounts are on the out-of-contract allowlist"

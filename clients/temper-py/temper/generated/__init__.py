@@ -19,6 +19,7 @@ __version__ = "0.5.4"
 # Define package exports
 __all__ = [
     "AccessApi",
+    "AdminApi",
     "AuditorApi",
     "BlobsApi",
     "CognitiveMapsApi",
@@ -60,6 +61,15 @@ __all__ = [
     "ActRefusal",
     "ActorAuthority",
     "AddMemberRequest",
+    "AdminDirectoryEntry",
+    "AdminDirectoryListResponse",
+    "AdminOpenJoinRequest",
+    "AdminOpenReviewRequest",
+    "AdminProfileAuthLink",
+    "AdminProfileCard",
+    "AdminProfileInvitation",
+    "AdminProfileTeamMembership",
+    "AdminProfilesListAnswer",
     "AdvanceWatermarkAck",
     "AdvanceWatermarkRequest",
     "AgentAuthorship",
@@ -84,8 +94,10 @@ __all__ = [
     "AuditorDispatchTickRequest",
     "AuditorDispatchTickResponse",
     "AuditorJobCompleteAck",
+    "AutoJoinReconcileRow",
     "BindTeamOutcome",
     "BindTeamRequest",
+    "BlobCoLinks",
     "BlobCommitResponse",
     "BlobDeleteAck",
     "BlobRelationAck",
@@ -93,6 +105,7 @@ __all__ = [
     "BlobRelationDirection",
     "BlobRelationEdgeDirection",
     "BlobRelationRow",
+    "BlobStrikeView",
     "BlobSummary",
     "BlobUploadBeginRequest",
     "BlobUploadBeginResponse",
@@ -124,6 +137,7 @@ __all__ = [
     "ClaimedAuditJob",
     "ClaimedJob",
     "CloseInvocationRequest",
+    "CloseReviewBody",
     "CogmapAnalyticsRow",
     "CogmapDetail",
     "CogmapFoundationRow",
@@ -154,6 +168,7 @@ __all__ = [
     "CreateReviewBody",
     "Deactivated",
     "DeleteResponse",
+    "DemoteAdminRequest",
     "Denied",
     "DeviceOverrides",
     "DiscouragedOpenMetaKey",
@@ -175,6 +190,11 @@ __all__ = [
     "EnforcementMode",
     "Entitlements",
     "EntryBounds",
+    "ErasureExecuteRequest",
+    "ErasureExecuteResponse",
+    "ErasureSurveyRequest",
+    "ErasureSurveyResponse",
+    "ErasureTargetOutcome",
     "ErrorBody",
     "ErrorDetail",
     "ErrorDetails",
@@ -227,10 +247,12 @@ __all__ = [
     "InvocationView",
     "JoinRequest",
     "JoinRequestStatus",
+    "JoinRequestWithProfile",
     "KindOwnerInput",
     "KindOwnerInputOneOf",
     "KindOwnerInputOneOf1",
     "LineageNode",
+    "MachineClient",
     "ManagedMeta",
     "MatchLocation",
     "MaterializeAck",
@@ -246,6 +268,8 @@ __all__ = [
     "OpenMetaConvention",
     "OrdOp",
     "OrphanNode",
+    "OtherAuthorEdge",
+    "OtherAuthorEdgeProperty",
     "OutcomeDeclaration",
     "PendingInvitationCounts",
     "PlanRefusal",
@@ -255,6 +279,7 @@ __all__ = [
     "ProfileAuthLink",
     "ProfileUpdateRequest",
     "ProfileWithEntitlements",
+    "PromoteAdminRequest",
     "PropertyOp",
     "PropertyOpOneOf",
     "PropertyOpOneOf1",
@@ -270,10 +295,12 @@ __all__ = [
     "QuantityScaleOneOf1",
     "QuantityScaleOneOf2",
     "QueryResponse",
+    "QueueCount",
     "ReassignAck",
     "ReassignContextOutcome",
     "ReassignContextRequest",
     "ReassignResourceRequest",
+    "RebindMachineRequest",
     "ReblockCandidate",
     "ReblockOutcome",
     "ReblockOutcomeOneOf",
@@ -290,6 +317,7 @@ __all__ = [
     "ReblockScopeOneOf",
     "ReblockScopeOneOf1",
     "ReblockSummary",
+    "ReconcileAutoJoinOutcome",
     "ReconcileCogmapRequest",
     "ReconcileEdge",
     "ReconcileEdgeTombstone",
@@ -298,6 +326,9 @@ __all__ = [
     "ReconcileTelos",
     "ReconcileTelosBlock",
     "ReconcileTombstone",
+    "RedactedEventFields",
+    "ReembedRequest",
+    "ReembedSummary",
     "Refusal",
     "RefusalReason",
     "RegionDisclosure",
@@ -315,6 +346,14 @@ __all__ = [
     "ResourceAnnotateRequest",
     "ResourceConnections",
     "ResourceCreateRequest",
+    "ResourceErasureExecuteRequest",
+    "ResourceErasureExecuteResponse",
+    "ResourceErasureExecuteResponseOneOf",
+    "ResourceErasureExecuteResponseOneOf1",
+    "ResourceErasurePlan",
+    "ResourceErasureRefusalReason",
+    "ResourceErasureSurvey",
+    "ResourceErasureSurveyRequest",
     "ResourceFacetRow",
     "ResourceFacets",
     "ResourceFacetsResponse",
@@ -332,7 +371,10 @@ __all__ = [
     "RetireContextOutcome",
     "ReturnSpec",
     "RetypeRelationshipRequest",
+    "ReviewRequestBody",
+    "ReviewRequestWithProfile",
     "RevokeOutcome",
+    "RevokePrincipalBody",
     "Revoked",
     "ReweightRelationshipRequest",
     "ScoreKind",
@@ -373,6 +415,7 @@ __all__ = [
     "Subscription",
     "SubscriptionOverride",
     "SystemAccessDetails",
+    "SystemSettings",
     "TeamCreateRequest",
     "TeamDetail",
     "TeamInvitation",
@@ -388,6 +431,7 @@ __all__ = [
     "UnbindTeamOutcome",
     "UnrecognizedStanding",
     "UnshareContextOutcome",
+    "UpdateSettingsRequest",
     "VaultConfig",
     "ViaEntry",
     "WideArm",
@@ -396,6 +440,7 @@ __all__ = [
 
 # import apis into sdk package
 from temper.generated.api.access_api import AccessApi as AccessApi
+from temper.generated.api.admin_api import AdminApi as AdminApi
 from temper.generated.api.auditor_api import AuditorApi as AuditorApi
 from temper.generated.api.blobs_api import BlobsApi as BlobsApi
 from temper.generated.api.cognitive_maps_api import CognitiveMapsApi as CognitiveMapsApi
@@ -441,6 +486,15 @@ from temper.generated.models.act_quantity import ActQuantity as ActQuantity
 from temper.generated.models.act_refusal import ActRefusal as ActRefusal
 from temper.generated.models.actor_authority import ActorAuthority as ActorAuthority
 from temper.generated.models.add_member_request import AddMemberRequest as AddMemberRequest
+from temper.generated.models.admin_directory_entry import AdminDirectoryEntry as AdminDirectoryEntry
+from temper.generated.models.admin_directory_list_response import AdminDirectoryListResponse as AdminDirectoryListResponse
+from temper.generated.models.admin_open_join_request import AdminOpenJoinRequest as AdminOpenJoinRequest
+from temper.generated.models.admin_open_review_request import AdminOpenReviewRequest as AdminOpenReviewRequest
+from temper.generated.models.admin_profile_auth_link import AdminProfileAuthLink as AdminProfileAuthLink
+from temper.generated.models.admin_profile_card import AdminProfileCard as AdminProfileCard
+from temper.generated.models.admin_profile_invitation import AdminProfileInvitation as AdminProfileInvitation
+from temper.generated.models.admin_profile_team_membership import AdminProfileTeamMembership as AdminProfileTeamMembership
+from temper.generated.models.admin_profiles_list_answer import AdminProfilesListAnswer as AdminProfilesListAnswer
 from temper.generated.models.advance_watermark_ack import AdvanceWatermarkAck as AdvanceWatermarkAck
 from temper.generated.models.advance_watermark_request import AdvanceWatermarkRequest as AdvanceWatermarkRequest
 from temper.generated.models.agent_authorship import AgentAuthorship as AgentAuthorship
@@ -465,8 +519,10 @@ from temper.generated.models.audit_sweep_row import AuditSweepRow as AuditSweepR
 from temper.generated.models.auditor_dispatch_tick_request import AuditorDispatchTickRequest as AuditorDispatchTickRequest
 from temper.generated.models.auditor_dispatch_tick_response import AuditorDispatchTickResponse as AuditorDispatchTickResponse
 from temper.generated.models.auditor_job_complete_ack import AuditorJobCompleteAck as AuditorJobCompleteAck
+from temper.generated.models.auto_join_reconcile_row import AutoJoinReconcileRow as AutoJoinReconcileRow
 from temper.generated.models.bind_team_outcome import BindTeamOutcome as BindTeamOutcome
 from temper.generated.models.bind_team_request import BindTeamRequest as BindTeamRequest
+from temper.generated.models.blob_co_links import BlobCoLinks as BlobCoLinks
 from temper.generated.models.blob_commit_response import BlobCommitResponse as BlobCommitResponse
 from temper.generated.models.blob_delete_ack import BlobDeleteAck as BlobDeleteAck
 from temper.generated.models.blob_relation_ack import BlobRelationAck as BlobRelationAck
@@ -474,6 +530,7 @@ from temper.generated.models.blob_relation_assert_request import BlobRelationAss
 from temper.generated.models.blob_relation_direction import BlobRelationDirection as BlobRelationDirection
 from temper.generated.models.blob_relation_edge_direction import BlobRelationEdgeDirection as BlobRelationEdgeDirection
 from temper.generated.models.blob_relation_row import BlobRelationRow as BlobRelationRow
+from temper.generated.models.blob_strike_view import BlobStrikeView as BlobStrikeView
 from temper.generated.models.blob_summary import BlobSummary as BlobSummary
 from temper.generated.models.blob_upload_begin_request import BlobUploadBeginRequest as BlobUploadBeginRequest
 from temper.generated.models.blob_upload_begin_response import BlobUploadBeginResponse as BlobUploadBeginResponse
@@ -505,6 +562,7 @@ from temper.generated.models.citation_audit_row import CitationAuditRow as Citat
 from temper.generated.models.claimed_audit_job import ClaimedAuditJob as ClaimedAuditJob
 from temper.generated.models.claimed_job import ClaimedJob as ClaimedJob
 from temper.generated.models.close_invocation_request import CloseInvocationRequest as CloseInvocationRequest
+from temper.generated.models.close_review_body import CloseReviewBody as CloseReviewBody
 from temper.generated.models.cogmap_analytics_row import CogmapAnalyticsRow as CogmapAnalyticsRow
 from temper.generated.models.cogmap_detail import CogmapDetail as CogmapDetail
 from temper.generated.models.cogmap_foundation_row import CogmapFoundationRow as CogmapFoundationRow
@@ -535,6 +593,7 @@ from temper.generated.models.create_request_body import CreateRequestBody as Cre
 from temper.generated.models.create_review_body import CreateReviewBody as CreateReviewBody
 from temper.generated.models.deactivated import Deactivated as Deactivated
 from temper.generated.models.delete_response import DeleteResponse as DeleteResponse
+from temper.generated.models.demote_admin_request import DemoteAdminRequest as DemoteAdminRequest
 from temper.generated.models.denied import Denied as Denied
 from temper.generated.models.device_overrides import DeviceOverrides as DeviceOverrides
 from temper.generated.models.discouraged_open_meta_key import DiscouragedOpenMetaKey as DiscouragedOpenMetaKey
@@ -556,6 +615,11 @@ from temper.generated.models.embedding_status import EmbeddingStatus as Embeddin
 from temper.generated.models.enforcement_mode import EnforcementMode as EnforcementMode
 from temper.generated.models.entitlements import Entitlements as Entitlements
 from temper.generated.models.entry_bounds import EntryBounds as EntryBounds
+from temper.generated.models.erasure_execute_request import ErasureExecuteRequest as ErasureExecuteRequest
+from temper.generated.models.erasure_execute_response import ErasureExecuteResponse as ErasureExecuteResponse
+from temper.generated.models.erasure_survey_request import ErasureSurveyRequest as ErasureSurveyRequest
+from temper.generated.models.erasure_survey_response import ErasureSurveyResponse as ErasureSurveyResponse
+from temper.generated.models.erasure_target_outcome import ErasureTargetOutcome as ErasureTargetOutcome
 from temper.generated.models.error_body import ErrorBody as ErrorBody
 from temper.generated.models.error_detail import ErrorDetail as ErrorDetail
 from temper.generated.models.error_details import ErrorDetails as ErrorDetails
@@ -608,10 +672,12 @@ from temper.generated.models.invocation_summary import InvocationSummary as Invo
 from temper.generated.models.invocation_view import InvocationView as InvocationView
 from temper.generated.models.join_request import JoinRequest as JoinRequest
 from temper.generated.models.join_request_status import JoinRequestStatus as JoinRequestStatus
+from temper.generated.models.join_request_with_profile import JoinRequestWithProfile as JoinRequestWithProfile
 from temper.generated.models.kind_owner_input import KindOwnerInput as KindOwnerInput
 from temper.generated.models.kind_owner_input_one_of import KindOwnerInputOneOf as KindOwnerInputOneOf
 from temper.generated.models.kind_owner_input_one_of1 import KindOwnerInputOneOf1 as KindOwnerInputOneOf1
 from temper.generated.models.lineage_node import LineageNode as LineageNode
+from temper.generated.models.machine_client import MachineClient as MachineClient
 from temper.generated.models.managed_meta import ManagedMeta as ManagedMeta
 from temper.generated.models.match_location import MatchLocation as MatchLocation
 from temper.generated.models.materialize_ack import MaterializeAck as MaterializeAck
@@ -627,6 +693,8 @@ from temper.generated.models.open_invocation_request import OpenInvocationReques
 from temper.generated.models.open_meta_convention import OpenMetaConvention as OpenMetaConvention
 from temper.generated.models.ord_op import OrdOp as OrdOp
 from temper.generated.models.orphan_node import OrphanNode as OrphanNode
+from temper.generated.models.other_author_edge import OtherAuthorEdge as OtherAuthorEdge
+from temper.generated.models.other_author_edge_property import OtherAuthorEdgeProperty as OtherAuthorEdgeProperty
 from temper.generated.models.outcome_declaration import OutcomeDeclaration as OutcomeDeclaration
 from temper.generated.models.pending_invitation_counts import PendingInvitationCounts as PendingInvitationCounts
 from temper.generated.models.plan_refusal import PlanRefusal as PlanRefusal
@@ -636,6 +704,7 @@ from temper.generated.models.profile import Profile as Profile
 from temper.generated.models.profile_auth_link import ProfileAuthLink as ProfileAuthLink
 from temper.generated.models.profile_update_request import ProfileUpdateRequest as ProfileUpdateRequest
 from temper.generated.models.profile_with_entitlements import ProfileWithEntitlements as ProfileWithEntitlements
+from temper.generated.models.promote_admin_request import PromoteAdminRequest as PromoteAdminRequest
 from temper.generated.models.property_op import PropertyOp as PropertyOp
 from temper.generated.models.property_op_one_of import PropertyOpOneOf as PropertyOpOneOf
 from temper.generated.models.property_op_one_of1 import PropertyOpOneOf1 as PropertyOpOneOf1
@@ -651,10 +720,12 @@ from temper.generated.models.quantity_scale_one_of import QuantityScaleOneOf as 
 from temper.generated.models.quantity_scale_one_of1 import QuantityScaleOneOf1 as QuantityScaleOneOf1
 from temper.generated.models.quantity_scale_one_of2 import QuantityScaleOneOf2 as QuantityScaleOneOf2
 from temper.generated.models.query_response import QueryResponse as QueryResponse
+from temper.generated.models.queue_count import QueueCount as QueueCount
 from temper.generated.models.reassign_ack import ReassignAck as ReassignAck
 from temper.generated.models.reassign_context_outcome import ReassignContextOutcome as ReassignContextOutcome
 from temper.generated.models.reassign_context_request import ReassignContextRequest as ReassignContextRequest
 from temper.generated.models.reassign_resource_request import ReassignResourceRequest as ReassignResourceRequest
+from temper.generated.models.rebind_machine_request import RebindMachineRequest as RebindMachineRequest
 from temper.generated.models.reblock_candidate import ReblockCandidate as ReblockCandidate
 from temper.generated.models.reblock_outcome import ReblockOutcome as ReblockOutcome
 from temper.generated.models.reblock_outcome_one_of import ReblockOutcomeOneOf as ReblockOutcomeOneOf
@@ -671,6 +742,7 @@ from temper.generated.models.reblock_scope import ReblockScope as ReblockScope
 from temper.generated.models.reblock_scope_one_of import ReblockScopeOneOf as ReblockScopeOneOf
 from temper.generated.models.reblock_scope_one_of1 import ReblockScopeOneOf1 as ReblockScopeOneOf1
 from temper.generated.models.reblock_summary import ReblockSummary as ReblockSummary
+from temper.generated.models.reconcile_auto_join_outcome import ReconcileAutoJoinOutcome as ReconcileAutoJoinOutcome
 from temper.generated.models.reconcile_cogmap_request import ReconcileCogmapRequest as ReconcileCogmapRequest
 from temper.generated.models.reconcile_edge import ReconcileEdge as ReconcileEdge
 from temper.generated.models.reconcile_edge_tombstone import ReconcileEdgeTombstone as ReconcileEdgeTombstone
@@ -679,6 +751,9 @@ from temper.generated.models.reconcile_outcome import ReconcileOutcome as Reconc
 from temper.generated.models.reconcile_telos import ReconcileTelos as ReconcileTelos
 from temper.generated.models.reconcile_telos_block import ReconcileTelosBlock as ReconcileTelosBlock
 from temper.generated.models.reconcile_tombstone import ReconcileTombstone as ReconcileTombstone
+from temper.generated.models.redacted_event_fields import RedactedEventFields as RedactedEventFields
+from temper.generated.models.reembed_request import ReembedRequest as ReembedRequest
+from temper.generated.models.reembed_summary import ReembedSummary as ReembedSummary
 from temper.generated.models.refusal import Refusal as Refusal
 from temper.generated.models.refusal_reason import RefusalReason as RefusalReason
 from temper.generated.models.region_disclosure import RegionDisclosure as RegionDisclosure
@@ -696,6 +771,14 @@ from temper.generated.models.residual_owned_reach import ResidualOwnedReach as R
 from temper.generated.models.resource_annotate_request import ResourceAnnotateRequest as ResourceAnnotateRequest
 from temper.generated.models.resource_connections import ResourceConnections as ResourceConnections
 from temper.generated.models.resource_create_request import ResourceCreateRequest as ResourceCreateRequest
+from temper.generated.models.resource_erasure_execute_request import ResourceErasureExecuteRequest as ResourceErasureExecuteRequest
+from temper.generated.models.resource_erasure_execute_response import ResourceErasureExecuteResponse as ResourceErasureExecuteResponse
+from temper.generated.models.resource_erasure_execute_response_one_of import ResourceErasureExecuteResponseOneOf as ResourceErasureExecuteResponseOneOf
+from temper.generated.models.resource_erasure_execute_response_one_of1 import ResourceErasureExecuteResponseOneOf1 as ResourceErasureExecuteResponseOneOf1
+from temper.generated.models.resource_erasure_plan import ResourceErasurePlan as ResourceErasurePlan
+from temper.generated.models.resource_erasure_refusal_reason import ResourceErasureRefusalReason as ResourceErasureRefusalReason
+from temper.generated.models.resource_erasure_survey import ResourceErasureSurvey as ResourceErasureSurvey
+from temper.generated.models.resource_erasure_survey_request import ResourceErasureSurveyRequest as ResourceErasureSurveyRequest
 from temper.generated.models.resource_facet_row import ResourceFacetRow as ResourceFacetRow
 from temper.generated.models.resource_facets import ResourceFacets as ResourceFacets
 from temper.generated.models.resource_facets_response import ResourceFacetsResponse as ResourceFacetsResponse
@@ -713,7 +796,10 @@ from temper.generated.models.restore_context_outcome import RestoreContextOutcom
 from temper.generated.models.retire_context_outcome import RetireContextOutcome as RetireContextOutcome
 from temper.generated.models.return_spec import ReturnSpec as ReturnSpec
 from temper.generated.models.retype_relationship_request import RetypeRelationshipRequest as RetypeRelationshipRequest
+from temper.generated.models.review_request_body import ReviewRequestBody as ReviewRequestBody
+from temper.generated.models.review_request_with_profile import ReviewRequestWithProfile as ReviewRequestWithProfile
 from temper.generated.models.revoke_outcome import RevokeOutcome as RevokeOutcome
+from temper.generated.models.revoke_principal_body import RevokePrincipalBody as RevokePrincipalBody
 from temper.generated.models.revoked import Revoked as Revoked
 from temper.generated.models.reweight_relationship_request import ReweightRelationshipRequest as ReweightRelationshipRequest
 from temper.generated.models.score_kind import ScoreKind as ScoreKind
@@ -754,6 +840,7 @@ from temper.generated.models.standing_shape import StandingShape as StandingShap
 from temper.generated.models.subscription import Subscription as Subscription
 from temper.generated.models.subscription_override import SubscriptionOverride as SubscriptionOverride
 from temper.generated.models.system_access_details import SystemAccessDetails as SystemAccessDetails
+from temper.generated.models.system_settings import SystemSettings as SystemSettings
 from temper.generated.models.team_create_request import TeamCreateRequest as TeamCreateRequest
 from temper.generated.models.team_detail import TeamDetail as TeamDetail
 from temper.generated.models.team_invitation import TeamInvitation as TeamInvitation
@@ -769,6 +856,7 @@ from temper.generated.models.territory_overview import TerritoryOverview as Terr
 from temper.generated.models.unbind_team_outcome import UnbindTeamOutcome as UnbindTeamOutcome
 from temper.generated.models.unrecognized_standing import UnrecognizedStanding as UnrecognizedStanding
 from temper.generated.models.unshare_context_outcome import UnshareContextOutcome as UnshareContextOutcome
+from temper.generated.models.update_settings_request import UpdateSettingsRequest as UpdateSettingsRequest
 from temper.generated.models.vault_config import VaultConfig as VaultConfig
 from temper.generated.models.via_entry import ViaEntry as ViaEntry
 from temper.generated.models.wide_arm import WideArm as WideArm
