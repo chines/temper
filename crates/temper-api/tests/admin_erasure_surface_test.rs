@@ -177,14 +177,14 @@ async fn an_operator_completes_an_erasure_through_the_door(pool: PgPool) {
     );
 
     // And the door SAYS what happened.
-    let body: Value = resp.json().await.expect("the response is the completion");
+    let body: Value = resp
+        .json()
+        .await
+        .expect("the response is the tagged outcome");
+    assert_eq!(body["status"], "completed", "{body}");
     assert!(
         body["event_id"].is_string(),
         "the door returns the completion's event id: {body}"
-    );
-    assert!(
-        body.get("status").is_none(),
-        "the completion is the door's only answer, so it carries no tag: {body}"
     );
     assert_eq!(body["already_erased"], false);
     assert!(
@@ -283,7 +283,8 @@ async fn a_non_operator_gets_404_and_zero_new_events_until_the_gate_stands_down(
         "with the gate stood down the same request completes: {}",
         resp.text().await.unwrap_or_default()
     );
-    let body: Value = resp.json().await.expect("the completion");
+    let body: Value = resp.json().await.expect("the tagged outcome");
+    assert_eq!(body["status"], "completed", "{body}");
     assert_eq!(body["already_erased"], false, "{body}");
     assert!(body["event_id"].is_string(), "{body}");
 }
@@ -291,7 +292,8 @@ async fn a_non_operator_gets_404_and_zero_new_events_until_the_gate_stands_down(
 // ── WITNESS: the survey door — the operator's read-only preview ──────────────────────────────
 
 /// FAILS IF the survey door writes anything or pretends to have an event: an operator's
-/// survey answers 200 with the prediction shape (no `event_id` — nothing fired) and the LEDGER GAINED NOTHING — not just no erasure events, no events at all.
+/// survey answers 200 with the prediction shape (no `event_id`, no `status` tag — nothing
+/// fired) and the LEDGER GAINED NOTHING — not just no erasure events, no events at all.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_operator_surveys_through_the_door_and_the_ledger_gains_nothing(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -330,6 +332,10 @@ async fn an_operator_surveys_through_the_door_and_the_ledger_gains_nothing(pool:
     assert!(
         body.get("event_id").is_none(),
         "the survey fired nothing — there is no event id to report: {body}"
+    );
+    assert!(
+        body.get("status").is_none(),
+        "the survey is a plain prediction, not the tagged act outcome: {body}"
     );
 
     assert_eq!(

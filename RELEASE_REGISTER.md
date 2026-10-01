@@ -41,8 +41,7 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   exists); a non-operator gets `404`. A non-operator at either erasure door pair, the principal
   pair included, is now rejected before dispatch with no ledger event: `POST /api/admin/erasure`
   no longer records an `unauthorized` `principal_erasure_refused`, and the `unauthorized` reason
-  in both refusal vocabularies is retired (still registered). Its 200 body is now the completion
-  alone, without the `status` tag (no door raises a principal refusal). Who observes: the owner or a grant
+  in both refusal vocabularies is retired (still registered). Who observes: the owner or a grant
   holder of an erased resource, and the instance operator. User-visible: yes. Release
   relevance: signal-only.
 pr: self

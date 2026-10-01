@@ -8,7 +8,10 @@
 --    registered, retired, because removing one from a closed vocabulary is not additive. No door
 --    raises any principal refusal, and that schema now says so. The `principal_erasure_refused`
 --    literal registered by 20260909000015 is superseded here.
--- 3. `kb_erasure_blob_deletes`' COMMENT (20260909000040) named principal_erased as its only seed.
+-- 3. The COMMENTs on resource_erasure_refuse (20260929040730), principal_erasure_execute (newest
+--    restatement 20260913000030) and principal_erasure_refuse (20260909000025) described
+--    `unauthorized` as live. Each is restated verbatim, with only that clause made present-truth.
+-- 4. `kb_erasure_blob_deletes`' COMMENT (20260909000040) named principal_erased as its only seed.
 --    The fence derives from both erasure record types, and the blob delete door seeds it too.
 --
 -- Every reason's wire constant is unchanged; only descriptions move. Each payload_schema literal below is
@@ -203,6 +206,55 @@ UPDATE kb_event_types
 $JS$::jsonb
  WHERE name = 'principal_erasure_refused';
 
+COMMENT ON FUNCTION resource_erasure_refuse(uuid, uuid, uuid, uuid, text, text) IS
+'the resource-erasure act''s negative face (spec D5; the closed refusal vocabulary ruled
+2026-09-29): unauthorized | charter_resource | ingest_in_flight | already_erased — one recorded
+event, nothing else mutated. ingest_in_flight is RETIRED (D5, ruled 2026-09-29: ingest state is
+not a refusal; an in-flight ingest ends with the erasure): no path raises it, and it stays
+accepted because removing a value from a closed vocabulary is not additive. unauthorized is
+RETIRED too (ruled 2026-09-30): a non-admin is refused at the wire with no event, so no path
+raises it, and it stays accepted for the same reason. A repeat erasure is
+a recorded refusal, not a silent no-op: nothing in the projection changes and no second
+resource_erased is minted, but the attempt is part of the record, the same as every other
+refusal.';
+
+COMMENT ON FUNCTION principal_erasure_execute(uuid, uuid, uuid, uuid) IS
+'the erasure act (spec 2026-08-31, "The act, end to end" §3; Beat 2; outcome reads
+governed-scoped 20260911000000; home-pure scope per the 2026-09-11 scope-of-engagement
+ruling; the blob arm HOME-PURE since 20260913000020 — every live governed-home blob row is
+struck with the estate, whoever committed it, the 2026-09-12 ruling; SHARES THE COMPUTATION
+with principal_erasure_survey_plan since 20260913000010 — the plan is computed ONCE per act
+and the strike loop consumes its rows by id, so the act and the survey cannot drift): scope
+(every resource homed in a governed personal context), per-row governed-home blob strikes
+through blob_delete(''blob_erased'', …) — the wrapper''s verdict authoritative at strike
+time — the ONE NULL-anchored principal_erased event with the request reference on
+kb_events."references" + correlation, then _erasure_apply_redaction — all one transaction.
+The record names no retention the act does not make: every governed-home blob row is either
+struck or already-struck, and only the subject''s team/map-homed rows ride the named
+remainder (disposition iii). The per-target outcome reads scope to governed homes with the
+redaction''s own predicate, so the record never reports "erased" for a row the act
+deliberately leaves standing. Custody, not admission (the corrected arm-13 posture,
+20260913000020): retiring the governed contexts floors the read/author arms into the estate
+— but the estate''s resource rows stay live (D3), kb_erased_content refuses no write
+(20260911000000), and a re-commit of identical bytes into a retired home mints a fresh live
+row that a later erasure of the same estate strikes again; the estate is guarded by the tombstone and the custody floor, never by
+an impossibility of re-admission. The record also names the subject''s ATTRIBUTED text in
+shared spaces (20260913000030, the attribution ruling on the 2026-09-06 team-remainder
+clause): content blocks whose genesis event the subject''s entity emitted, in homes outside
+the governed estate — team and map alike — named with count and hashes for audit, never
+struck, never in the redacted set; attribution, never a deletion claim. Does NOT decide legality (is_system_admin is the Rust
+caller''s gate, resolved before any mutation); a non-admin is refused at the wire with no
+event, so no unauthorized refusal is recorded (the unauthorized reason is retired, ruled
+2026-09-30).';
+
+COMMENT ON FUNCTION principal_erasure_refuse(uuid, uuid, uuid, uuid, text, text) IS
+'the erasure act''s negative face (spec D6; Beat 2): records principal_erasure_refused —
+one event with the closed reason vocabulary (unauthorized | unhonourable_scope |
+independent_obligation) — and mutates NOTHING else. unauthorized is RETIRED (ruled
+2026-09-30): a non-admin is refused at the wire with no event, so no path raises it; it stays
+accepted because removing a value from a closed vocabulary is not additive. Accepted-in-part is NOT this event:
+a completion with a named remainder is principal_erasure_execute''s payload data.';
+
 COMMENT ON TABLE kb_erasure_blob_deletes IS
     'The erasure byte-delete fence: one durable retry state per strike-derived provider delete, '
     'seeded from the released blob strikes recorded in principal_erased and resource_erased '
@@ -211,5 +263,5 @@ COMMENT ON TABLE kb_erasure_blob_deletes IS
 SELECT declare_migration(
     20260930000050,
     'additive',
-    'Re-registers the resource_erasure_refused and principal_erasure_refused payload_schemas with present-truth descriptions (unauthorized retired, a non-admin refused at the wire with no event; every wire constant unchanged, so the closed vocabularies and the SQL refuse allowlists still accept every value) and corrects the kb_erasure_blob_deletes table COMMENT. Registry data and a comment only: no DDL, signature or grant changes.'
+    'Re-registers the resource_erasure_refused and principal_erasure_refused payload_schemas with present-truth descriptions (unauthorized retired, a non-admin refused at the wire with no event; every wire constant unchanged, so the closed vocabularies and the SQL refuse allowlists still accept every value) restates the resource_erasure_refuse, principal_erasure_execute and principal_erasure_refuse function COMMENTs with the unauthorized clause made present-truth, and corrects the kb_erasure_blob_deletes table COMMENT. Registry data and comments only: no DDL, signature or grant changes.'
 );

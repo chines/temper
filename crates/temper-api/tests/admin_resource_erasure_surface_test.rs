@@ -246,9 +246,9 @@ async fn a_non_operator_gets_404_and_zero_new_events_until_the_gate_stands_down(
 
 // ── WITNESS: the survey's silent 404 ─────────────────────────────────────────────────────────
 
-/// FAILS IF a non-operator's survey records anything or answers anything but 404 (a rejected
-/// caller is recorded only in telemetry). The bite: the same caller, gate granted, the same call
-/// answers 200.
+/// FAILS IF a non-operator's survey records anything or answers anything but the gate's 404 body,
+/// for a real id and an unknown one alike (a rejected caller is recorded only in telemetry). The
+/// bite: the same caller, gate granted, the same call answers 200.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_non_operator_survey_gets_404_and_zero_new_events_until_the_gate_stands_down(
     pool: PgPool,
@@ -259,8 +259,17 @@ async fn a_non_operator_survey_gets_404_and_zero_new_events_until_the_gate_stand
     let resource = create_resource(&app).await;
     let before = count_events(&app.pool, None).await;
 
-    let resp = post(&app, &token, SURVEY, &json!({ "resource": resource })).await;
-    assert_eq!(resp.status().as_u16(), 404);
+    // A real id and an unknown one get the same gate face: the gate answers before any lookup.
+    for id in [resource, Uuid::now_v7()] {
+        let resp = post(&app, &token, SURVEY, &json!({ "resource": id })).await;
+        assert_eq!(resp.status().as_u16(), 404);
+        let body: Value = resp.json().await.expect("the 404 body");
+        assert_eq!(
+            body["error"]["message"], "not found",
+            "the gate's face is EXACTLY \"not found\" — \"resource not found\" would betray a \
+             lookup running above the gate"
+        );
+    }
     assert_eq!(
         count_events(&app.pool, None).await,
         before,

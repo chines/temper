@@ -5,10 +5,11 @@
 //! **The doors reject a non-admin at the wire.** Every erasure service function takes the sealed
 //! `&SystemAdmin` proof, so each door mints it with `require_system_admin` before it dispatches
 //! (`require_erasure_operator`, shared with [`crate::handlers::resource_erasure`]), the
-//! `admin_directory` shape. A caller the gate declines is answered **404, never 403** (a 403 would
-//! confirm an erasure door exists and who it refuses), before any lookup, so every subject id gets
-//! the same body. The only record of that attempt is one `tracing` line: no ledger event of any
-//! kind. A survey attempt was never recorded either (ruled 2026-09-12), so both doors now answer a
+//! `admin_directory` shape. A caller the gate declines is answered **404, never 403**, before any
+//! lookup, so every subject id gets the same body and the refused caller learns nothing about the
+//! SUBJECT (not whether it exists, not whether it was erased). The doors themselves are
+//! discoverable, and the 404 does not claim to hide them. The only record of that attempt is one
+//! `tracing` line: no ledger event of any kind. A survey attempt was never recorded either (ruled 2026-09-12), so both doors now answer a
 //! non-admin alike. Both mounted plain (`.route()`), out of the OpenAPI contract like
 //! `/api/admin/ledger`; allowlisted in `.github/scripts/check-openapi-routes.sh`.
 //!
@@ -91,20 +92,25 @@ pub struct BlobStrikeView {
 }
 
 /// What the door's act did: the completion, in full or as the no-op completion on an
-/// already-erased subject. It is the door's only answer: no door raises a principal refusal (a
-/// caller who is not a system admin is answered 404 before dispatch).
+/// already-erased subject. It is the door's only answer, since no door raises a principal refusal
+/// (a caller who is not a system admin is answered 404 before dispatch). It stays a tagged enum
+/// of one variant so the wire keeps `"status": "completed"`: removing the tag would change the
+/// body's shape for no behavioural reason.
 #[derive(Debug, Serialize)]
-pub struct ErasureExecuteResponse {
-    pub event_id: Uuid,
-    pub already_erased: bool,
-    /// The redacted set (D2): content hashes only.
-    pub redacted_hashes: Vec<String>,
-    /// Per-target outcomes and the named remainder (D6's accepted-in-part arm): the operator
-    /// sees the `independent_obligation` remainder AT THE DOOR, not only in the ledger — the
-    /// completion's own payload is the audit, but the door's caller is the actor and deserves
-    /// the same facts.
-    pub targets: Vec<ErasureTargetOutcome>,
-    pub blob_strikes: Vec<BlobStrikeView>,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ErasureExecuteResponse {
+    Completed {
+        event_id: Uuid,
+        already_erased: bool,
+        /// The redacted set (D2): content hashes only.
+        redacted_hashes: Vec<String>,
+        /// Per-target outcomes and the named remainder (D6's accepted-in-part arm): the
+        /// operator sees the `independent_obligation` remainder AT THE DOOR, not only in the
+        /// ledger — the completion's own payload is the audit, but the door's caller is the
+        /// actor and deserves the same facts.
+        targets: Vec<ErasureTargetOutcome>,
+        blob_strikes: Vec<BlobStrikeView>,
+    },
 }
 
 /// `POST /api/admin/erasure` — the operator's execute door.
@@ -133,7 +139,7 @@ pub async fn execute(
     )
     .await?;
 
-    Ok(Json(ErasureExecuteResponse {
+    Ok(Json(ErasureExecuteResponse::Completed {
         event_id: c.event_id,
         already_erased: c.already_erased,
         redacted_hashes: c.redacted_hashes,
