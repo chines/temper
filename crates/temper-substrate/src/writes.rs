@@ -2696,8 +2696,21 @@ pub async fn assert_relationship_with(
     ctx: EventContext,
 ) -> Result<EdgeId> {
     let mut tx = begin_scoped(pool).await?;
+    let edge = assert_relationship_in_tx(&mut tx, p, ctx).await?;
+    tx.commit().await?;
+    Ok(edge)
+}
+
+/// In-transaction variant of [`assert_relationship`] — fires on a caller-supplied connection (no
+/// begin/commit). `ctx` correlates the authored `relationship_asserted` act
+/// (`EventContext::default()` for an un-attributed assert).
+pub async fn assert_relationship_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: AssertParams<'_>,
+    ctx: EventContext,
+) -> Result<EdgeId> {
     let edge = fire_with(
-        &mut tx,
+        conn,
         SeedAction::RelationshipAssert {
             src: payloads::AnchorRef::resource(p.src),
             tgt: payloads::AnchorRef::resource(p.tgt),
@@ -2712,7 +2725,6 @@ pub async fn assert_relationship_with(
     )
     .await?
     .relationship()?;
-    tx.commit().await?;
     Ok(edge)
 }
 
@@ -2755,8 +2767,21 @@ pub async fn assert_anchored_edge_with(
     ctx: EventContext,
 ) -> Result<EdgeId> {
     let mut tx = begin_scoped(pool).await?;
+    let edge = assert_anchored_edge_in_tx(&mut tx, p, ctx).await?;
+    tx.commit().await?;
+    Ok(edge)
+}
+
+/// In-transaction variant of [`assert_anchored_edge`] — fires on a caller-supplied connection (no
+/// begin/commit). `ctx` correlates the authored `relationship_asserted` act
+/// (`EventContext::default()` for an un-attributed assert).
+pub async fn assert_anchored_edge_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: AssertAnchoredEdgeParams<'_>,
+    ctx: EventContext,
+) -> Result<EdgeId> {
     let edge = fire_with(
-        &mut tx,
+        conn,
         SeedAction::RelationshipAssert {
             src: p.source,
             tgt: p.target,
@@ -2771,7 +2796,6 @@ pub async fn assert_anchored_edge_with(
     )
     .await?
     .relationship()?;
-    tx.commit().await?;
     Ok(edge)
 }
 
@@ -3159,8 +3183,20 @@ pub async fn commit_data_artifact_with(
     ctx: EventContext,
 ) -> Result<DataArtifactId> {
     let mut tx = begin_scoped(pool).await?;
+    let id = commit_data_artifact_in_tx(&mut tx, p, ctx).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// In-transaction variant of [`commit_data_artifact_with`] — fires the `DataArtifactCommit` seed
+/// action on a caller-supplied connection (no begin/commit) and returns the new artifact id.
+pub async fn commit_data_artifact_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: CommitDataArtifactParams<'_>,
+    ctx: EventContext,
+) -> Result<DataArtifactId> {
     let id = fire_with(
-        &mut tx,
+        conn,
         SeedAction::DataArtifactCommit {
             resource: p.resource,
             kind: p.kind,
@@ -3175,7 +3211,6 @@ pub async fn commit_data_artifact_with(
     )
     .await?
     .data_artifact()?;
-    tx.commit().await?;
     Ok(id)
 }
 
