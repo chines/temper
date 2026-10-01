@@ -34,8 +34,11 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   unchanged. Every existing path's operation is byte-identical; the contract only grows (23 new
   operations, their request/response schemas, an `AdminApi` in each generated SDK). No route's
   path, method, gate, status codes or wire bytes change: `GET /api/access/admin/profiles` now
-  returns an untagged enum that serializes exactly as the page or card it returned before. Who
-  observes: OpenAPI/SDK consumers, who can now call the operator surface with an admin bearer.
+  returns an untagged enum that serializes exactly as the page or card it returned before. One
+  request relaxation rides along: `RebindMachineRequest`'s `from_machine_client_id` (always
+  overwritten by the path `{id}`) and `keep_old_active` (documented default `false`) gain
+  `#[serde(default)]`, so a body may omit them; bodies that send them are read exactly as before.
+  Who observes: OpenAPI/SDK consumers, who can now call the operator surface with an admin bearer.
   User-visible: no. Release relevance: signal-only.
 pr: self
 classes: additive

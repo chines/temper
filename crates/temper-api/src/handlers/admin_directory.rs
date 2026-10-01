@@ -54,6 +54,8 @@ pub enum AdminProfilesListAnswer {
 #[utoipa::path(
     get,
     operation_id = "admin_list_profiles",
+    summary = "List profiles in the operator directory",
+    description = "A filtered, paged directory of profiles with admission state, admin status and default verified email. With `email`, resolves exactly one verified address and answers that profile's state card instead of a page. Requires a system admin.",
     path = "/api/access/admin/profiles",
     tag = "Admin",
     params(AdminProfilesListQuery),
@@ -62,7 +64,7 @@ pub enum AdminProfilesListAnswer {
         (status = 200, description = "A directory page, or — when `email` is given — the one matching profile's state card", body = AdminProfilesListAnswer),
         (status = 400, description = "Invalid filter, or both `email` and `email_contains` given", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
         (status = 404, description = "`email` matched no profile, or more than one", body = ErrorBody),
     )
 )]
@@ -95,6 +97,8 @@ pub async fn list_profiles(
 #[utoipa::path(
     get,
     operation_id = "admin_show_profile",
+    summary = "Show a profile's state card",
+    description = "One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.",
     path = "/api/access/admin/profiles/{profile_id}",
     tag = "Admin",
     params(("profile_id" = Uuid, Path, description = "Profile ID")),
@@ -102,7 +106,7 @@ pub async fn list_profiles(
     responses(
         (status = 200, description = "The principal state card", body = AdminProfileCard),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
         (status = 404, description = "No such profile", body = ErrorBody),
     )
 )]

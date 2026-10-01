@@ -58,10 +58,13 @@ pub struct RebindMachineRequest {
     /// The new IdP client id.
     pub client_id: String,
     /// The existing `kb_machine_clients.id` whose profile is inherited. On
-    /// `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it.
+    /// `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it,
+    /// so the HTTP body may omit it (it defaults to the nil UUID and is replaced before dispatch).
+    #[serde(default)]
     pub from_machine_client_id: Uuid,
     pub label: String,
-    /// When false (the default), the old row is revoked in the same transaction.
+    /// When false (the default when omitted), the old row is revoked in the same transaction.
+    #[serde(default)]
     pub keep_old_active: bool,
 }
 

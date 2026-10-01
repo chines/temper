@@ -83,6 +83,8 @@ pub enum ResourceErasureExecuteResponse {
 #[utoipa::path(
     post,
     operation_id = "admin_erase_resource",
+    summary = "Erase a resource",
+    description = "Executes the erasure act for a resource, optionally striking related blobs named by the survey. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.",
     path = "/api/admin/resources/erasure",
     tag = "Admin",
     request_body = ResourceErasureExecuteRequest,
@@ -91,8 +93,9 @@ pub enum ResourceErasureExecuteResponse {
         (status = 200, description = "The act completed, or was refused and the refusal recorded (`status` says which)", body = ResourceErasureExecuteResponse),
         (status = 400, description = "`also_strike_blobs` names a blob twice, or one the act refuses to strike (the act rolled back; nothing was struck)", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),
-        (status = 422, description = "Unknown field in the body (a caller-supplied `request_reference` is refused, not ignored)", body = ErrorBody),
+        (status = 422, description = "The body is JSON but not the expected shape, e.g. a missing or unknown field: a caller-supplied `request_reference` is refused, not ignored (a plain-text rejection, not an ErrorBody)"),
     )
 )]
 pub async fn execute(
@@ -155,6 +158,8 @@ pub async fn execute(
 #[utoipa::path(
     post,
     operation_id = "admin_survey_resource_erasure",
+    summary = "Survey a resource erasure",
+    description = "Reports what the erasure act would do for a resource, without recording or changing anything. `plan` is absent when the resource was already erased. Requires a system admin. Any other caller gets 404, decided before any lookup.",
     path = "/api/admin/resources/erasure/survey",
     tag = "Admin",
     request_body = ResourceErasureSurveyRequest,
@@ -162,7 +167,9 @@ pub async fn execute(
     responses(
         (status = 200, description = "What the act would do (`plan` is absent when the resource was already erased); nothing is recorded or changed", body = ResourceErasureSurvey),
         (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),
+        (status = 422, description = "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"),
     )
 )]
 pub async fn survey(

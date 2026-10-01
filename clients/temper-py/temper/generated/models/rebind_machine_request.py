@@ -18,7 +18,7 @@ import re  # noqa: F401
 import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
-from typing import Any, ClassVar, Dict, List
+from typing import Any, ClassVar, Dict, List, Optional
 from uuid import UUID
 from typing import Optional, Set
 from typing_extensions import Self
@@ -29,8 +29,8 @@ class RebindMachineRequest(BaseModel):
     Point a fresh `client_id` at an existing agent profile (D8).
     """ # noqa: E501
     client_id: StrictStr = Field(description="The new IdP client id.")
-    from_machine_client_id: UUID = Field(description="The existing `kb_machine_clients.id` whose profile is inherited. On `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it.")
-    keep_old_active: StrictBool = Field(description="When false (the default), the old row is revoked in the same transaction.")
+    from_machine_client_id: Optional[UUID] = Field(default=None, description="The existing `kb_machine_clients.id` whose profile is inherited. On `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it, so the HTTP body may omit it (it defaults to the nil UUID and is replaced before dispatch).")
+    keep_old_active: Optional[StrictBool] = Field(default=None, description="When false (the default when omitted), the old row is revoked in the same transaction.")
     label: StrictStr
     __properties: ClassVar[List[str]] = ["client_id", "from_machine_client_id", "keep_old_active", "label"]
 

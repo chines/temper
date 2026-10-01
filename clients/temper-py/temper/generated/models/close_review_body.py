@@ -25,7 +25,7 @@ from pydantic_core import to_jsonable_python
 
 class CloseReviewBody(BaseModel):
     """
-    Body for closing a reconsideration request.  It carries **only** a note, and that is the design rather than an omission. Closing a review records that an admin handled it; it grants nothing (D15). A `status` field here would invite exactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is a separate `POST /api/access/admin/approve`.
+    Body for closing a reconsideration request.  It carries **only** a note, and that is the design rather than an omission. Closing a review records that an admin handled it; it grants nothing (D15). A `status` field here would invite exactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is a separate `POST /api/access/admin/principals/{id}/approve`.
     """ # noqa: E501
     decision_note: Optional[StrictStr] = None
     __properties: ClassVar[List[str]] = ["decision_note"]

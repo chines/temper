@@ -46,7 +46,7 @@ pub struct ReviewRequestBody {
 /// It carries **only** a note, and that is the design rather than an omission. Closing a review
 /// records that an admin handled it; it grants nothing (D15). A `status` field here would invite
 /// exactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is
-/// a separate `POST /api/access/admin/approve`.
+/// a separate `POST /api/access/admin/principals/{id}/approve`.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CloseReviewBody {
     pub decision_note: Option<String>,
@@ -204,13 +204,15 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Publi
 #[utoipa::path(
     get,
     operation_id = "admin_list_join_requests",
+    summary = "List pending join requests",
+    description = "Every join request still awaiting a decision, with the requesting profile's handle, display name and email. Requires a system admin.",
     path = "/api/access/admin/requests",
     tag = "Admin",
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Pending join requests, with the requesting profile's identity", body = Vec<JoinRequestWithProfile>),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
 )]
 pub async fn list_pending(
@@ -231,13 +233,15 @@ pub async fn list_pending(
 #[utoipa::path(
     get,
     operation_id = "admin_count_join_requests",
+    summary = "Count pending join requests",
+    description = "How many join requests are awaiting a decision, without the rows. A caller who may not read the queue gets 403, never a zero. Requires a system admin.",
     path = "/api/access/admin/requests/count",
     tag = "Admin",
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "How many join requests are pending", body = QueueCount),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
 )]
 pub async fn count_pending(
@@ -254,6 +258,8 @@ pub async fn count_pending(
 #[utoipa::path(
     patch,
     operation_id = "admin_review_join_request",
+    summary = "Approve or reject a join request",
+    description = "Records the decision on a pending join request, with an optional note. Requires a system admin.",
     path = "/api/access/admin/requests/{id}",
     tag = "Admin",
     params(("id" = Uuid, Path, description = "Join request ID")),
@@ -263,7 +269,7 @@ pub async fn count_pending(
         (status = 200, description = "The reviewed join request", body = JoinRequest),
         (status = 400, description = "The decision is not a legal review outcome", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
         (status = 404, description = "No such join request", body = ErrorBody),
 )
 )]
@@ -293,13 +299,15 @@ pub async fn review_request(
 #[utoipa::path(
     get,
     operation_id = "admin_list_reviews",
+    summary = "List open reconsideration requests",
+    description = "Reconsideration requests that have not been closed, with the asking principal's identity. Requires a system admin.",
     path = "/api/access/admin/reviews",
     tag = "Admin",
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Open reconsideration requests, with the asking principal's identity", body = Vec<ReviewRequestWithProfile>),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
 )]
 pub async fn list_reviews(
@@ -318,13 +326,15 @@ pub async fn list_reviews(
 #[utoipa::path(
     get,
     operation_id = "admin_count_reviews",
+    summary = "Count open reconsideration requests",
+    description = "How many reconsideration requests are open, without the rows. A caller who may not read the inbox gets 403, never a zero. Requires a system admin.",
     path = "/api/access/admin/reviews/count",
     tag = "Admin",
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "How many reconsideration requests are open", body = QueueCount),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
 )]
 pub async fn count_reviews(
@@ -341,10 +351,12 @@ pub async fn count_reviews(
 ///
 /// Returns `204`: there is no updated resource worth handing back, because closing changes nothing
 /// the caller can act on further. It moves **no** standing — readmitting a principal is
-/// `POST /api/access/admin/approve`, deliberately a different call.
+/// `POST /api/access/admin/principals/{id}/approve`, deliberately a different call.
 #[utoipa::path(
     patch,
     operation_id = "admin_close_review",
+    summary = "Close a reconsideration request",
+    description = "Records that a reconsideration request was handled. It changes no standing: readmitting a principal is a separate call, `POST /api/access/admin/principals/{id}/approve`. Requires a system admin.",
     path = "/api/access/admin/reviews/{id}",
     tag = "Admin",
     params(("id" = Uuid, Path, description = "Reconsideration request ID")),
@@ -353,7 +365,7 @@ pub async fn count_reviews(
     responses(
         (status = 204, description = "Reconsideration recorded as handled; no standing moved"),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
         (status = 404, description = "No such open reconsideration request", body = ErrorBody),
 )
 )]
@@ -380,13 +392,15 @@ pub async fn close_review(
 #[utoipa::path(
     get,
     operation_id = "admin_get_settings",
+    summary = "Read full system settings",
+    description = "The full instance settings, including the gating team slug that the public settings read withholds. Requires a system admin.",
     path = "/api/access/admin/settings",
     tag = "Admin",
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Full system settings, including the gating team slug", body = SystemSettings),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
 )]
 pub async fn get_admin_settings(
@@ -403,6 +417,8 @@ pub async fn get_admin_settings(
 #[utoipa::path(
     patch,
     operation_id = "admin_update_settings",
+    summary = "Update system settings",
+    description = "Partial update: each field present overwrites its setting, each field absent is left unchanged. Requires a system admin.",
     path = "/api/access/admin/settings",
     tag = "Admin",
     request_body = UpdateSettingsRequest,
@@ -411,7 +427,7 @@ pub async fn get_admin_settings(
         (status = 200, description = "Settings after the partial update", body = SystemSettings),
         (status = 400, description = "Invalid settings value", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
 )]
 pub async fn update_settings(
@@ -433,6 +449,8 @@ pub async fn update_settings(
 #[utoipa::path(
     post,
     operation_id = "admin_promote",
+    summary = "Promote a profile to system admin",
+    description = "Grants the system-admin governance grant and approved standing. Also adds an `owner` row on the given team (the configured gating team when omitted); that row confers no authority by itself. Requires a system admin.",
     path = "/api/access/admin/promote",
     tag = "Admin",
     request_body = PromoteAdminRequest,
@@ -441,7 +459,7 @@ pub async fn update_settings(
         (status = 200, description = "Profile promoted; the side-effect team membership row", body = TeamMemberRow),
         (status = 400, description = "The profile or team cannot be promoted into", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
 )]
 pub async fn promote_admin(
@@ -458,12 +476,15 @@ pub async fn promote_admin(
 /// POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).
 ///
 /// The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in
-/// `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries
-/// NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the
-/// `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+/// `standing_service::apply` (Revoke/Deactivate demote). Like every admin handler, it mints the
+/// `&SystemAdmin` proof via `require_system_admin` and `access_service::demote_admin` requires it
+/// in its signature, so the gate is the service type (the F-3 posture `audit-handler-authz-drift`
+/// pins), not a handler-side `is_system_admin` check.
 #[utoipa::path(
     post,
     operation_id = "admin_demote",
+    summary = "Revoke a profile's system-admin grant",
+    description = "Removes the system-admin governance grant from a profile. Idempotent. Requires a system admin.",
     path = "/api/access/admin/demote",
     tag = "Admin",
     request_body = DemoteAdminRequest,
@@ -471,7 +492,7 @@ pub async fn promote_admin(
     responses(
         (status = 200, description = "System-admin governance grant revoked (idempotent)"),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
 )]
 pub async fn demote_admin(
@@ -507,6 +528,8 @@ pub struct RevokePrincipalBody {
 #[utoipa::path(
     post,
     operation_id = "admin_approve_principal",
+    summary = "Approve a principal",
+    description = "Admits a principal directly and closes any open reconsideration request they hold. Requires a system admin.",
     path = "/api/access/admin/principals/{id}/approve",
     tag = "Admin",
     params(("id" = Uuid, Path, description = "Profile ID of the principal")),
@@ -515,8 +538,8 @@ pub struct RevokePrincipalBody {
         (status = 200, description = "Principal approved"),
         (status = 400, description = "Approval is not a legal transition from the principal's standing", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
-        (status = 409, description = "The principal is already approved, or has a request pending", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 409, description = "The principal is already approved", body = ErrorBody),
 )
 )]
 pub async fn approve_principal(
@@ -536,13 +559,15 @@ pub async fn approve_principal(
 #[utoipa::path(
     post,
     operation_id = "admin_reconcile_auto_join",
+    summary = "Reconcile auto-join team rosters",
+    description = "Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.",
     path = "/api/access/admin/auto-join/reconcile",
     tag = "Admin",
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "The roster pairs added (empty when already converged) and the SAML-mapped teams touched", body = ReconcileAutoJoinOutcome),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
 )
 )]
 pub async fn reconcile_auto_join(
@@ -558,6 +583,8 @@ pub async fn reconcile_auto_join(
 #[utoipa::path(
     post,
     operation_id = "admin_revoke_principal",
+    summary = "Revoke a principal's admission",
+    description = "Revokes a principal's admission, with a required reason that is recorded. Requires a system admin.",
     path = "/api/access/admin/principals/{id}/revoke",
     tag = "Admin",
     params(("id" = Uuid, Path, description = "Profile ID of the principal")),
@@ -567,7 +594,7 @@ pub async fn reconcile_auto_join(
         (status = 200, description = "Principal's admission revoked"),
         (status = 400, description = "Revocation is not a legal transition from the principal's standing", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
         (status = 409, description = "The transition conflicts with the principal's current standing", body = ErrorBody),
 )
 )]
@@ -592,6 +619,8 @@ pub async fn revoke_principal(
 #[utoipa::path(
     post,
     operation_id = "admin_deactivate_principal",
+    summary = "Deactivate a principal",
+    description = "Deactivates a principal. Requires a system admin.",
     path = "/api/access/admin/principals/{id}/deactivate",
     tag = "Admin",
     params(("id" = Uuid, Path, description = "Profile ID of the principal")),
@@ -600,7 +629,7 @@ pub async fn revoke_principal(
         (status = 200, description = "Principal deactivated"),
         (status = 400, description = "Deactivation is not a legal transition from the principal's standing", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
         (status = 409, description = "The transition conflicts with the principal's current standing", body = ErrorBody),
 )
 )]
@@ -618,6 +647,8 @@ pub async fn deactivate_principal(
 #[utoipa::path(
     post,
     operation_id = "admin_reactivate_principal",
+    summary = "Reactivate a principal",
+    description = "Restores a deactivated principal. Requires a system admin.",
     path = "/api/access/admin/principals/{id}/reactivate",
     tag = "Admin",
     params(("id" = Uuid, Path, description = "Profile ID of the principal")),
@@ -626,7 +657,7 @@ pub async fn deactivate_principal(
         (status = 200, description = "Principal reactivated"),
         (status = 400, description = "Reactivation is not a legal transition from the principal's standing", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
         (status = 409, description = "The transition conflicts with the principal's current standing", body = ErrorBody),
 )
 )]

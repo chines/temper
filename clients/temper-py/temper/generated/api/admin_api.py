@@ -83,8 +83,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> None:
-        """POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
+        """Approve a principal
 
+        Admits a principal directly and closes any open reconsideration request they hold. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -157,8 +158,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[None]:
-        """POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
+        """Approve a principal
 
+        Admits a principal directly and closes any open reconsideration request they hold. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -231,8 +233,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
+        """Approve a principal
 
+        Admits a principal directly and closes any open reconsideration request they hold. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -369,9 +372,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> None:
-        """PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.
+        """Close a reconsideration request
 
-        Returns `204`: there is no updated resource worth handing back, because closing changes nothing the caller can act on further. It moves **no** standing — readmitting a principal is `POST /api/access/admin/approve`, deliberately a different call.
+        Records that a reconsideration request was handled. It changes no standing: readmitting a principal is a separate call, `POST /api/access/admin/principals/{id}/approve`. Requires a system admin.
 
         :param id: Reconsideration request ID (required)
         :type id: UUID
@@ -447,9 +450,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[None]:
-        """PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.
+        """Close a reconsideration request
 
-        Returns `204`: there is no updated resource worth handing back, because closing changes nothing the caller can act on further. It moves **no** standing — readmitting a principal is `POST /api/access/admin/approve`, deliberately a different call.
+        Records that a reconsideration request was handled. It changes no standing: readmitting a principal is a separate call, `POST /api/access/admin/principals/{id}/approve`. Requires a system admin.
 
         :param id: Reconsideration request ID (required)
         :type id: UUID
@@ -525,9 +528,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.
+        """Close a reconsideration request
 
-        Returns `204`: there is no updated resource worth handing back, because closing changes nothing the caller can act on further. It moves **no** standing — readmitting a principal is `POST /api/access/admin/approve`, deliberately a different call.
+        Records that a reconsideration request was handled. It changes no standing: readmitting a principal is a separate call, `POST /api/access/admin/principals/{id}/approve`. Requires a system admin.
 
         :param id: Reconsideration request ID (required)
         :type id: UUID
@@ -680,9 +683,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> QueueCount:
-        """GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).
+        """Count pending join requests
 
-        [`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may not read the queue still gets a `403` — never a `0`, which would tell them the queue is empty while refusing to let them see it.
+        How many join requests are awaiting a decision, without the rows. A caller who may not read the queue gets 403, never a zero. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -749,9 +752,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[QueueCount]:
-        """GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).
+        """Count pending join requests
 
-        [`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may not read the queue still gets a `403` — never a `0`, which would tell them the queue is empty while refusing to let them see it.
+        How many join requests are awaiting a decision, without the rows. A caller who may not read the queue gets 403, never a zero. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -818,9 +821,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).
+        """Count pending join requests
 
-        [`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may not read the queue still gets a `403` — never a `0`, which would tell them the queue is empty while refusing to let them see it.
+        How many join requests are awaiting a decision, without the rows. A caller who may not read the queue gets 403, never a zero. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -947,9 +950,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> QueueCount:
-        """GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
+        """Count open reconsideration requests
 
-        [`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.
+        How many reconsideration requests are open, without the rows. A caller who may not read the inbox gets 403, never a zero. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -1016,9 +1019,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[QueueCount]:
-        """GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
+        """Count open reconsideration requests
 
-        [`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.
+        How many reconsideration requests are open, without the rows. A caller who may not read the inbox gets 403, never a zero. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -1085,9 +1088,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
+        """Count open reconsideration requests
 
-        [`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.
+        How many reconsideration requests are open, without the rows. A caller who may not read the inbox gets 403, never a zero. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -1215,8 +1218,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> None:
-        """POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).
+        """Deactivate a principal
 
+        Deactivates a principal. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -1289,8 +1293,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[None]:
-        """POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).
+        """Deactivate a principal
 
+        Deactivates a principal. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -1363,8 +1368,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).
+        """Deactivate a principal
 
+        Deactivates a principal. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -1500,9 +1506,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> None:
-        """POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).
+        """Revoke a profile's system-admin grant
 
-        The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+        Removes the system-admin governance grant from a profile. Idempotent. Requires a system admin.
 
         :param demote_admin_request: (required)
         :type demote_admin_request: DemoteAdminRequest
@@ -1573,9 +1579,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[None]:
-        """POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).
+        """Revoke a profile's system-admin grant
 
-        The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+        Removes the system-admin governance grant from a profile. Idempotent. Requires a system admin.
 
         :param demote_admin_request: (required)
         :type demote_admin_request: DemoteAdminRequest
@@ -1646,9 +1652,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).
+        """Revoke a profile's system-admin grant
 
-        The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+        Removes the system-admin governance grant from a profile. Idempotent. Requires a system admin.
 
         :param demote_admin_request: (required)
         :type demote_admin_request: DemoteAdminRequest
@@ -1795,9 +1801,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ErasureExecuteResponse:
-        """`POST /api/admin/erasure` — the operator's execute door.
+        """Erase a principal
 
-        The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof and attributes the act to `admin.actor()`.  The request reference tolerates retries: a retried POST with the SAME reference re-executes as a no-op completion (the subject is already tombstoned, so the act completes with `already_erased: true`). Correlation is INDEXED, never unique (20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does not deduplicate the door.
+        Executes the erasure act for a principal, identified by pseudonym and an opaque request reference. Repeating it with the same reference completes as a no-op with `already_erased: true`. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the subject.
 
         :param erasure_execute_request: (required)
         :type erasure_execute_request: ErasureExecuteRequest
@@ -1837,7 +1843,9 @@ class AdminApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ErasureExecuteResponse",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1868,9 +1876,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[ErasureExecuteResponse]:
-        """`POST /api/admin/erasure` — the operator's execute door.
+        """Erase a principal
 
-        The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof and attributes the act to `admin.actor()`.  The request reference tolerates retries: a retried POST with the SAME reference re-executes as a no-op completion (the subject is already tombstoned, so the act completes with `already_erased: true`). Correlation is INDEXED, never unique (20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does not deduplicate the door.
+        Executes the erasure act for a principal, identified by pseudonym and an opaque request reference. Repeating it with the same reference completes as a no-op with `already_erased: true`. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the subject.
 
         :param erasure_execute_request: (required)
         :type erasure_execute_request: ErasureExecuteRequest
@@ -1910,7 +1918,9 @@ class AdminApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ErasureExecuteResponse",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1941,9 +1951,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """`POST /api/admin/erasure` — the operator's execute door.
+        """Erase a principal
 
-        The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof and attributes the act to `admin.actor()`.  The request reference tolerates retries: a retried POST with the SAME reference re-executes as a no-op completion (the subject is already tombstoned, so the act completes with `already_erased: true`). Correlation is INDEXED, never unique (20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does not deduplicate the door.
+        Executes the erasure act for a principal, identified by pseudonym and an opaque request reference. Repeating it with the same reference completes as a no-op with `already_erased: true`. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the subject.
 
         :param erasure_execute_request: (required)
         :type erasure_execute_request: ErasureExecuteRequest
@@ -1983,7 +1993,9 @@ class AdminApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ErasureExecuteResponse",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -2090,8 +2102,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ResourceErasureExecuteResponse:
-        """`POST /api/admin/resources/erasure` — the operator's execute door.
+        """Erase a resource
 
+        Executes the erasure act for a resource, optionally striking related blobs named by the survey. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
 
         :param resource_erasure_execute_request: (required)
         :type resource_erasure_execute_request: ResourceErasureExecuteRequest
@@ -2132,8 +2145,9 @@ class AdminApi:
             '200': "ResourceErasureExecuteResponse",
             '400': "ErrorBody",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
-            '422': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -2164,8 +2178,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[ResourceErasureExecuteResponse]:
-        """`POST /api/admin/resources/erasure` — the operator's execute door.
+        """Erase a resource
 
+        Executes the erasure act for a resource, optionally striking related blobs named by the survey. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
 
         :param resource_erasure_execute_request: (required)
         :type resource_erasure_execute_request: ResourceErasureExecuteRequest
@@ -2206,8 +2221,9 @@ class AdminApi:
             '200': "ResourceErasureExecuteResponse",
             '400': "ErrorBody",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
-            '422': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -2238,8 +2254,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """`POST /api/admin/resources/erasure` — the operator's execute door.
+        """Erase a resource
 
+        Executes the erasure act for a resource, optionally striking related blobs named by the survey. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
 
         :param resource_erasure_execute_request: (required)
         :type resource_erasure_execute_request: ResourceErasureExecuteRequest
@@ -2280,8 +2297,9 @@ class AdminApi:
             '200': "ResourceErasureExecuteResponse",
             '400': "ErrorBody",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
-            '422': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -2387,9 +2405,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> SystemSettings:
-        """GET /api/access/admin/settings — read FULL system settings (admin only).
+        """Read full system settings
 
-        Unlike the public `GET /api/access/settings`, this returns `gating_team_slug` and `updated`, which an admin needs to administer the gate.
+        The full instance settings, including the gating team slug that the public settings read withholds. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -2456,9 +2474,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[SystemSettings]:
-        """GET /api/access/admin/settings — read FULL system settings (admin only).
+        """Read full system settings
 
-        Unlike the public `GET /api/access/settings`, this returns `gating_team_slug` and `updated`, which an admin needs to administer the gate.
+        The full instance settings, including the gating team slug that the public settings read withholds. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -2525,9 +2543,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """GET /api/access/admin/settings — read FULL system settings (admin only).
+        """Read full system settings
 
-        Unlike the public `GET /api/access/settings`, this returns `gating_team_slug` and `updated`, which an admin needs to administer the gate.
+        The full instance settings, including the gating team slug that the public settings read withholds. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -2654,8 +2672,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> List[JoinRequestWithProfile]:
-        """GET /api/access/admin/requests — list pending join requests (admin only).
+        """List pending join requests
 
+        Every join request still awaiting a decision, with the requesting profile's handle, display name and email. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -2722,8 +2741,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[List[JoinRequestWithProfile]]:
-        """GET /api/access/admin/requests — list pending join requests (admin only).
+        """List pending join requests
 
+        Every join request still awaiting a decision, with the requesting profile's handle, display name and email. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -2790,8 +2810,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """GET /api/access/admin/requests — list pending join requests (admin only).
+        """List pending join requests
 
+        Every join request still awaiting a decision, with the requesting profile's handle, display name and email. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -2924,8 +2945,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> AdminProfilesListAnswer:
-        """GET /api/access/admin/profiles — the directory list, or the state card when `?email=` resolves exactly one verified address.
+        """List profiles in the operator directory
 
+        A filtered, paged directory of profiles with admission state, admin status and default verified email. With `email`, resolves exactly one verified address and answers that profile's state card instead of a page. Requires a system admin.
 
         :param standing: Filter by admission state: `denied|requested|approved|revoked|deactivated|needs-access|all`. Default `needs-access` — every non-approved state INCLUDING no standing row (the operator's work queue). Case-insensitive.
         :type standing: str
@@ -3018,8 +3040,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[AdminProfilesListAnswer]:
-        """GET /api/access/admin/profiles — the directory list, or the state card when `?email=` resolves exactly one verified address.
+        """List profiles in the operator directory
 
+        A filtered, paged directory of profiles with admission state, admin status and default verified email. With `email`, resolves exactly one verified address and answers that profile's state card instead of a page. Requires a system admin.
 
         :param standing: Filter by admission state: `denied|requested|approved|revoked|deactivated|needs-access|all`. Default `needs-access` — every non-approved state INCLUDING no standing row (the operator's work queue). Case-insensitive.
         :type standing: str
@@ -3112,8 +3135,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """GET /api/access/admin/profiles — the directory list, or the state card when `?email=` resolves exactly one verified address.
+        """List profiles in the operator directory
 
+        A filtered, paged directory of profiles with admission state, admin status and default verified email. With `email`, resolves exactly one verified address and answers that profile's state card instead of a page. Requires a system admin.
 
         :param standing: Filter by admission state: `denied|requested|approved|revoked|deactivated|needs-access|all`. Default `needs-access` — every non-approved state INCLUDING no standing row (the operator's work queue). Case-insensitive.
         :type standing: str
@@ -3290,9 +3314,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> List[ReviewRequestWithProfile]:
-        """GET /api/access/admin/reviews — list undecided reconsideration requests.
+        """List open reconsideration requests
 
-        The read half of the inbox `kb_principal_review_requests` always described itself as and never had. Same operator-only posture as the join-request queue above: the `&SystemAdmin` proof is minted here and required by the service.
+        Reconsideration requests that have not been closed, with the asking principal's identity. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -3359,9 +3383,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[List[ReviewRequestWithProfile]]:
-        """GET /api/access/admin/reviews — list undecided reconsideration requests.
+        """List open reconsideration requests
 
-        The read half of the inbox `kb_principal_review_requests` always described itself as and never had. Same operator-only posture as the join-request queue above: the `&SystemAdmin` proof is minted here and required by the service.
+        Reconsideration requests that have not been closed, with the asking principal's identity. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -3428,9 +3452,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """GET /api/access/admin/reviews — list undecided reconsideration requests.
+        """List open reconsideration requests
 
-        The read half of the inbox `kb_principal_review_requests` always described itself as and never had. Same operator-only posture as the join-request queue above: the `&SystemAdmin` proof is minted here and required by the service.
+        Reconsideration requests that have not been closed, with the asking principal's identity. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -3558,9 +3582,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> TeamMemberRow:
-        """POST /api/access/admin/promote — promote a profile to system admin (admin only).
+        """Promote a profile to system admin
 
-        Grants `kb_principal_governance` + `approved` standing (the real admin-ness under D11). `team_id` omitted ⇒ the configured gating team for the retained side-effect `owner` row.
+        Grants the system-admin governance grant and approved standing. Also adds an `owner` row on the given team (the configured gating team when omitted); that row confers no authority by itself. Requires a system admin.
 
         :param promote_admin_request: (required)
         :type promote_admin_request: PromoteAdminRequest
@@ -3632,9 +3656,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[TeamMemberRow]:
-        """POST /api/access/admin/promote — promote a profile to system admin (admin only).
+        """Promote a profile to system admin
 
-        Grants `kb_principal_governance` + `approved` standing (the real admin-ness under D11). `team_id` omitted ⇒ the configured gating team for the retained side-effect `owner` row.
+        Grants the system-admin governance grant and approved standing. Also adds an `owner` row on the given team (the configured gating team when omitted); that row confers no authority by itself. Requires a system admin.
 
         :param promote_admin_request: (required)
         :type promote_admin_request: PromoteAdminRequest
@@ -3706,9 +3730,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """POST /api/access/admin/promote — promote a profile to system admin (admin only).
+        """Promote a profile to system admin
 
-        Grants `kb_principal_governance` + `approved` standing (the real admin-ness under D11). `team_id` omitted ⇒ the configured gating team for the retained side-effect `owner` row.
+        Grants the system-admin governance grant and approved standing. Also adds an `owner` row on the given team (the configured gating team when omitted); that row confers no authority by itself. Requires a system admin.
 
         :param promote_admin_request: (required)
         :type promote_admin_request: PromoteAdminRequest
@@ -3856,8 +3880,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> None:
-        """POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).
+        """Reactivate a principal
 
+        Restores a deactivated principal. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -3930,8 +3955,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[None]:
-        """POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).
+        """Reactivate a principal
 
+        Restores a deactivated principal. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -4004,8 +4030,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).
+        """Reactivate a principal
 
+        Restores a deactivated principal. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -4142,8 +4169,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> MachineClient:
-        """POST /api/machine-clients/{id}/rebind — point a fresh IdP `client_id` at the agent profile an existing machine client holds (system admin only). Mounted by `routes/admin.rs`, apart from its owner-gated siblings: team ownership cannot bound the reach a rebind inherits.
+        """Rebind a machine client to a new client ID
 
+        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
 
         :param id: The machine client whose profile the new client id inherits (required)
         :type id: UUID
@@ -4221,8 +4249,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[MachineClient]:
-        """POST /api/machine-clients/{id}/rebind — point a fresh IdP `client_id` at the agent profile an existing machine client holds (system admin only). Mounted by `routes/admin.rs`, apart from its owner-gated siblings: team ownership cannot bound the reach a rebind inherits.
+        """Rebind a machine client to a new client ID
 
+        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
 
         :param id: The machine client whose profile the new client id inherits (required)
         :type id: UUID
@@ -4300,8 +4329,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """POST /api/machine-clients/{id}/rebind — point a fresh IdP `client_id` at the agent profile an existing machine client holds (system admin only). Mounted by `routes/admin.rs`, apart from its owner-gated siblings: team ownership cannot bound the reach a rebind inherits.
+        """Rebind a machine client to a new client ID
 
+        Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
 
         :param id: The machine client whose profile the new client id inherits (required)
         :type id: UUID
@@ -4456,8 +4486,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ReconcileAutoJoinOutcome:
-        """POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the standing-approved population (admin only). Returns the (team, profile) pairs added plus the touched teams that also carry SAML group mappings (whose new native rows pre-empt IdP role assertions); an empty `added` means the instance was already converged.
+        """Reconcile auto-join team rosters
 
+        Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -4524,8 +4555,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[ReconcileAutoJoinOutcome]:
-        """POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the standing-approved population (admin only). Returns the (team, profile) pairs added plus the touched teams that also carry SAML group mappings (whose new native rows pre-empt IdP role assertions); an empty `added` means the instance was already converged.
+        """Reconcile auto-join team rosters
 
+        Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -4592,8 +4624,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the standing-approved population (admin only). Returns the (team, profile) pairs added plus the touched teams that also carry SAML group mappings (whose new native rows pre-empt IdP role assertions); an empty `added` means the instance was already converged.
+        """Reconcile auto-join team rosters
 
+        Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.
 
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -4721,9 +4754,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ReembedSummary:
-        """Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.
+        """Re-embed stale chunks
 
-        Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute drain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as the jobs are queued.  Nothing is marked dirty. Staleness is *derived* (`embedding IS NULL OR embedded_with IS DISTINCT FROM <current model>`), so this is idempotent, safe to re-run, and safe to run while the drain is mid-flight: it simply picks up whatever is still stale. A resource that already has a live job is skipped, so it can never double-queue.  Admin-gated on the caller's own identity (`is_system_admin`) rather than the drain's shared secret: this is a human operator action, and it should work with the operator's normal login instead of requiring them to hold a deploy secret.  Documented under the `Admin` tag with the rest of the operator surface (`routes/admin.rs`). The drain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.
+        Enqueues embedding jobs for chunks whose vector is missing or came from a model the server no longer embeds with, scoped to one resource, one context, or everything. `dry_run` reports what is stale without enqueuing. Bounded by `limit` per call and safe to repeat. Requires a system admin.
 
         :param reembed_request: (required)
         :type reembed_request: ReembedRequest
@@ -4795,9 +4828,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[ReembedSummary]:
-        """Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.
+        """Re-embed stale chunks
 
-        Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute drain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as the jobs are queued.  Nothing is marked dirty. Staleness is *derived* (`embedding IS NULL OR embedded_with IS DISTINCT FROM <current model>`), so this is idempotent, safe to re-run, and safe to run while the drain is mid-flight: it simply picks up whatever is still stale. A resource that already has a live job is skipped, so it can never double-queue.  Admin-gated on the caller's own identity (`is_system_admin`) rather than the drain's shared secret: this is a human operator action, and it should work with the operator's normal login instead of requiring them to hold a deploy secret.  Documented under the `Admin` tag with the rest of the operator surface (`routes/admin.rs`). The drain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.
+        Enqueues embedding jobs for chunks whose vector is missing or came from a model the server no longer embeds with, scoped to one resource, one context, or everything. `dry_run` reports what is stale without enqueuing. Bounded by `limit` per call and safe to repeat. Requires a system admin.
 
         :param reembed_request: (required)
         :type reembed_request: ReembedRequest
@@ -4869,9 +4902,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.
+        """Re-embed stale chunks
 
-        Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute drain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as the jobs are queued.  Nothing is marked dirty. Staleness is *derived* (`embedding IS NULL OR embedded_with IS DISTINCT FROM <current model>`), so this is idempotent, safe to re-run, and safe to run while the drain is mid-flight: it simply picks up whatever is still stale. A resource that already has a live job is skipped, so it can never double-queue.  Admin-gated on the caller's own identity (`is_system_admin`) rather than the drain's shared secret: this is a human operator action, and it should work with the operator's normal login instead of requiring them to hold a deploy secret.  Documented under the `Admin` tag with the rest of the operator surface (`routes/admin.rs`). The drain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.
+        Enqueues embedding jobs for chunks whose vector is missing or came from a model the server no longer embeds with, scoped to one resource, one context, or everything. `dry_run` reports what is stale without enqueuing. Bounded by `limit` per call and safe to repeat. Requires a system admin.
 
         :param reembed_request: (required)
         :type reembed_request: ReembedRequest
@@ -5020,8 +5053,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> JoinRequest:
-        """PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).
+        """Approve or reject a join request
 
+        Records the decision on a pending join request, with an optional note. Requires a system admin.
 
         :param id: Join request ID (required)
         :type id: UUID
@@ -5098,8 +5132,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[JoinRequest]:
-        """PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).
+        """Approve or reject a join request
 
+        Records the decision on a pending join request, with an optional note. Requires a system admin.
 
         :param id: Join request ID (required)
         :type id: UUID
@@ -5176,8 +5211,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).
+        """Approve or reject a join request
 
+        Records the decision on a pending join request, with an optional note. Requires a system admin.
 
         :param id: Join request ID (required)
         :type id: UUID
@@ -5333,8 +5369,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> None:
-        """POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).
+        """Revoke a principal's admission
 
+        Revokes a principal's admission, with a required reason that is recorded. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -5411,8 +5448,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[None]:
-        """POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).
+        """Revoke a principal's admission
 
+        Revokes a principal's admission, with a required reason that is recorded. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -5489,8 +5527,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).
+        """Revoke a principal's admission
 
+        Revokes a principal's admission, with a required reason that is recorded. Requires a system admin.
 
         :param id: Profile ID of the principal (required)
         :type id: UUID
@@ -5645,8 +5684,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> AdminProfileCard:
-        """GET /api/access/admin/profiles/{profile_id} — the principal state card.
+        """Show a profile's state card
 
+        One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.
 
         :param profile_id: Profile ID (required)
         :type profile_id: UUID
@@ -5718,8 +5758,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[AdminProfileCard]:
-        """GET /api/access/admin/profiles/{profile_id} — the principal state card.
+        """Show a profile's state card
 
+        One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.
 
         :param profile_id: Profile ID (required)
         :type profile_id: UUID
@@ -5791,8 +5832,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """GET /api/access/admin/profiles/{profile_id} — the principal state card.
+        """Show a profile's state card
 
+        One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.
 
         :param profile_id: Profile ID (required)
         :type profile_id: UUID
@@ -5927,9 +5969,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ErasureSurveyResponse:
-        """`POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task 01a09628 item 2).
+        """Survey a principal erasure
 
-        Gated here like execute (`require_erasure_operator`): a caller who is not a system admin gets the same 404 and no event. The survey is witnessed read-only: no events, no projection change — it previews, it never prepares.
+        Reports what the erasure act would do for a principal, without recording or changing anything. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param erasure_survey_request: (required)
         :type erasure_survey_request: ErasureSurveyRequest
@@ -5969,7 +6011,9 @@ class AdminApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ErasureSurveyResponse",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -6000,9 +6044,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[ErasureSurveyResponse]:
-        """`POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task 01a09628 item 2).
+        """Survey a principal erasure
 
-        Gated here like execute (`require_erasure_operator`): a caller who is not a system admin gets the same 404 and no event. The survey is witnessed read-only: no events, no projection change — it previews, it never prepares.
+        Reports what the erasure act would do for a principal, without recording or changing anything. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param erasure_survey_request: (required)
         :type erasure_survey_request: ErasureSurveyRequest
@@ -6042,7 +6086,9 @@ class AdminApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ErasureSurveyResponse",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -6073,9 +6119,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """`POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task 01a09628 item 2).
+        """Survey a principal erasure
 
-        Gated here like execute (`require_erasure_operator`): a caller who is not a system admin gets the same 404 and no event. The survey is witnessed read-only: no events, no projection change — it previews, it never prepares.
+        Reports what the erasure act would do for a principal, without recording or changing anything. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param erasure_survey_request: (required)
         :type erasure_survey_request: ErasureSurveyRequest
@@ -6115,7 +6161,9 @@ class AdminApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ErasureSurveyResponse",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -6222,8 +6270,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ResourceErasureSurvey:
-        """`POST /api/admin/resources/erasure/survey` — the read-only survey. The gate answers a caller who is not a system admin with the same 404 as execute and records nothing; an unknown id past the gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on them), so the door mirrors nothing field by field.
+        """Survey a resource erasure
 
+        Reports what the erasure act would do for a resource, without recording or changing anything. `plan` is absent when the resource was already erased. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param resource_erasure_survey_request: (required)
         :type resource_erasure_survey_request: ResourceErasureSurveyRequest
@@ -6263,7 +6312,9 @@ class AdminApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceErasureSurvey",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -6294,8 +6345,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[ResourceErasureSurvey]:
-        """`POST /api/admin/resources/erasure/survey` — the read-only survey. The gate answers a caller who is not a system admin with the same 404 as execute and records nothing; an unknown id past the gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on them), so the door mirrors nothing field by field.
+        """Survey a resource erasure
 
+        Reports what the erasure act would do for a resource, without recording or changing anything. `plan` is absent when the resource was already erased. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param resource_erasure_survey_request: (required)
         :type resource_erasure_survey_request: ResourceErasureSurveyRequest
@@ -6335,7 +6387,9 @@ class AdminApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceErasureSurvey",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -6366,8 +6420,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """`POST /api/admin/resources/erasure/survey` — the read-only survey. The gate answers a caller who is not a system admin with the same 404 as execute and records nothing; an unknown id past the gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on them), so the door mirrors nothing field by field.
+        """Survey a resource erasure
 
+        Reports what the erasure act would do for a resource, without recording or changing anything. `plan` is absent when the resource was already erased. Requires a system admin. Any other caller gets 404, decided before any lookup.
 
         :param resource_erasure_survey_request: (required)
         :type resource_erasure_survey_request: ResourceErasureSurveyRequest
@@ -6407,7 +6462,9 @@ class AdminApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceErasureSurvey",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -6514,8 +6571,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> SystemSettings:
-        """PATCH /api/access/admin/settings — partial update of system settings (admin only).
+        """Update system settings
 
+        Partial update: each field present overwrites its setting, each field absent is left unchanged. Requires a system admin.
 
         :param update_settings_request: (required)
         :type update_settings_request: UpdateSettingsRequest
@@ -6587,8 +6645,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> ApiResponse[SystemSettings]:
-        """PATCH /api/access/admin/settings — partial update of system settings (admin only).
+        """Update system settings
 
+        Partial update: each field present overwrites its setting, each field absent is left unchanged. Requires a system admin.
 
         :param update_settings_request: (required)
         :type update_settings_request: UpdateSettingsRequest
@@ -6660,8 +6719,9 @@ class AdminApi:
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
     ) -> RESTResponseType:
-        """PATCH /api/access/admin/settings — partial update of system settings (admin only).
+        """Update system settings
 
+        Partial update: each field present overwrites its setting, each field absent is left unchanged. Requires a system admin.
 
         :param update_settings_request: (required)
         :type update_settings_request: UpdateSettingsRequest

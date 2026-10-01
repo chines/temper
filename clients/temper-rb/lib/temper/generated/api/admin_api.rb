@@ -19,7 +19,8 @@ module Temper::Generated
     def initialize(api_client = ApiClient.default)
       @api_client = api_client
     end
-    # POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
+    # Approve a principal
+    # Admits a principal directly and closes any open reconsideration request they hold. Requires a system admin.
     # @param id [String] Profile ID of the principal
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -29,7 +30,8 @@ module Temper::Generated
       nil
     end
 
-    # POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
+    # Approve a principal
+    # Admits a principal directly and closes any open reconsideration request they hold. Requires a system admin.
     # @param id [String] Profile ID of the principal
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -87,8 +89,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.
-    # Returns `204`: there is no updated resource worth handing back, because closing changes nothing the caller can act on further. It moves **no** standing — readmitting a principal is `POST /api/access/admin/approve`, deliberately a different call.
+    # Close a reconsideration request
+    # Records that a reconsideration request was handled. It changes no standing: readmitting a principal is a separate call, `POST /api/access/admin/principals/{id}/approve`. Requires a system admin.
     # @param id [String] Reconsideration request ID
     # @param close_review_body [CloseReviewBody] 
     # @param [Hash] opts the optional parameters
@@ -99,8 +101,8 @@ module Temper::Generated
       nil
     end
 
-    # PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.
-    # Returns &#x60;204&#x60;: there is no updated resource worth handing back, because closing changes nothing the caller can act on further. It moves **no** standing — readmitting a principal is &#x60;POST /api/access/admin/approve&#x60;, deliberately a different call.
+    # Close a reconsideration request
+    # Records that a reconsideration request was handled. It changes no standing: readmitting a principal is a separate call, &#x60;POST /api/access/admin/principals/{id}/approve&#x60;. Requires a system admin.
     # @param id [String] Reconsideration request ID
     # @param close_review_body [CloseReviewBody] 
     # @param [Hash] opts the optional parameters
@@ -168,8 +170,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).
-    # [`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may not read the queue still gets a `403` — never a `0`, which would tell them the queue is empty while refusing to let them see it.
+    # Count pending join requests
+    # How many join requests are awaiting a decision, without the rows. A caller who may not read the queue gets 403, never a zero. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [QueueCount]
@@ -178,8 +180,8 @@ module Temper::Generated
       data
     end
 
-    # GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).
-    # [&#x60;list_pending&#x60;] without the rows, for &#x60;temper warmup&#x60;. Same admin proof, so a caller who may not read the queue still gets a &#x60;403&#x60; — never a &#x60;0&#x60;, which would tell them the queue is empty while refusing to let them see it.
+    # Count pending join requests
+    # How many join requests are awaiting a decision, without the rows. A caller who may not read the queue gets 403, never a zero. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(QueueCount, Integer, Hash)>] QueueCount data, response status code and response headers
@@ -232,8 +234,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
-    # [`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.
+    # Count open reconsideration requests
+    # How many reconsideration requests are open, without the rows. A caller who may not read the inbox gets 403, never a zero. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [QueueCount]
@@ -242,8 +244,8 @@ module Temper::Generated
       data
     end
 
-    # GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
-    # [&#x60;list_reviews&#x60;] without the rows. Same admin proof, same &#x60;403&#x60;-not-&#x60;0&#x60; rule as its neighbour.
+    # Count open reconsideration requests
+    # How many reconsideration requests are open, without the rows. A caller who may not read the inbox gets 403, never a zero. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(QueueCount, Integer, Hash)>] QueueCount data, response status code and response headers
@@ -296,7 +298,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).
+    # Deactivate a principal
+    # Deactivates a principal. Requires a system admin.
     # @param id [String] Profile ID of the principal
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -306,7 +309,8 @@ module Temper::Generated
       nil
     end
 
-    # POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).
+    # Deactivate a principal
+    # Deactivates a principal. Requires a system admin.
     # @param id [String] Profile ID of the principal
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -364,8 +368,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).
-    # The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+    # Revoke a profile's system-admin grant
+    # Removes the system-admin governance grant from a profile. Idempotent. Requires a system admin.
     # @param demote_admin_request [DemoteAdminRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -375,8 +379,8 @@ module Temper::Generated
       nil
     end
 
-    # POST /api/access/admin/demote — revoke a profile&#39;s system-admin grant (admin only).
-    # The manual governance twin of &#x60;promote_admin&#x60;; the automatic path is demotion-by-transition in &#x60;standing_service::apply&#x60; (Revoke/Deactivate demote). Unlike its older sibling above, it carries NO handler-side authz: the gate lives in &#x60;access_service::demote_admin&#x60; (the F-3 posture the &#x60;audit-handler-authz-drift&#x60; tripwire pins). The handler extracts actor + subject and dispatches.
+    # Revoke a profile&#39;s system-admin grant
+    # Removes the system-admin governance grant from a profile. Idempotent. Requires a system admin.
     # @param demote_admin_request [DemoteAdminRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -439,8 +443,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # `POST /api/admin/erasure` — the operator's execute door.
-    # The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof and attributes the act to `admin.actor()`.  The request reference tolerates retries: a retried POST with the SAME reference re-executes as a no-op completion (the subject is already tombstoned, so the act completes with `already_erased: true`). Correlation is INDEXED, never unique (20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does not deduplicate the door.
+    # Erase a principal
+    # Executes the erasure act for a principal, identified by pseudonym and an opaque request reference. Repeating it with the same reference completes as a no-op with `already_erased: true`. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the subject.
     # @param erasure_execute_request [ErasureExecuteRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -450,8 +454,8 @@ module Temper::Generated
       data
     end
 
-    # &#x60;POST /api/admin/erasure&#x60; — the operator&#39;s execute door.
-    # The gate runs here, before dispatch (&#x60;require_erasure_operator&#x60;); the service takes the proof and attributes the act to &#x60;admin.actor()&#x60;.  The request reference tolerates retries: a retried POST with the SAME reference re-executes as a no-op completion (the subject is already tombstoned, so the act completes with &#x60;already_erased: true&#x60;). Correlation is INDEXED, never unique (20260624000001_canonical_schema.sql:491) — the reference pairs the act&#39;s events, it does not deduplicate the door.
+    # Erase a principal
+    # Executes the erasure act for a principal, identified by pseudonym and an opaque request reference. Repeating it with the same reference completes as a no-op with &#x60;already_erased: true&#x60;. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the subject.
     # @param erasure_execute_request [ErasureExecuteRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -514,7 +518,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # `POST /api/admin/resources/erasure` — the operator's execute door.
+    # Erase a resource
+    # Executes the erasure act for a resource, optionally striking related blobs named by the survey. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
     # @param resource_erasure_execute_request [ResourceErasureExecuteRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -524,7 +529,8 @@ module Temper::Generated
       data
     end
 
-    # &#x60;POST /api/admin/resources/erasure&#x60; — the operator&#39;s execute door.
+    # Erase a resource
+    # Executes the erasure act for a resource, optionally striking related blobs named by the survey. The server mints the request reference. The answer is either a completion or a recorded refusal (&#x60;status&#x60;). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
     # @param resource_erasure_execute_request [ResourceErasureExecuteRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -587,8 +593,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/access/admin/settings — read FULL system settings (admin only).
-    # Unlike the public `GET /api/access/settings`, this returns `gating_team_slug` and `updated`, which an admin needs to administer the gate.
+    # Read full system settings
+    # The full instance settings, including the gating team slug that the public settings read withholds. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [SystemSettings]
@@ -597,8 +603,8 @@ module Temper::Generated
       data
     end
 
-    # GET /api/access/admin/settings — read FULL system settings (admin only).
-    # Unlike the public &#x60;GET /api/access/settings&#x60;, this returns &#x60;gating_team_slug&#x60; and &#x60;updated&#x60;, which an admin needs to administer the gate.
+    # Read full system settings
+    # The full instance settings, including the gating team slug that the public settings read withholds. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(SystemSettings, Integer, Hash)>] SystemSettings data, response status code and response headers
@@ -651,7 +657,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/access/admin/requests — list pending join requests (admin only).
+    # List pending join requests
+    # Every join request still awaiting a decision, with the requesting profile's handle, display name and email. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<JoinRequestWithProfile>]
@@ -660,7 +667,8 @@ module Temper::Generated
       data
     end
 
-    # GET /api/access/admin/requests — list pending join requests (admin only).
+    # List pending join requests
+    # Every join request still awaiting a decision, with the requesting profile&#39;s handle, display name and email. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<JoinRequestWithProfile>, Integer, Hash)>] Array<JoinRequestWithProfile> data, response status code and response headers
@@ -713,7 +721,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/access/admin/profiles — the directory list, or the state card when `?email=` resolves exactly one verified address.
+    # List profiles in the operator directory
+    # A filtered, paged directory of profiles with admission state, admin status and default verified email. With `email`, resolves exactly one verified address and answers that profile's state card instead of a page. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :standing Filter by admission state: &#x60;denied|requested|approved|revoked|deactivated|needs-access|all&#x60;. Default &#x60;needs-access&#x60; — every non-approved state INCLUDING no standing row (the operator&#39;s work queue). Case-insensitive.
     # @option opts [String] :email_contains Case-insensitive LITERAL substring matched over the profile&#39;s verified auth-link emails. &#x60;%&#x60;, &#x60;_&#x60; and &#x60;\\&#x60; have no wildcard meaning here. When set, each row carries &#x60;matched_email&#x60;.
@@ -728,7 +737,8 @@ module Temper::Generated
       data
     end
 
-    # GET /api/access/admin/profiles — the directory list, or the state card when &#x60;?email&#x3D;&#x60; resolves exactly one verified address.
+    # List profiles in the operator directory
+    # A filtered, paged directory of profiles with admission state, admin status and default verified email. With &#x60;email&#x60;, resolves exactly one verified address and answers that profile&#39;s state card instead of a page. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :standing Filter by admission state: &#x60;denied|requested|approved|revoked|deactivated|needs-access|all&#x60;. Default &#x60;needs-access&#x60; — every non-approved state INCLUDING no standing row (the operator&#39;s work queue). Case-insensitive.
     # @option opts [String] :email_contains Case-insensitive LITERAL substring matched over the profile&#39;s verified auth-link emails. &#x60;%&#x60;, &#x60;_&#x60; and &#x60;\\&#x60; have no wildcard meaning here. When set, each row carries &#x60;matched_email&#x60;.
@@ -793,8 +803,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/access/admin/reviews — list undecided reconsideration requests.
-    # The read half of the inbox `kb_principal_review_requests` always described itself as and never had. Same operator-only posture as the join-request queue above: the `&SystemAdmin` proof is minted here and required by the service.
+    # List open reconsideration requests
+    # Reconsideration requests that have not been closed, with the asking principal's identity. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<ReviewRequestWithProfile>]
@@ -803,8 +813,8 @@ module Temper::Generated
       data
     end
 
-    # GET /api/access/admin/reviews — list undecided reconsideration requests.
-    # The read half of the inbox &#x60;kb_principal_review_requests&#x60; always described itself as and never had. Same operator-only posture as the join-request queue above: the &#x60;&amp;SystemAdmin&#x60; proof is minted here and required by the service.
+    # List open reconsideration requests
+    # Reconsideration requests that have not been closed, with the asking principal&#39;s identity. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(Array<ReviewRequestWithProfile>, Integer, Hash)>] Array<ReviewRequestWithProfile> data, response status code and response headers
@@ -857,8 +867,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # POST /api/access/admin/promote — promote a profile to system admin (admin only).
-    # Grants `kb_principal_governance` + `approved` standing (the real admin-ness under D11). `team_id` omitted ⇒ the configured gating team for the retained side-effect `owner` row.
+    # Promote a profile to system admin
+    # Grants the system-admin governance grant and approved standing. Also adds an `owner` row on the given team (the configured gating team when omitted); that row confers no authority by itself. Requires a system admin.
     # @param promote_admin_request [PromoteAdminRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -868,8 +878,8 @@ module Temper::Generated
       data
     end
 
-    # POST /api/access/admin/promote — promote a profile to system admin (admin only).
-    # Grants &#x60;kb_principal_governance&#x60; + &#x60;approved&#x60; standing (the real admin-ness under D11). &#x60;team_id&#x60; omitted ⇒ the configured gating team for the retained side-effect &#x60;owner&#x60; row.
+    # Promote a profile to system admin
+    # Grants the system-admin governance grant and approved standing. Also adds an &#x60;owner&#x60; row on the given team (the configured gating team when omitted); that row confers no authority by itself. Requires a system admin.
     # @param promote_admin_request [PromoteAdminRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -932,7 +942,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).
+    # Reactivate a principal
+    # Restores a deactivated principal. Requires a system admin.
     # @param id [String] Profile ID of the principal
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -942,7 +953,8 @@ module Temper::Generated
       nil
     end
 
-    # POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).
+    # Reactivate a principal
+    # Restores a deactivated principal. Requires a system admin.
     # @param id [String] Profile ID of the principal
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1000,7 +1012,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # POST /api/machine-clients/{id}/rebind — point a fresh IdP `client_id` at the agent profile an existing machine client holds (system admin only). Mounted by `routes/admin.rs`, apart from its owner-gated siblings: team ownership cannot bound the reach a rebind inherits.
+    # Rebind a machine client to a new client ID
+    # Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
     # @param id [String] The machine client whose profile the new client id inherits
     # @param rebind_machine_request [RebindMachineRequest] 
     # @param [Hash] opts the optional parameters
@@ -1011,7 +1024,8 @@ module Temper::Generated
       data
     end
 
-    # POST /api/machine-clients/{id}/rebind — point a fresh IdP &#x60;client_id&#x60; at the agent profile an existing machine client holds (system admin only). Mounted by &#x60;routes/admin.rs&#x60;, apart from its owner-gated siblings: team ownership cannot bound the reach a rebind inherits.
+    # Rebind a machine client to a new client ID
+    # Points a fresh IdP &#x60;client_id&#x60; at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path &#x60;{id}&#x60; names the source client. Requires a system admin.
     # @param id [String] The machine client whose profile the new client id inherits
     # @param rebind_machine_request [RebindMachineRequest] 
     # @param [Hash] opts the optional parameters
@@ -1079,7 +1093,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the standing-approved population (admin only). Returns the (team, profile) pairs added plus the touched teams that also carry SAML group mappings (whose new native rows pre-empt IdP role assertions); an empty `added` means the instance was already converged.
+    # Reconcile auto-join team rosters
+    # Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [ReconcileAutoJoinOutcome]
@@ -1088,7 +1103,8 @@ module Temper::Generated
       data
     end
 
-    # POST /api/access/admin/auto-join/reconcile — converge every auto-join team&#39;s roster to the standing-approved population (admin only). Returns the (team, profile) pairs added plus the touched teams that also carry SAML group mappings (whose new native rows pre-empt IdP role assertions); an empty &#x60;added&#x60; means the instance was already converged.
+    # Reconcile auto-join team rosters
+    # Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty &#x60;added&#x60; means nothing needed adding. Requires a system admin.
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(ReconcileAutoJoinOutcome, Integer, Hash)>] ReconcileAutoJoinOutcome data, response status code and response headers
@@ -1141,8 +1157,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.
-    # Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute drain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as the jobs are queued.  Nothing is marked dirty. Staleness is *derived* (`embedding IS NULL OR embedded_with IS DISTINCT FROM <current model>`), so this is idempotent, safe to re-run, and safe to run while the drain is mid-flight: it simply picks up whatever is still stale. A resource that already has a live job is skipped, so it can never double-queue.  Admin-gated on the caller's own identity (`is_system_admin`) rather than the drain's shared secret: this is a human operator action, and it should work with the operator's normal login instead of requiring them to hold a deploy secret.  Documented under the `Admin` tag with the rest of the operator surface (`routes/admin.rs`). The drain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.
+    # Re-embed stale chunks
+    # Enqueues embedding jobs for chunks whose vector is missing or came from a model the server no longer embeds with, scoped to one resource, one context, or everything. `dry_run` reports what is stale without enqueuing. Bounded by `limit` per call and safe to repeat. Requires a system admin.
     # @param reembed_request [ReembedRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1152,8 +1168,8 @@ module Temper::Generated
       data
     end
 
-    # Operator-only re-embed trigger: &#x60;POST /api/embed/admin/reembed&#x60;.
-    # Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute drain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as the jobs are queued.  Nothing is marked dirty. Staleness is *derived* (&#x60;embedding IS NULL OR embedded_with IS DISTINCT FROM &lt;current model&gt;&#x60;), so this is idempotent, safe to re-run, and safe to run while the drain is mid-flight: it simply picks up whatever is still stale. A resource that already has a live job is skipped, so it can never double-queue.  Admin-gated on the caller&#39;s own identity (&#x60;is_system_admin&#x60;) rather than the drain&#39;s shared secret: this is a human operator action, and it should work with the operator&#39;s normal login instead of requiring them to hold a deploy secret.  Documented under the &#x60;Admin&#x60; tag with the rest of the operator surface (&#x60;routes/admin.rs&#x60;). The drain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.
+    # Re-embed stale chunks
+    # Enqueues embedding jobs for chunks whose vector is missing or came from a model the server no longer embeds with, scoped to one resource, one context, or everything. &#x60;dry_run&#x60; reports what is stale without enqueuing. Bounded by &#x60;limit&#x60; per call and safe to repeat. Requires a system admin.
     # @param reembed_request [ReembedRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1216,7 +1232,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).
+    # Approve or reject a join request
+    # Records the decision on a pending join request, with an optional note. Requires a system admin.
     # @param id [String] Join request ID
     # @param review_request_body [ReviewRequestBody] 
     # @param [Hash] opts the optional parameters
@@ -1227,7 +1244,8 @@ module Temper::Generated
       data
     end
 
-    # PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).
+    # Approve or reject a join request
+    # Records the decision on a pending join request, with an optional note. Requires a system admin.
     # @param id [String] Join request ID
     # @param review_request_body [ReviewRequestBody] 
     # @param [Hash] opts the optional parameters
@@ -1295,7 +1313,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).
+    # Revoke a principal's admission
+    # Revokes a principal's admission, with a required reason that is recorded. Requires a system admin.
     # @param id [String] Profile ID of the principal
     # @param revoke_principal_body [RevokePrincipalBody] 
     # @param [Hash] opts the optional parameters
@@ -1306,7 +1325,8 @@ module Temper::Generated
       nil
     end
 
-    # POST /api/access/admin/principals/:id/revoke — revoke a principal&#39;s admission (admin only).
+    # Revoke a principal&#39;s admission
+    # Revokes a principal&#39;s admission, with a required reason that is recorded. Requires a system admin.
     # @param id [String] Profile ID of the principal
     # @param revoke_principal_body [RevokePrincipalBody] 
     # @param [Hash] opts the optional parameters
@@ -1374,7 +1394,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # GET /api/access/admin/profiles/{profile_id} — the principal state card.
+    # Show a profile's state card
+    # One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.
     # @param profile_id [String] Profile ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1384,7 +1405,8 @@ module Temper::Generated
       data
     end
 
-    # GET /api/access/admin/profiles/{profile_id} — the principal state card.
+    # Show a profile&#39;s state card
+    # One profile&#39;s admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.
     # @param profile_id [String] Profile ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1442,8 +1464,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # `POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task 01a09628 item 2).
-    # Gated here like execute (`require_erasure_operator`): a caller who is not a system admin gets the same 404 and no event. The survey is witnessed read-only: no events, no projection change — it previews, it never prepares.
+    # Survey a principal erasure
+    # Reports what the erasure act would do for a principal, without recording or changing anything. Requires a system admin. Any other caller gets 404, decided before any lookup.
     # @param erasure_survey_request [ErasureSurveyRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1453,8 +1475,8 @@ module Temper::Generated
       data
     end
 
-    # &#x60;POST /api/admin/erasure/survey&#x60; — the read-only survey beside the execute door (task 01a09628 item 2).
-    # Gated here like execute (&#x60;require_erasure_operator&#x60;): a caller who is not a system admin gets the same 404 and no event. The survey is witnessed read-only: no events, no projection change — it previews, it never prepares.
+    # Survey a principal erasure
+    # Reports what the erasure act would do for a principal, without recording or changing anything. Requires a system admin. Any other caller gets 404, decided before any lookup.
     # @param erasure_survey_request [ErasureSurveyRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1517,7 +1539,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # `POST /api/admin/resources/erasure/survey` — the read-only survey. The gate answers a caller who is not a system admin with the same 404 as execute and records nothing; an unknown id past the gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on them), so the door mirrors nothing field by field.
+    # Survey a resource erasure
+    # Reports what the erasure act would do for a resource, without recording or changing anything. `plan` is absent when the resource was already erased. Requires a system admin. Any other caller gets 404, decided before any lookup.
     # @param resource_erasure_survey_request [ResourceErasureSurveyRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1527,7 +1550,8 @@ module Temper::Generated
       data
     end
 
-    # &#x60;POST /api/admin/resources/erasure/survey&#x60; — the read-only survey. The gate answers a caller who is not a system admin with the same 404 as execute and records nothing; an unknown id past the gate is a 404 too. The service&#39;s survey types serialize as-is (&#x60;Serialize&#x60; derived on them), so the door mirrors nothing field by field.
+    # Survey a resource erasure
+    # Reports what the erasure act would do for a resource, without recording or changing anything. &#x60;plan&#x60; is absent when the resource was already erased. Requires a system admin. Any other caller gets 404, decided before any lookup.
     # @param resource_erasure_survey_request [ResourceErasureSurveyRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1590,7 +1614,8 @@ module Temper::Generated
       return data, status_code, headers
     end
 
-    # PATCH /api/access/admin/settings — partial update of system settings (admin only).
+    # Update system settings
+    # Partial update: each field present overwrites its setting, each field absent is left unchanged. Requires a system admin.
     # @param update_settings_request [UpdateSettingsRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -1600,7 +1625,8 @@ module Temper::Generated
       data
     end
 
-    # PATCH /api/access/admin/settings — partial update of system settings (admin only).
+    # Update system settings
+    # Partial update: each field present overwrites its setting, each field absent is left unchanged. Requires a system admin.
     # @param update_settings_request [UpdateSettingsRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

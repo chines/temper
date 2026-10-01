@@ -305,6 +305,35 @@ GATED_BODY="$(fn_body gated_routes)"
   fail=1
 }
 
+# (b2) The admin group is admin-ONLY by membership, not just by tier. Its tier is the gated stack,
+# which admits any approved principal; what makes a route there admin-only is the handler minting
+# the sealed `&SystemAdmin` proof (`require_system_admin`, or the erasure doors' 404-rendering
+# `require_erasure_operator`) that its service then requires. A scoped handler (owner/maintainer/
+# actor arms — the ledger, machine-client siblings, reblock) mounted here would be documented under
+# the `Admin` tag as admin-only while admitting non-admins. This asserts PRESENCE of the mint in the
+# handler's body; that the mint precedes any lookup is the service signature's job (the proof is a
+# parameter, so nothing can run on the service side without it) plus review.
+HANDLERS_DIR="${HANDLERS_DIR:-crates/temper-api/src/handlers}"
+ADMIN_HANDLERS="$(printf '%s\n' "$ALL" | awk -F'\t' '$1=="admin_routes"{print $2}')"
+if [[ -z "$ADMIN_HANDLERS" ]]; then
+  echo "audit-route-auth: FAIL — admin_routes mounts no handlers (or the group was renamed)" >&2
+  fail=1
+fi
+for h in $ADMIN_HANDLERS; do
+  mod="$(printf '%s' "$h" | cut -d: -f3)"
+  fname="$(printf '%s' "$h" | cut -d: -f5)"
+  body="$(awk -v f="pub async fn ${fname}(" 'index($0,f){p=1} p{print} p&&/^}/{exit}' "${HANDLERS_DIR}/${mod}.rs" 2>/dev/null || true)"
+  if [[ -z "$body" ]]; then
+    echo "audit-route-auth: FAIL — admin_routes mounts $h but its body was not found in ${HANDLERS_DIR}/${mod}.rs" >&2
+    fail=1
+  elif [[ "$body" != *"require_system_admin("* && "$body" != *"require_erasure_operator("* ]]; then
+    echo "audit-route-auth: FAIL — admin_routes mounts $h, which does not mint the &SystemAdmin proof" >&2
+    echo "  Every route in routes/admin.rs must be admin-only: its handler mints the proof via" >&2
+    echo "  require_system_admin (or require_erasure_operator). A scoped handler belongs in gated_routes." >&2
+    fail=1
+  fi
+done
+
 # (c) The review-required route set must match the reviewed baseline.
 NORM_BASELINE="$(printf '%s\n' "$BASELINE" | sort -u)"
 if [[ "${UPDATE_BASELINE:-}" == "1" ]]; then

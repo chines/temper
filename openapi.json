@@ -30,7 +30,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the\nstanding-approved population (admin only). Returns the (team, profile) pairs added plus\nthe touched teams that also carry SAML group mappings (whose new native rows pre-empt\nIdP role assertions); an empty `added` means the instance was already converged.",
+        "summary": "Reconcile auto-join team rosters",
+        "description": "Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.",
         "operationId": "admin_reconcile_auto_join",
         "responses": {
           "200": {
@@ -54,7 +55,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -92,8 +93,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).",
-        "description": "The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in\n`standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries\nNO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the\n`audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.",
+        "summary": "Revoke a profile's system-admin grant",
+        "description": "Removes the system-admin governance grant from a profile. Idempotent. Requires a system admin.",
         "operationId": "admin_demote",
         "requestBody": {
           "content": {
@@ -120,7 +121,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -158,7 +159,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).",
+        "summary": "Approve a principal",
+        "description": "Admits a principal directly and closes any open reconsideration request they hold. Requires a system admin.",
         "operationId": "admin_approve_principal",
         "parameters": [
           {
@@ -197,7 +199,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -207,7 +209,7 @@
             }
           },
           "409": {
-            "description": "The principal is already approved, or has a request pending",
+            "description": "The principal is already approved",
             "content": {
               "application/json": {
                 "schema": {
@@ -245,7 +247,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).",
+        "summary": "Deactivate a principal",
+        "description": "Deactivates a principal. Requires a system admin.",
         "operationId": "admin_deactivate_principal",
         "parameters": [
           {
@@ -284,7 +287,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -332,7 +335,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).",
+        "summary": "Reactivate a principal",
+        "description": "Restores a deactivated principal. Requires a system admin.",
         "operationId": "admin_reactivate_principal",
         "parameters": [
           {
@@ -371,7 +375,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -419,7 +423,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).",
+        "summary": "Revoke a principal's admission",
+        "description": "Revokes a principal's admission, with a required reason that is recorded. Requires a system admin.",
         "operationId": "admin_revoke_principal",
         "parameters": [
           {
@@ -468,7 +473,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -516,7 +521,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "GET /api/access/admin/profiles — the directory list, or the state card when `?email=`\nresolves exactly one verified address.",
+        "summary": "List profiles in the operator directory",
+        "description": "A filtered, paged directory of profiles with admission state, admin status and default verified email. With `email`, resolves exactly one verified address and answers that profile's state card instead of a page. Requires a system admin.",
         "operationId": "admin_list_profiles",
         "parameters": [
           {
@@ -626,7 +632,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -674,7 +680,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "GET /api/access/admin/profiles/{profile_id} — the principal state card.",
+        "summary": "Show a profile's state card",
+        "description": "One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.",
         "operationId": "admin_show_profile",
         "parameters": [
           {
@@ -710,7 +717,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -758,8 +765,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "POST /api/access/admin/promote — promote a profile to system admin (admin only).",
-        "description": "Grants `kb_principal_governance` + `approved` standing (the real admin-ness\nunder D11). `team_id` omitted ⇒ the configured gating team for the retained\nside-effect `owner` row.",
+        "summary": "Promote a profile to system admin",
+        "description": "Grants the system-admin governance grant and approved standing. Also adds an `owner` row on the given team (the configured gating team when omitted); that row confers no authority by itself. Requires a system admin.",
         "operationId": "admin_promote",
         "requestBody": {
           "content": {
@@ -803,7 +810,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -841,7 +848,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "GET /api/access/admin/requests — list pending join requests (admin only).",
+        "summary": "List pending join requests",
+        "description": "Every join request still awaiting a decision, with the requesting profile's handle, display name and email. Requires a system admin.",
         "operationId": "admin_list_join_requests",
         "responses": {
           "200": {
@@ -868,7 +876,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -906,8 +914,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).",
-        "description": "[`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may\nnot read the queue still gets a `403` — never a `0`, which would tell them the queue is empty\nwhile refusing to let them see it.",
+        "summary": "Count pending join requests",
+        "description": "How many join requests are awaiting a decision, without the rows. A caller who may not read the queue gets 403, never a zero. Requires a system admin.",
         "operationId": "admin_count_join_requests",
         "responses": {
           "200": {
@@ -931,7 +939,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -969,7 +977,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).",
+        "summary": "Approve or reject a join request",
+        "description": "Records the decision on a pending join request, with an optional note. Requires a system admin.",
         "operationId": "admin_review_join_request",
         "parameters": [
           {
@@ -1025,7 +1034,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1073,8 +1082,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "GET /api/access/admin/reviews — list undecided reconsideration requests.",
-        "description": "The read half of the inbox `kb_principal_review_requests` always described itself as and never\nhad. Same operator-only posture as the join-request queue above: the `&SystemAdmin` proof is\nminted here and required by the service.",
+        "summary": "List open reconsideration requests",
+        "description": "Reconsideration requests that have not been closed, with the asking principal's identity. Requires a system admin.",
         "operationId": "admin_list_reviews",
         "responses": {
           "200": {
@@ -1101,7 +1110,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1139,8 +1148,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).",
-        "description": "[`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.",
+        "summary": "Count open reconsideration requests",
+        "description": "How many reconsideration requests are open, without the rows. A caller who may not read the inbox gets 403, never a zero. Requires a system admin.",
         "operationId": "admin_count_reviews",
         "responses": {
           "200": {
@@ -1164,7 +1173,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1202,8 +1211,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.",
-        "description": "Returns `204`: there is no updated resource worth handing back, because closing changes nothing\nthe caller can act on further. It moves **no** standing — readmitting a principal is\n`POST /api/access/admin/approve`, deliberately a different call.",
+        "summary": "Close a reconsideration request",
+        "description": "Records that a reconsideration request was handled. It changes no standing: readmitting a principal is a separate call, `POST /api/access/admin/principals/{id}/approve`. Requires a system admin.",
         "operationId": "admin_close_review",
         "parameters": [
           {
@@ -1242,7 +1251,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1290,8 +1299,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "GET /api/access/admin/settings — read FULL system settings (admin only).",
-        "description": "Unlike the public `GET /api/access/settings`, this returns `gating_team_slug`\nand `updated`, which an admin needs to administer the gate.",
+        "summary": "Read full system settings",
+        "description": "The full instance settings, including the gating team slug that the public settings read withholds. Requires a system admin.",
         "operationId": "admin_get_settings",
         "responses": {
           "200": {
@@ -1315,7 +1324,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1336,7 +1345,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "PATCH /api/access/admin/settings — partial update of system settings (admin only).",
+        "summary": "Update system settings",
+        "description": "Partial update: each field present overwrites its setting, each field absent is left unchanged. Requires a system admin.",
         "operationId": "admin_update_settings",
         "requestBody": {
           "content": {
@@ -1380,7 +1390,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1725,8 +1735,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "`POST /api/admin/erasure` — the operator's execute door.",
-        "description": "The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof\nand attributes the act to `admin.actor()`.\n\nThe request reference tolerates retries: a retried POST with the SAME reference re-executes\nas a no-op completion (the subject is already tombstoned, so the act completes with\n`already_erased: true`). Correlation is INDEXED, never unique\n(20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does\nnot deduplicate the door.",
+        "summary": "Erase a principal",
+        "description": "Executes the erasure act for a principal, identified by pseudonym and an opaque request reference. Repeating it with the same reference completes as a no-op with `already_erased: true`. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the subject.",
         "operationId": "admin_erase_principal",
         "requestBody": {
           "content": {
@@ -1759,6 +1769,16 @@
               }
             }
           },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist",
             "content": {
@@ -1768,6 +1788,9 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"
           }
         },
         "security": [
@@ -1798,8 +1821,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "`POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task\n01a09628 item 2).",
-        "description": "Gated here like execute (`require_erasure_operator`): a caller who is not a system admin\ngets the same 404 and no event. The survey is witnessed read-only: no events, no projection\nchange — it previews, it never prepares.",
+        "summary": "Survey a principal erasure",
+        "description": "Reports what the erasure act would do for a principal, without recording or changing anything. Requires a system admin. Any other caller gets 404, decided before any lookup.",
         "operationId": "admin_survey_principal_erasure",
         "requestBody": {
           "content": {
@@ -1832,6 +1855,16 @@
               }
             }
           },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist",
             "content": {
@@ -1841,6 +1874,9 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"
           }
         },
         "security": [
@@ -1871,7 +1907,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "`POST /api/admin/resources/erasure` — the operator's execute door.",
+        "summary": "Erase a resource",
+        "description": "Executes the erasure act for a resource, optionally striking related blobs named by the survey. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.",
         "operationId": "admin_erase_resource",
         "requestBody": {
           "content": {
@@ -1914,6 +1951,16 @@
               }
             }
           },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist",
             "content": {
@@ -1925,14 +1972,7 @@
             }
           },
           "422": {
-            "description": "Unknown field in the body (a caller-supplied `request_reference` is refused, not ignored)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
+            "description": "The body is JSON but not the expected shape, e.g. a missing or unknown field: a caller-supplied `request_reference` is refused, not ignored (a plain-text rejection, not an ErrorBody)"
           }
         },
         "security": [
@@ -1963,7 +2003,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "`POST /api/admin/resources/erasure/survey` — the read-only survey. The gate answers a caller\nwho is not a system admin with the same 404 as execute and records nothing; an unknown id past\nthe gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on\nthem), so the door mirrors nothing field by field.",
+        "summary": "Survey a resource erasure",
+        "description": "Reports what the erasure act would do for a resource, without recording or changing anything. `plan` is absent when the resource was already erased. Requires a system admin. Any other caller gets 404, decided before any lookup.",
         "operationId": "admin_survey_resource_erasure",
         "requestBody": {
           "content": {
@@ -1996,6 +2037,16 @@
               }
             }
           },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist",
             "content": {
@@ -2005,6 +2056,9 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"
           }
         },
         "security": [
@@ -5619,8 +5673,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.",
-        "description": "Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute\ndrain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as\nthe jobs are queued.\n\nNothing is marked dirty. Staleness is *derived* (`embedding IS NULL OR embedded_with IS DISTINCT\nFROM <current model>`), so this is idempotent, safe to re-run, and safe to run while the drain is\nmid-flight: it simply picks up whatever is still stale. A resource that already has a live job is\nskipped, so it can never double-queue.\n\nAdmin-gated on the caller's own identity (`is_system_admin`) rather than the drain's shared secret:\nthis is a human operator action, and it should work with the operator's normal login instead of\nrequiring them to hold a deploy secret.\n\nDocumented under the `Admin` tag with the rest of the operator surface (`routes/admin.rs`). The\ndrain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.",
+        "summary": "Re-embed stale chunks",
+        "description": "Enqueues embedding jobs for chunks whose vector is missing or came from a model the server no longer embeds with, scoped to one resource, one context, or everything. `dry_run` reports what is stale without enqueuing. Bounded by `limit` per call and safe to repeat. Requires a system admin.",
         "operationId": "admin_reembed",
         "requestBody": {
           "content": {
@@ -5664,7 +5718,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7154,7 +7208,8 @@
         "tags": [
           "Admin"
         ],
-        "summary": "POST /api/machine-clients/{id}/rebind — point a fresh IdP `client_id` at the agent profile an\nexisting machine client holds (system admin only). Mounted by `routes/admin.rs`, apart from its\nowner-gated siblings: team ownership cannot bound the reach a rebind inherits.",
+        "summary": "Rebind a machine client to a new client ID",
+        "description": "Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.",
         "operationId": "admin_rebind_machine_client",
         "parameters": [
           {
@@ -7210,7 +7265,7 @@
             }
           },
           "403": {
-            "description": "Caller is not a system admin",
+            "description": "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14477,7 +14532,7 @@
       },
       "CloseReviewBody": {
         "type": "object",
-        "description": "Body for closing a reconsideration request.\n\nIt carries **only** a note, and that is the design rather than an omission. Closing a review\nrecords that an admin handled it; it grants nothing (D15). A `status` field here would invite\nexactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is\na separate `POST /api/access/admin/approve`.",
+        "description": "Body for closing a reconsideration request.\n\nIt carries **only** a note, and that is the design rather than an omission. Closing a review\nrecords that an admin handled it; it grants nothing (D15). A `status` field here would invite\nexactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is\na separate `POST /api/access/admin/principals/{id}/approve`.",
         "properties": {
           "decision_note": {
             "type": [
@@ -18642,9 +18697,7 @@
         "description": "Point a fresh `client_id` at an existing agent profile (D8).",
         "required": [
           "client_id",
-          "from_machine_client_id",
-          "label",
-          "keep_old_active"
+          "label"
         ],
         "properties": {
           "client_id": {
@@ -18654,11 +18707,11 @@
           "from_machine_client_id": {
             "type": "string",
             "format": "uuid",
-            "description": "The existing `kb_machine_clients.id` whose profile is inherited. On\n`POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it."
+            "description": "The existing `kb_machine_clients.id` whose profile is inherited. On\n`POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it,\nso the HTTP body may omit it (it defaults to the nil UUID and is replaced before dispatch)."
           },
           "keep_old_active": {
             "type": "boolean",
-            "description": "When false (the default), the old row is revoked in the same transaction."
+            "description": "When false (the default when omitted), the old row is revoked in the same transaction."
           },
           "label": {
             "type": "string"

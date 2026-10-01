@@ -147,4 +147,4 @@ if [ -n "$OFFENDERS" ]; then
     exit 1
 fi
 
-echo "check-openapi-routes: all plain .route(...) mounts are on the operator-only allowlist"
+echo "check-openapi-routes: all plain .route(...) mounts are on the out-of-contract allowlist"

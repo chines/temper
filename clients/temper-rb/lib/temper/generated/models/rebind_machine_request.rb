@@ -19,10 +19,10 @@ module Temper::Generated
     # The new IdP client id.
     attr_accessor :client_id
 
-    # The existing `kb_machine_clients.id` whose profile is inherited. On `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it.
+    # The existing `kb_machine_clients.id` whose profile is inherited. On `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it, so the HTTP body may omit it (it defaults to the nil UUID and is replaced before dispatch).
     attr_accessor :from_machine_client_id
 
-    # When false (the default), the old row is revoked in the same transaction.
+    # When false (the default when omitted), the old row is revoked in the same transaction.
     attr_accessor :keep_old_active
 
     attr_accessor :label
@@ -87,14 +87,10 @@ module Temper::Generated
 
       if attributes.key?(:'from_machine_client_id')
         self.from_machine_client_id = attributes[:'from_machine_client_id']
-      else
-        self.from_machine_client_id = nil
       end
 
       if attributes.key?(:'keep_old_active')
         self.keep_old_active = attributes[:'keep_old_active']
-      else
-        self.keep_old_active = nil
       end
 
       if attributes.key?(:'label')
@@ -113,14 +109,6 @@ module Temper::Generated
         invalid_properties.push('invalid value for "client_id", client_id cannot be nil.')
       end
 
-      if @from_machine_client_id.nil?
-        invalid_properties.push('invalid value for "from_machine_client_id", from_machine_client_id cannot be nil.')
-      end
-
-      if @keep_old_active.nil?
-        invalid_properties.push('invalid value for "keep_old_active", keep_old_active cannot be nil.')
-      end
-
       if @label.nil?
         invalid_properties.push('invalid value for "label", label cannot be nil.')
       end
@@ -133,8 +121,6 @@ module Temper::Generated
     def valid?
       warn '[DEPRECATED] the `valid?` method is obsolete'
       return false if @client_id.nil?
-      return false if @from_machine_client_id.nil?
-      return false if @keep_old_active.nil?
       return false if @label.nil?
       true
     end
@@ -147,26 +133,6 @@ module Temper::Generated
       end
 
       @client_id = client_id
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] from_machine_client_id Value to be assigned
-    def from_machine_client_id=(from_machine_client_id)
-      if from_machine_client_id.nil?
-        fail ArgumentError, 'from_machine_client_id cannot be nil'
-      end
-
-      @from_machine_client_id = from_machine_client_id
-    end
-
-    # Custom attribute writer method with validation
-    # @param [Object] keep_old_active Value to be assigned
-    def keep_old_active=(keep_old_active)
-      if keep_old_active.nil?
-        fail ArgumentError, 'keep_old_active cannot be nil'
-      end
-
-      @keep_old_active = keep_old_active
     end
 
     # Custom attribute writer method with validation

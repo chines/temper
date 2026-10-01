@@ -658,7 +658,7 @@ description = "Verify the committed openapi.json matches a fresh emission from t
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-spec.sh"]
 
 [tasks.openapi-routes-check]
-description = "Verify every plain .route(...) mount is on the operator-only allowlist"
+description = "Verify every plain .route(...) mount is on the out-of-contract allowlist"
 script = ["bash ${CARGO_MAKE_WORKING_DIRECTORY}/.github/scripts/check-openapi-routes.sh"]
 
 [tasks.openapi-summary-lint]

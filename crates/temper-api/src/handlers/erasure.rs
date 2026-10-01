@@ -126,6 +126,8 @@ pub enum ErasureExecuteResponse {
 #[utoipa::path(
     post,
     operation_id = "admin_erase_principal",
+    summary = "Erase a principal",
+    description = "Executes the erasure act for a principal, identified by pseudonym and an opaque request reference. Repeating it with the same reference completes as a no-op with `already_erased: true`. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the subject.",
     path = "/api/admin/erasure",
     tag = "Admin",
     request_body = ErasureExecuteRequest,
@@ -133,7 +135,9 @@ pub enum ErasureExecuteResponse {
     responses(
         (status = 200, description = "The erasure completed (`already_erased` on a repeat)", body = ErasureExecuteResponse),
         (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist", body = ErrorBody),
+        (status = 422, description = "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"),
     )
 )]
 pub async fn execute(
@@ -192,6 +196,8 @@ pub struct ErasureSurveyResponse {
 #[utoipa::path(
     post,
     operation_id = "admin_survey_principal_erasure",
+    summary = "Survey a principal erasure",
+    description = "Reports what the erasure act would do for a principal, without recording or changing anything. Requires a system admin. Any other caller gets 404, decided before any lookup.",
     path = "/api/admin/erasure/survey",
     tag = "Admin",
     request_body = ErasureSurveyRequest,
@@ -199,7 +205,9 @@ pub struct ErasureSurveyResponse {
     responses(
         (status = 200, description = "What the erasure act would do; nothing is recorded or changed", body = ErasureSurveyResponse),
         (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist", body = ErrorBody),
+        (status = 422, description = "The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody)"),
     )
 )]
 pub async fn survey(

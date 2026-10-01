@@ -17,10 +17,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the
-         *     standing-approved population (admin only). Returns the (team, profile) pairs added plus
-         *     the touched teams that also carry SAML group mappings (whose new native rows pre-empt
-         *     IdP role assertions); an empty `added` means the instance was already converged.
+         * Reconcile auto-join team rosters
+         * @description Adds every approved principal missing from an auto-join team and reports each (team, profile) pair added, plus the touched teams that also carry SAML group mappings (whose new native memberships take precedence over IdP role assertions). An empty `added` means nothing needed adding. Requires a system admin.
          */
         post: operations["admin_reconcile_auto_join"];
         delete?: never;
@@ -42,11 +40,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).
-         * @description The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in
-         *     `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries
-         *     NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the
-         *     `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+         * Revoke a profile's system-admin grant
+         * @description Removes the system-admin governance grant from a profile. Idempotent. Requires a system admin.
          */
         post: operations["admin_demote"];
         delete?: never;
@@ -67,7 +62,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only). */
+        /**
+         * Approve a principal
+         * @description Admits a principal directly and closes any open reconsideration request they hold. Requires a system admin.
+         */
         post: operations["admin_approve_principal"];
         delete?: never;
         options?: never;
@@ -87,7 +85,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only). */
+        /**
+         * Deactivate a principal
+         * @description Deactivates a principal. Requires a system admin.
+         */
         post: operations["admin_deactivate_principal"];
         delete?: never;
         options?: never;
@@ -107,7 +108,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only). */
+        /**
+         * Reactivate a principal
+         * @description Restores a deactivated principal. Requires a system admin.
+         */
         post: operations["admin_reactivate_principal"];
         delete?: never;
         options?: never;
@@ -127,7 +131,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only). */
+        /**
+         * Revoke a principal's admission
+         * @description Revokes a principal's admission, with a required reason that is recorded. Requires a system admin.
+         */
         post: operations["admin_revoke_principal"];
         delete?: never;
         options?: never;
@@ -146,8 +153,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/access/admin/profiles — the directory list, or the state card when `?email=`
-         *     resolves exactly one verified address.
+         * List profiles in the operator directory
+         * @description A filtered, paged directory of profiles with admission state, admin status and default verified email. With `email`, resolves exactly one verified address and answers that profile's state card instead of a page. Requires a system admin.
          */
         get: operations["admin_list_profiles"];
         put?: never;
@@ -168,7 +175,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/access/admin/profiles/{profile_id} — the principal state card. */
+        /**
+         * Show a profile's state card
+         * @description One profile's admission state, governance, identity links, team memberships, pending invitations and open queue items. Requires a system admin.
+         */
         get: operations["admin_show_profile"];
         put?: never;
         post?: never;
@@ -191,10 +201,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/access/admin/promote — promote a profile to system admin (admin only).
-         * @description Grants `kb_principal_governance` + `approved` standing (the real admin-ness
-         *     under D11). `team_id` omitted ⇒ the configured gating team for the retained
-         *     side-effect `owner` row.
+         * Promote a profile to system admin
+         * @description Grants the system-admin governance grant and approved standing. Also adds an `owner` row on the given team (the configured gating team when omitted); that row confers no authority by itself. Requires a system admin.
          */
         post: operations["admin_promote"];
         delete?: never;
@@ -213,7 +221,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** GET /api/access/admin/requests — list pending join requests (admin only). */
+        /**
+         * List pending join requests
+         * @description Every join request still awaiting a decision, with the requesting profile's handle, display name and email. Requires a system admin.
+         */
         get: operations["admin_list_join_requests"];
         put?: never;
         post?: never;
@@ -234,10 +245,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).
-         * @description [`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may
-         *     not read the queue still gets a `403` — never a `0`, which would tell them the queue is empty
-         *     while refusing to let them see it.
+         * Count pending join requests
+         * @description How many join requests are awaiting a decision, without the rows. A caller who may not read the queue gets 403, never a zero. Requires a system admin.
          */
         get: operations["admin_count_join_requests"];
         put?: never;
@@ -264,7 +273,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only). */
+        /**
+         * Approve or reject a join request
+         * @description Records the decision on a pending join request, with an optional note. Requires a system admin.
+         */
         patch: operations["admin_review_join_request"];
         trace?: never;
     };
@@ -279,10 +291,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/access/admin/reviews — list undecided reconsideration requests.
-         * @description The read half of the inbox `kb_principal_review_requests` always described itself as and never
-         *     had. Same operator-only posture as the join-request queue above: the `&SystemAdmin` proof is
-         *     minted here and required by the service.
+         * List open reconsideration requests
+         * @description Reconsideration requests that have not been closed, with the asking principal's identity. Requires a system admin.
          */
         get: operations["admin_list_reviews"];
         put?: never;
@@ -304,8 +314,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
-         * @description [`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.
+         * Count open reconsideration requests
+         * @description How many reconsideration requests are open, without the rows. A caller who may not read the inbox gets 403, never a zero. Requires a system admin.
          */
         get: operations["admin_count_reviews"];
         put?: never;
@@ -333,10 +343,8 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.
-         * @description Returns `204`: there is no updated resource worth handing back, because closing changes nothing
-         *     the caller can act on further. It moves **no** standing — readmitting a principal is
-         *     `POST /api/access/admin/approve`, deliberately a different call.
+         * Close a reconsideration request
+         * @description Records that a reconsideration request was handled. It changes no standing: readmitting a principal is a separate call, `POST /api/access/admin/principals/{id}/approve`. Requires a system admin.
          */
         patch: operations["admin_close_review"];
         trace?: never;
@@ -352,9 +360,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * GET /api/access/admin/settings — read FULL system settings (admin only).
-         * @description Unlike the public `GET /api/access/settings`, this returns `gating_team_slug`
-         *     and `updated`, which an admin needs to administer the gate.
+         * Read full system settings
+         * @description The full instance settings, including the gating team slug that the public settings read withholds. Requires a system admin.
          */
         get: operations["admin_get_settings"];
         put?: never;
@@ -362,7 +369,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** PATCH /api/access/admin/settings — partial update of system settings (admin only). */
+        /**
+         * Update system settings
+         * @description Partial update: each field present overwrites its setting, each field absent is left unchanged. Requires a system admin.
+         */
         patch: operations["admin_update_settings"];
         trace?: never;
     };
@@ -465,15 +475,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * `POST /api/admin/erasure` — the operator's execute door.
-         * @description The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof
-         *     and attributes the act to `admin.actor()`.
-         *
-         *     The request reference tolerates retries: a retried POST with the SAME reference re-executes
-         *     as a no-op completion (the subject is already tombstoned, so the act completes with
-         *     `already_erased: true`). Correlation is INDEXED, never unique
-         *     (20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does
-         *     not deduplicate the door.
+         * Erase a principal
+         * @description Executes the erasure act for a principal, identified by pseudonym and an opaque request reference. Repeating it with the same reference completes as a no-op with `already_erased: true`. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the subject.
          */
         post: operations["admin_erase_principal"];
         delete?: never;
@@ -495,11 +498,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * `POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task
-         *     01a09628 item 2).
-         * @description Gated here like execute (`require_erasure_operator`): a caller who is not a system admin
-         *     gets the same 404 and no event. The survey is witnessed read-only: no events, no projection
-         *     change — it previews, it never prepares.
+         * Survey a principal erasure
+         * @description Reports what the erasure act would do for a principal, without recording or changing anything. Requires a system admin. Any other caller gets 404, decided before any lookup.
          */
         post: operations["admin_survey_principal_erasure"];
         delete?: never;
@@ -520,7 +520,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** `POST /api/admin/resources/erasure` — the operator's execute door. */
+        /**
+         * Erase a resource
+         * @description Executes the erasure act for a resource, optionally striking related blobs named by the survey. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+         */
         post: operations["admin_erase_resource"];
         delete?: never;
         options?: never;
@@ -541,10 +544,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * `POST /api/admin/resources/erasure/survey` — the read-only survey. The gate answers a caller
-         *     who is not a system admin with the same 404 as execute and records nothing; an unknown id past
-         *     the gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on
-         *     them), so the door mirrors nothing field by field.
+         * Survey a resource erasure
+         * @description Reports what the erasure act would do for a resource, without recording or changing anything. `plan` is absent when the resource was already erased. Requires a system admin. Any other caller gets 404, decided before any lookup.
          */
         post: operations["admin_survey_resource_erasure"];
         delete?: never;
@@ -1502,22 +1503,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.
-         * @description Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute
-         *     drain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as
-         *     the jobs are queued.
-         *
-         *     Nothing is marked dirty. Staleness is *derived* (`embedding IS NULL OR embedded_with IS DISTINCT
-         *     FROM <current model>`), so this is idempotent, safe to re-run, and safe to run while the drain is
-         *     mid-flight: it simply picks up whatever is still stale. A resource that already has a live job is
-         *     skipped, so it can never double-queue.
-         *
-         *     Admin-gated on the caller's own identity (`is_system_admin`) rather than the drain's shared secret:
-         *     this is a human operator action, and it should work with the operator's normal login instead of
-         *     requiring them to hold a deploy secret.
-         *
-         *     Documented under the `Admin` tag with the rest of the operator surface (`routes/admin.rs`). The
-         *     drain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.
+         * Re-embed stale chunks
+         * @description Enqueues embedding jobs for chunks whose vector is missing or came from a model the server no longer embeds with, scoped to one resource, one context, or everything. `dry_run` reports what is stale without enqueuing. Bounded by `limit` per call and safe to repeat. Requires a system admin.
          */
         post: operations["admin_reembed"];
         delete?: never;
@@ -1960,9 +1947,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/machine-clients/{id}/rebind — point a fresh IdP `client_id` at the agent profile an
-         *     existing machine client holds (system admin only). Mounted by `routes/admin.rs`, apart from its
-         *     owner-gated siblings: team ownership cannot bound the reach a rebind inherits.
+         * Rebind a machine client to a new client ID
+         * @description Points a fresh IdP `client_id` at the agent profile an existing machine client holds; by default the old client is revoked in the same transaction. The path `{id}` names the source client. Requires a system admin.
          */
         post: operations["admin_rebind_machine_client"];
         delete?: never;
@@ -4436,7 +4422,7 @@ export interface components {
          *     It carries **only** a note, and that is the design rather than an omission. Closing a review
          *     records that an admin handled it; it grants nothing (D15). A `status` field here would invite
          *     exactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is
-         *     a separate `POST /api/access/admin/approve`.
+         *     a separate `POST /api/access/admin/principals/{id}/approve`.
          */
         CloseReviewBody: {
             decision_note?: string | null;
@@ -7144,11 +7130,12 @@ export interface components {
             /**
              * Format: uuid
              * @description The existing `kb_machine_clients.id` whose profile is inherited. On
-             *     `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it.
+             *     `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it,
+             *     so the HTTP body may omit it (it defaults to the nil UUID and is replaced before dispatch).
              */
-            from_machine_client_id: string;
-            /** @description When false (the default), the old row is revoked in the same transaction. */
-            keep_old_active: boolean;
+            from_machine_client_id?: string;
+            /** @description When false (the default when omitted), the old row is revoked in the same transaction. */
+            keep_old_active?: boolean;
             label: string;
         };
         /** @description One candidate's receipt row. */
@@ -9846,7 +9833,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9889,7 +9876,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9940,7 +9927,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9949,7 +9936,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The principal is already approved, or has a request pending */
+            /** @description The principal is already approved */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -10000,7 +9987,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10060,7 +10047,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10124,7 +10111,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10209,7 +10196,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10262,7 +10249,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10325,7 +10312,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10366,7 +10353,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10407,7 +10394,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10464,7 +10451,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10514,7 +10501,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10555,7 +10542,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10601,7 +10588,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10651,7 +10638,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10705,7 +10692,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10959,6 +10946,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist */
             404: {
                 headers: {
@@ -10967,6 +10963,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
+            };
+            /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -11004,6 +11007,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist */
             404: {
                 headers: {
@@ -11012,6 +11024,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
+            };
+            /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -11058,6 +11077,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist */
             404: {
                 headers: {
@@ -11067,14 +11095,12 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Unknown field in the body (a caller-supplied `request_reference` is refused, not ignored) */
+            /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field: a caller-supplied `request_reference` is refused, not ignored (a plain-text rejection, not an ErrorBody) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ErrorBody"];
-                };
+                content?: never;
             };
         };
     };
@@ -11112,6 +11138,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist */
             404: {
                 headers: {
@@ -11120,6 +11155,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
+            };
+            /** @description The body is JSON but not the expected shape, e.g. a missing or unknown field (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -13340,7 +13382,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14248,7 +14290,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is not a system admin */
+            /** @description Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;

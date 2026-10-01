@@ -188,6 +188,8 @@ pub async fn warm(
 #[utoipa::path(
     post,
     operation_id = "admin_reembed",
+    summary = "Re-embed stale chunks",
+    description = "Enqueues embedding jobs for chunks whose vector is missing or came from a model the server no longer embeds with, scoped to one resource, one context, or everything. `dry_run` reports what is stale without enqueuing. Bounded by `limit` per call and safe to repeat. Requires a system admin.",
     path = "/api/embed/admin/reembed",
     tag = "Admin",
     request_body = ReembedRequest,
@@ -196,7 +198,7 @@ pub async fn warm(
         (status = 200, description = "What is stale in scope, and the resources enqueued (none on `dry_run`)", body = ReembedSummary),
         (status = 400, description = "Not exactly one of `resource_id`, `context_id`, `all`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
     )
 )]
 pub async fn reembed(

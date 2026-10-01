@@ -5,6 +5,6 @@ use temper_core::types::ids::ProfileId;
 use temper_services::auth::SystemAdmin;
 
 fn main() {
-    // E0603: tuple struct constructor `SystemAdmin` is private.
+    // E0423: cannot initialize a tuple struct which contains private fields.
     let _forged = SystemAdmin(ProfileId::from(uuid::Uuid::nil()));
 }

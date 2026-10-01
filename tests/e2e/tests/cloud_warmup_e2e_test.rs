@@ -744,8 +744,8 @@ async fn warmup_says_what_is_waiting_without_blaming_it_for_the_context(pool: sq
 /// **The newcomer — the population this whole feature exists for — driven end to end.**
 ///
 /// `handlers::invitations::list_mine` is mounted in `auth_only_routes()`; the two operator queues
-/// are in `gated_routes()` behind `require_system_access`. A principal who has signed in but holds
-/// no approved standing therefore reads their own invitations fine and gets
+/// are in `admin_routes()` (the gated tier) behind `require_system_access`. A principal who has
+/// signed in but holds no approved standing therefore reads their own invitations fine and gets
 /// `403 SYSTEM_ACCESS_REQUIRED` from both queues — a THIRD `403` arm, distinct from `Forbidden` and
 /// `ForbiddenDetail` and checked before either.
 ///

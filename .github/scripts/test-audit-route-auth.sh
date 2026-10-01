@@ -185,6 +185,23 @@ PYEOF
 run_test "webhook row's serves flipped to BothBuilders: fails" "$FIX" 1 \
     "table row changed"
 
+# --- (g2) a scoped handler mounted in the admin group must fail the membership check ---
+# The admin ledger gates per act family and lets an actor read their own acts, so it is NOT
+# admin-only. Mounted in admin.rs it would be published under the `Admin` tag as admin-only.
+FIX="${FIXTURE_DIR}/scoped_in_admin"
+copy_module "$FIX"
+python3 - "$FIX/admin.rs" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+marker = "        .routes(routes!(handlers::machine_clients::rebind))"
+assert marker in s, "admin.rs marker missing"
+s = s.replace(marker, marker + "\n        .routes(routes!(handlers::admin_ledger::list))", 1)
+open(p, "w").write(s)
+PYEOF
+run_test "scoped handler mounted in admin_routes: fails" "$FIX" 1 \
+    "does not mint the &SystemAdmin proof"
+
 # --- (h) a middleware pair swapped inside a tier arm must fail the order pin ---
 # Presence-greps stay green through a swap; the order pin is what catches it.
 FIX="${FIXTURE_DIR}/order_swap"

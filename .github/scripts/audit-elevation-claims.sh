@@ -190,16 +190,16 @@ current_gates() {
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
 read -r -d '' BASELINE <<'EOF' || true
-claim crates/temper-api/src/handlers/access.rs 29 is_system_admin
-claim crates/temper-api/src/handlers/admin_directory.rs 2 is_system_admin
+claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
+claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 require_cogmap_write_admin
 claim crates/temper-api/src/handlers/connections.rs 1 connection
-claim crates/temper-api/src/handlers/embed.rs 1 is_system_admin
-claim crates/temper-api/src/handlers/erasure.rs 4 is_system_admin
-claim crates/temper-api/src/handlers/machine_clients.rs 2 is_system_admin
+claim crates/temper-api/src/handlers/embed.rs 2 is_system_admin
+claim crates/temper-api/src/handlers/erasure.rs 6 is_system_admin
+claim crates/temper-api/src/handlers/machine_clients.rs 3 is_system_admin
 claim crates/temper-api/src/openapi.rs 1 is_system_admin
-claim crates/temper-api/src/handlers/resource_erasure.rs 4 is_system_admin
+claim crates/temper-api/src/handlers/resource_erasure.rs 6 is_system_admin
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/teams.rs 1 -
 claim crates/temper-cli/src/cli.rs 14 -
