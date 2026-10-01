@@ -29,8 +29,11 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   naming only the id. It reaches only a caller who holds standing on the erased resource — its
   owner, or a direct or team read grant (`resource_husk_held_by`, `20260930000060`). Every other
   caller, including a member of the resource's context with no grant, keeps the `404` an unknown
-  id gets, byte for byte; a soft-deleted resource keeps its `404`. The `410` is additive: the three
-  operations' contracts grow a response, and no existing response changes. An older client sees a
+  id gets, byte for byte; a soft-deleted resource keeps its `404`. The three operations' contracts
+  grow the `410`. Three write paths also change a response: a create's idempotent replay, update
+  and annotate read the resource back through the same `show_view_select`, so a holder now gets
+  `410` from them where it got `404`. Their declaration in the contract and their enumeration
+  belong to build order 2c; their OpenAPI is unchanged here. An older client sees a
   generic `410` — temper-client's 410 arm reads it as `Gone` carrying the message, so MCP and the
   CLI receive a gone error where they received not-found; keying on the code, and the CLI and MCP
   rendering, are build order 2c. Two operator-only doors land out of the OpenAPI contract

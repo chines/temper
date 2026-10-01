@@ -73,6 +73,12 @@ fn snapshot_files_cover_exactly_the_typed_names() {
     assert_eq!(on_disk, expected);
 }
 
+/// Stands in a migration's fixture list for a `$JS$` literal a LATER migration re-registered.
+/// An applied migration is immutable, so its superseded literal can never match the live fixture
+/// again; the entry keeps the positional pairing of the literals after it, and the superseding
+/// migration's own entry pins the type.
+const SUPERSEDED: &str = "(superseded by a later migration's entry)";
+
 /// FAILS IF: a migration's embedded `$JS$` payload_schema literal drifts from the committed
 /// fixture (review A-C1: `20260903000020_kb_blobs.sql` was pasted from a pre-`kb_blobs`-enum
 /// render and nothing gated the seam). `payload_schemas_match_snapshots` pins Rust → fixture;
@@ -80,12 +86,6 @@ fn snapshot_files_cover_exactly_the_typed_names() {
 /// header declares. Structural (not byte) equality: the migration's own instruction says paste
 /// byte for byte, but the load-bearing contract is the schema content — whitespace in a SQL
 /// literal is not a wire fact.
-/// Stands in a migration's fixture list for a `$JS$` literal a LATER migration re-registered.
-/// An applied migration is immutable, so its superseded literal can never match the live fixture
-/// again; the entry keeps the positional pairing of the literals after it, and the superseding
-/// migration's own entry pins the type.
-const SUPERSEDED: &str = "(superseded by a later migration's entry)";
-
 #[test]
 fn the_migration_literal_matches_the_committed_fixture() {
     // A migration may register SEVERAL typed events (the erasure vocabulary registers three);

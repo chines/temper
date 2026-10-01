@@ -2,16 +2,17 @@
 //! contract, Beat 4 of task 01a0577c).
 //!
 //! `blob_delete` releases bytes POST-commit ("a provider call cannot join the transaction",
-//! 20260906000010) and names the release in the `principal_erased` (or `resource_erased`) payload — so between the
-//! act's commit and the provider delete there is a window no transaction can close. The
-//! substrate contract rules what watches it: *"A byte-deleting build MUST run that fence or its
-//! equivalent — retry plus age alerting."* This module is that fence, in three moves:
+//! 20260906000010) and names the release in the `principal_erased` (or `resource_erased`)
+//! payload — so between the act's commit and the provider delete there is a window no
+//! transaction can close. The substrate contract rules what watches it: *"A byte-deleting build
+//! MUST run that fence or its equivalent — retry plus age alerting."* This module is that fence,
+//! in three moves:
 //!
-//! * **Derivation** — pending deletes are DERIVED from the `principal_erased` and `resource_erased` payloads'
-//!   per-target strike verdicts (specific pathnames, never provider enumeration — BlobStore has
-//!   no `list`), seeded into `kb_erasure_blob_deletes` (20260909000040) with first-due at the
-//!   EVENT's `occurred_at`. Every tick re-derives from the ledger; the seed's
-//!   `(erasure_event_id, pathname)` key makes re-derivation free.
+//! * **Derivation** — pending deletes are DERIVED from the `principal_erased` and
+//!   `resource_erased` payloads' per-target strike verdicts (specific pathnames, never provider
+//!   enumeration — BlobStore has no `list`), seeded into `kb_erasure_blob_deletes`
+//!   (20260909000040) with first-due at the EVENT's `occurred_at`. Every tick re-derives from the
+//!   ledger; the seed's `(erasure_event_id, pathname)` key makes re-derivation free.
 //! * **Drain** — one tick reaps expired leases, claims due deletes in one bounded batch,
 //!   then — inside ONE critical section over the hashes' advisory locks — RE-DERIVES
 //!   released-ness at drain time, issues ONE idempotent `BlobStore::delete(&[&str])` for
@@ -124,6 +125,15 @@ pub(crate) fn classify_blob_outcome(outcome: &str) -> BlobOutcomeClass {
     BlobOutcomeClass::Unrecognized
 }
 
+/// The content hash a released strike's pathname names. The pathname IS the derivation
+/// (`blob_pathname()`, blob_store.rs: `{hash[0:2]}/{hash}`), so the hash — the key the
+/// drain-time refcount check and the post-commit release lock on — is its last segment. One
+/// derivation for every reader of a strike verdict, so the hash locked and the pathname deleted
+/// always come from the same string.
+pub(crate) fn content_hash_of_pathname(pathname: &str) -> &str {
+    pathname.rsplit('/').next().unwrap_or(pathname)
+}
+
 pub(crate) enum BlobOutcomeClass {
     /// `erased; released=true; pathname=…` — the bytes were this act's to remove.
     Released(String),
@@ -142,11 +152,11 @@ struct SeedScan {
     unparseable: usize,
 }
 
-/// Derive pending deletes from every `principal_erased` and `resource_erased` payload and seed the not-yet-seeded
-/// ones. Store-independent by construction: the work is DERIVED from the ledger, and nothing
-/// here touches a provider (a derivation that needed the store could never run for a
-/// deployment whose provider configuration is gone — exactly the deployment whose stranded
-/// deletes most need the fence to see them).
+/// Derive pending deletes from every `principal_erased` and `resource_erased` payload and seed
+/// the not-yet-seeded ones. Store-independent by construction: the work is DERIVED from the
+/// ledger, and nothing here touches a provider (a derivation that needed the store could never
+/// run for a deployment whose provider configuration is gone — exactly the deployment whose
+/// stranded deletes most need the fence to see them).
 ///
 /// The scan is whole-catalogue on purpose: erasures are rare admin acts, the seed is
 /// `ON CONFLICT DO NOTHING` against the (event, pathname) key, and derive-don't-remember means
@@ -191,11 +201,8 @@ async fn seed_from_ledger(pool: &PgPool) -> ApiResult<SeedScan> {
                     continue;
                 }
             };
-            // The pathname IS the derivation (`blob_pathname()`, blob_store.rs:
-            // `{hash[0:2]}/{hash}`), so the hash — the key the drain-time refcount check
-            // needs — is its last segment. Derived once, at seed, rather than re-parsed on
-            // every claim.
-            let content_hash = pathname.rsplit('/').next().unwrap_or(&pathname).to_owned();
+            // Derived once, at seed, rather than re-parsed on every claim.
+            let content_hash = content_hash_of_pathname(&pathname).to_owned();
             let seeded_id = sqlx::query_scalar!(
                 r#"SELECT erasure_delete_seed($1, $2, $3, $4) AS "id: Uuid""#,
                 row.erasure_event_id,

@@ -4,7 +4,7 @@
 --    described two reasons as they stood before the 2026-09-29 rulings: `ingest_in_flight` as a
 --    live refusal ("finalize or abandon the ingest first"), and `already_erased` as an act that
 --    "records nothing". Both reasons stay; only their descriptions change. The literal below is
---    the committed fixture `resource_erasure_refused.v1.schema.json`, pasted byte for byte, and
+--    equal, as JSON, to the committed fixture `resource_erasure_refused.v1.schema.json`, and
 --    `payload_schema::the_migration_literal_matches_the_committed_fixture` pins it here — the
 --    20260929000010 literal for this type is superseded, never edited.
 -- 2. `kb_erasure_blob_deletes`' COMMENT (20260909000040) named principal_erased as its only seed.

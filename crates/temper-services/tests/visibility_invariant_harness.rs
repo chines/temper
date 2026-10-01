@@ -1726,20 +1726,23 @@ async fn i6_cogmap_intersection(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Vi
 }
 
 // =================================================================================================
-// Invariant family 7 — `resource_husk_held_by` is a SUBSET of `resources_visible_to`'s reach, with
-// the `is_active` floor ignored: only the owner-home, direct-profile-grant and team-grant arms,
-// and only for an erased resource (spec D6). The context-homed and both cogmap arms are excluded
-// BY DESIGN, so the converse against the full set is NOT claimed; against the three arms it is
-// (a dropped arm must go red). For a resource that is not erased the answer is false.
+// Invariant family 7 — for an erased resource, `resource_husk_held_by` EQUALS the reach of three
+// of `resources_visible_to`'s arms (owner-home, direct-profile-grant, team-grant) with the
+// `is_active` floor ignored (spec D6): a dropped arm and an added one both go red. Against the
+// full `resources_visible_to` it is only a subset, because the context-homed and both cogmap
+// arms are excluded BY DESIGN. For a resource that is not erased the answer is false.
 //
 // The expected three-arm reach is derived in Rust from the world plan (owner index, the grant
 // matrix, `profile_reachable_teams` for the team closure), never by calling the function under
 // test. VACUITY: the main generated world erases nothing, so this invariant is driven by
-// [`the_husk_predicate_is_a_subset_of_visibility_over_erased_resources`], which erases resources
-// through the REAL act first.
+// [`the_husk_predicate_equals_the_three_arm_reach_over_erased_resources`], which erases
+// resources through the REAL act first.
 // =================================================================================================
 
-async fn i7_husk_held_by_is_a_subset(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Violation>> {
+async fn i7_husk_held_by_equals_the_three_arm_reach(
+    pool: &PgPool,
+    w: &World,
+) -> sqlx::Result<Vec<Violation>> {
     let mut violations = Vec::new();
 
     for (r_idx, &resource) in w.resources.iter().enumerate() {
@@ -1812,8 +1815,8 @@ const ENROLLED: &[&str] = &[
     "resources_accessible_to_cogmap",
     "profile_reachable_teams",
     // gates
-    // resource_husk_held_by: a strict subset of resources_visible_to's reach (3 of its arms,
-    // minus the is_active floor, erased resources only) — driven by I7.
+    // resource_husk_held_by: equal to 3 of resources_visible_to's arms (minus the is_active
+    // floor, erased resources only), a strict subset of its full reach — driven by I7.
     "resource_husk_held_by",
     "can",
     "can_modify_resource",
@@ -2150,7 +2153,7 @@ async fn invariants_hold_over_a_generated_world(pool: PgPool) -> sqlx::Result<()
 /// Bite: dropping an arm from `resource_husk_held_by`, adding the context arm, or dropping the
 /// `erased_at` test (every live resource would answer true for its owner) makes I7 report.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn the_husk_predicate_is_a_subset_of_visibility_over_erased_resources(
+async fn the_husk_predicate_equals_the_three_arm_reach_over_erased_resources(
     pool: PgPool,
 ) -> sqlx::Result<()> {
     let seed = harness_seed();
@@ -2200,7 +2203,7 @@ async fn the_husk_predicate_is_a_subset_of_visibility_over_erased_resources(
         "no profile holds any husk: I7 would only be exercising the `false` branch"
     );
 
-    let violations = i7_husk_held_by_is_a_subset(&pool, &w).await?;
+    let violations = i7_husk_held_by_equals_the_three_arm_reach(&pool, &w).await?;
     assert!(
         violations.is_empty(),
         "{} husk-predicate violation(s) over seed {}:\n  - {}\n\n{}",

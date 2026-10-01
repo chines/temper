@@ -19,7 +19,9 @@
 //!     `replaces_body` mutate and every superseded chunk end with empty content and NULL
 //!     embeddings.
 //!   * **6** — the edge folds through `relationship_folded` under the act's correlation id; an
-//!     edge another principal authored is folded by an event on that edge's own trail.
+//!     edge another principal authored is folded by an event on that edge's own trail; a fold
+//!     uncommitted when the act reaches the edge makes the act wait and raise, never fold twice
+//!     (20260930000070).
 //!   * **8** — soft delete is not YET erasure (`erased_at IS NULL`, content intact) — and a
 //!     tombstone IS erasable: the act completes over one (compliance erasure of a
 //!     soft-deleted resource is the flow's main shape).
@@ -2684,6 +2686,197 @@ async fn a_writer_holding_its_transaction_makes_the_act_wait_then_is_erased(pool
     );
 
     assert_replay_byte_identical(&pool, "of a writer that committed ahead of the act").await;
+}
+
+/// (6, the fold race) A principal's fold of an edge touching R, uncommitted when the act reaches
+/// that edge, makes the act's fold loop wait on the edge row (`FOR UPDATE`, 20260930000070).
+/// Once the fold commits, the loop's `NOT is_folded` is re-checked and the act raises
+/// `edge … missing or already folded`; the SQL alone does not retry (the service does). The edge
+/// carries exactly ONE `relationship_folded`, the principal's, and a re-run of the act completes.
+/// FAILS IF the fold loop reads the edge without a lock: the act then waits on the projector's
+/// UPDATE instead, appends its own fold of the already-folded edge and completes — two
+/// `relationship_folded` events for one edge, and `expect_err` fails.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_fold_holding_its_transaction_makes_the_act_raise_not_fold_twice(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "fold-race-home").await;
+    let other = make_home(&pool, owner, "fold-race-other").await;
+    let r = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "fold-race-r",
+            origin_uri: "test://fold-race-r",
+            body: "an edge out of this resource is folded under the act",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    let t = writes::create_resource_with(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "fold-race-t",
+            origin_uri: "test://fold-race-t",
+            body: "the edge's other end",
+            doc_type: "research",
+            home: AnchorRef::context(other),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: None,
+            sources: vec![],
+        },
+        EventContext::default(),
+    )
+    .await
+    .unwrap();
+    let edge = writes::assert_relationship(
+        &pool,
+        AssertParams {
+            src: r,
+            tgt: t,
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: Some("raced"),
+            weight: 1.0,
+            home,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+
+    // The principal's fold, through the real fold path, NOT committed.
+    let mut folder = pool.begin().await.unwrap();
+    writes::fold_relationship_in_tx(
+        &mut folder,
+        edge,
+        Some("the principal's own reason"),
+        emitter,
+        EventContext::default(),
+    )
+    .await
+    .expect("the racing fold writes inside its open transaction");
+
+    let pool_for_act = pool.clone();
+    let resource = r.uuid();
+    let mut act = tokio::spawn(async move {
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT resource_erasure_execute($1,$2,$3,$4)")
+            .bind(resource)
+            .bind(emitter)
+            .bind(emitter)
+            .bind(Uuid::now_v7())
+            .fetch_one(&pool_for_act)
+            .await
+    });
+    let finished_within_window =
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut act).await;
+    assert!(
+        finished_within_window.is_err(),
+        "the act finished while a fold of R's edge was uncommitted — it did not wait on the edge"
+    );
+
+    folder.commit().await.unwrap();
+    let err = act
+        .await
+        .expect("the act task must not panic")
+        .expect_err("the act must raise on an edge folded under it, not fold it again");
+    let message = err
+        .as_database_error()
+        .map(|d| d.message().to_string())
+        .unwrap_or_default();
+    assert_eq!(
+        message,
+        format!(
+            "resource_erasure_execute: edge {} missing or already folded",
+            edge.uuid()
+        )
+    );
+
+    assert_eq!(
+        relationship_folds_of(&pool, edge).await,
+        1,
+        "one fold of the edge: the principal's"
+    );
+    let erased: bool =
+        sqlx::query_scalar("SELECT erased_at IS NOT NULL FROM kb_resources WHERE id = $1")
+            .bind(resource)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!erased, "the raised act committed nothing");
+
+    // The re-plan: the edge is folded now, so the plan leaves it out and the act completes.
+    execute_act(&pool, resource).await;
+    assert_eq!(
+        relationship_folds_of(&pool, edge).await,
+        1,
+        "the completed act did not fold the edge again"
+    );
+}
+
+/// (14, the replay arm's validation) A `resource_erased` whose `subject_table` is not
+/// `kb_resources` is refused by the replay walk with context, as one missing its `subject_id`
+/// is. The event is appended raw (the act only ever writes `kb_resources`), naming a context.
+/// FAILS IF the arm reads `subject_id` without checking `subject_table`: replay then runs the
+/// redaction body over a context id, and either succeeds or fails with some other message.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_refuses_a_resource_erased_naming_another_table(pool: sqlx::PgPool) {
+    common::reset_schema(&pool).await;
+    temper_substrate::scenario::bootseed::seed_system(&pool)
+        .await
+        .unwrap();
+    let (owner, emitter) = system_actor(&pool).await;
+    let home = make_home(&pool, owner, "wrong-subject-home").await;
+    sqlx::query(
+        "SELECT _event_append('resource_erased', $1, NULL, NULL, \
+                jsonb_build_object('subject_table', 'kb_contexts', 'subject_id', $2::uuid), \
+                p_correlation => $3)",
+    )
+    .bind(emitter)
+    .bind(home.uuid())
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await
+    .expect("the raw append lands");
+
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    let err = replay::replay(&pool, &snap)
+        .await
+        .expect_err("replay must refuse a resource_erased naming another table");
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("names subject_table \"kb_contexts\", not kb_resources"),
+        "{chain}"
+    );
+}
+
+/// How many `relationship_folded` events name `edge`.
+async fn relationship_folds_of(pool: &PgPool, edge: EdgeId) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'relationship_folded' AND (e.payload->>'edge_id')::uuid = $1",
+    )
+    .bind(edge.uuid())
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 /// (20, non-content half, act first) A property set arriving while the act holds R's row waits

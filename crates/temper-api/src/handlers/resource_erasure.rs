@@ -5,8 +5,11 @@
 //! **Gate-free by ruling, like the principal doors.** `resource_erasure_service` resolves
 //! `is_system_admin` before anything else; a door that pre-empted it would decide legality twice.
 //! A non-operator's execute is a RECORDED `unauthorized` refusal rendered as 404 (never 403); a
-//! non-operator's survey is the service's silent 404. No tenant axis exists: the gate is the
-//! instance operator and nothing more (ruled 2026-09-30).
+//! non-operator's survey is the service's silent 404. Either way the refused caller learns
+//! nothing about the RESOURCE: the gate answers before any lookup, so every id it is given gets
+//! the same 404, which says neither that the resource exists nor that it was erased. The doors
+//! themselves are discoverable, and the 404 does not claim to hide them. No tenant axis exists:
+//! the gate is the instance operator and nothing more (ruled 2026-09-30).
 //!
 //! **No caller-supplied request reference.** The service mints the act's reference and both
 //! execute answers return it. The execute body is `deny_unknown_fields`, so a body that carries

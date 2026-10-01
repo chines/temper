@@ -296,8 +296,10 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         // declined.
         .route("/api/admin/erasure", post(handlers::erasure::execute))
         .route("/api/admin/erasure/survey", post(handlers::erasure::survey))
-        // The resource-erasure pair: same posture as the principal pair above (plain `.route()`,
-        // allowlisted, gate-free handlers), over `resource_erasure_service`.
+        // The resource-erasure pair: plain `.route()`, allowlisted, gate-free handlers over
+        // `resource_erasure_service`, which map the gate's refusal to a 404. The 404 means a
+        // refused caller learns nothing about the RESOURCE (not whether it exists, not whether
+        // it was erased). The doors themselves are discoverable; the 404 does not hide them.
         .route(
             "/api/admin/resources/erasure",
             post(handlers::resource_erasure::execute),

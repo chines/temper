@@ -29,12 +29,15 @@
 //!
 //! The provider bytes of a released strike are deleted AFTER the act commits (a provider call
 //! cannot join the transaction), once per released strike, and only when a store is configured.
-//! A failed or skipped release is not a door failure: the byte-delete fence
-//! (`erasure_fence_service`) derives the same deletes from the `resource_erased` payload and
-//! retries them with age alerting (derive-don't-remember). The HTTP doors call straight into
+//! NOTHING AFTER THE COMMIT CAN TURN THE ACT INTO A FAILURE: the strike labels are built from the
+//! act's own returned `targets` with no further read, and a failed, skipped or timed-out release
+//! is logged with the request reference and left to the byte-delete fence
+//! (`erasure_fence_service`), which derives the same deletes from the `resource_erased` payload
+//! and retries them with age alerting (derive-don't-remember). The HTTP doors call straight into
 //! [`execute_resource_erasure`] / [`survey_resource_erasure`]; this module carries no HTTP types.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
+use std::time::Duration;
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -50,7 +53,7 @@ use temper_workflow::operations::Surface;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service;
 use crate::services::erasure_fence_service::{
-    classify_blob_outcome, BlobOutcomeClass, BLOB_TARGET,
+    classify_blob_outcome, content_hash_of_pathname, BlobOutcomeClass, BLOB_TARGET,
 };
 use crate::services::erasure_service::BlobStrikeOutcome;
 
@@ -67,8 +70,19 @@ const MAX_ACT_RETRIES: u32 = 2;
 pub const MAP_GRAIN_ERASURE_DETAIL: &str =
     "map-grain erasure is task 01a0e960-0ca2-7f42-b33e-1ed19b024e6b";
 
+/// How long the door waits on ONE post-commit provider delete before it stops waiting. Five
+/// seconds: the act has already committed, and the byte-delete fence's drain is the backstop
+/// that derives the same delete from the `resource_erased` payload and retries it with age
+/// alerting, so a slow provider costs the operator a few seconds, never a gateway timeout on an
+/// act that succeeded.
+const POST_COMMIT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The SQLSTATE Postgres raises when it resolves a deadlock by aborting one transaction.
 const DEADLOCK_DETECTED: &str = "40P01";
+
+/// The SQLSTATE of a bare `RAISE EXCEPTION` (no ERRCODE), which every raise the classifier
+/// matches by message is.
+const RAISE_EXCEPTION: &str = "P0001";
 
 /// The prefix of every raise in `resource_erasure_execute` (migration 20260929040730).
 const EXECUTE_RAISE_PREFIX: &str = "resource_erasure_execute: ";
@@ -158,6 +172,9 @@ pub struct OtherAuthorEdgeProperty {
     pub property_id: PropertyId,
     pub edge_id: EdgeId,
     pub author: ProfileId,
+    /// Already folded at survey time (the row's own fold): the act still sentinels its key and
+    /// value (step 9d reaches live and folded rows).
+    pub folded: bool,
 }
 
 /// A related blob and the other resources that hold a live edge to it.
@@ -274,11 +291,24 @@ enum ActFailure {
 /// A charter or an already-erased resource is a recorded refusal (the effect of a repeat
 /// erasure is a no-op: no second `resource_erased` is minted).
 /// A listed blob the act refuses to strike is [`ApiError::BadRequest`] naming that blob; the act
-/// rolled back whole, so nothing was struck.
+/// rolled back whole, so nothing was struck. An operator's list naming one blob twice is a
+/// [`ApiError::BadRequest`] before the act runs; the gate still answers first, so a
+/// non-operator's attempt is the recorded `unauthorized` refusal whatever its body holds.
 pub async fn execute_resource_erasure(
     pool: &PgPool,
     store: Option<&dyn BlobStore>,
     request: ResourceErasureRequest<'_>,
+) -> ApiResult<ResourceErasureOutcome> {
+    execute_with_release_timeout(pool, store, request, POST_COMMIT_RELEASE_TIMEOUT).await
+}
+
+/// [`execute_resource_erasure`] with the post-commit release bound as a parameter, so a witness
+/// can shorten it.
+async fn execute_with_release_timeout(
+    pool: &PgPool,
+    store: Option<&dyn BlobStore>,
+    request: ResourceErasureRequest<'_>,
+    release_timeout: Duration,
 ) -> ApiResult<ResourceErasureOutcome> {
     let emitter = resolve_emitter(pool, request.caller, request.surface.marker())
         .await
@@ -302,7 +332,9 @@ pub async fn execute_resource_erasure(
         return Ok(ResourceErasureOutcome::Refused(refusal));
     }
 
-    // Gate passed — NOW existence may be disclosed, and as an error, not a ledger row.
+    // Gate passed — NOW the body is validated (a non-operator learns nothing from it), and
+    // existence may be disclosed, as an error, not a ledger row.
+    reject_duplicate_blobs(request.also_strike_blobs)?;
     if erased_state(pool, request.resource).await?.is_none() {
         return Err(ApiError::NotFound(RESOURCE_NOT_FOUND.to_string()));
     }
@@ -315,15 +347,22 @@ pub async fn execute_resource_erasure(
         }
     };
 
-    let blob_strikes = strike_verdicts(
-        pool,
+    // COMMITTED. Nothing below may answer as a failure: the operator would retry and record an
+    // `already_erased` refusal against an act that succeeded.
+    let blob_strikes = label_strikes(
         attempt.request_reference,
         request.also_strike_blobs,
         &wire.targets,
-    )
-    .await?;
+    );
     if let Some(store) = store {
-        release_struck_bytes(pool, store, &blob_strikes).await;
+        release_struck_bytes(
+            pool,
+            store,
+            attempt.request_reference,
+            &wire.targets,
+            release_timeout,
+        )
+        .await;
     }
 
     Ok(ResourceErasureOutcome::Completed(
@@ -334,9 +373,23 @@ pub async fn execute_resource_erasure(
             targets: wire.targets,
             remainder: wire.remainder,
             ledger_remainder: wire.ledger_remainder,
-            blob_strikes: blob_strikes.into_iter().map(|s| s.outcome).collect(),
+            blob_strikes,
         },
     ))
+}
+
+/// A list naming one blob twice is refused after the gate and before the act touches the
+/// resource: the act would strike it on its first mention and raise on its second as "struck by
+/// an earlier act", a false account of the request.
+fn reject_duplicate_blobs(blobs: &[BlobId]) -> ApiResult<()> {
+    let mut seen = HashSet::with_capacity(blobs.len());
+    match blobs.iter().find(|b| !seen.insert(b.uuid())) {
+        Some(dup) => Err(ApiError::BadRequest(format!(
+            "blob {} is listed more than once; list each blob once; nothing was struck",
+            dup.uuid()
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// `None` when no such resource exists; otherwise whether it is already erased.
@@ -446,12 +499,17 @@ fn classify_act_error(err: &sqlx::Error) -> ActFailure {
 
 /// The pure classifier over a database error's SQLSTATE and message. The literals it matches
 /// are the act's own raises (migration 20260929040730) and `blob_delete`'s already-struck raise
-/// (20260906000010); each `%` in them is an id, so each arm matches a stable prefix and suffix.
+/// (20260906000010), all SQLSTATE `P0001`; each `%` in them is an id, so each arm matches a
+/// stable prefix and suffix. A deadlock is matched by its SQLSTATE alone.
 /// `p_resource is required` and `p_request_ref is required` are `Other`: the service always
 /// supplies both, so either raise is a bug here, not a state of the resource.
 fn classify_act_failure(code: Option<&str>, message: &str) -> ActFailure {
     if code == Some(DEADLOCK_DETECTED) {
         return ActFailure::Retryable;
+    }
+    // Every message arm is a bare RAISE: the same text under any other SQLSTATE is not the act's.
+    if code != Some(RAISE_EXCEPTION) {
+        return ActFailure::Other;
     }
     if let Some(rest) = message.strip_prefix(EXECUTE_RAISE_PREFIX) {
         return classify_execute_raise(rest);
@@ -526,102 +584,96 @@ async fn refuse(
     })
 }
 
-/// One settled strike: the outcome the caller sees, plus what a release needs.
-struct SettledStrike {
-    outcome: BlobStrikeOutcome,
-    content_hash: String,
-    /// The pathname the strike released, when it released one.
-    released_pathname: Option<String>,
-}
-
-/// The strike verdicts of a completed act, in the operator's order. The act appended one
-/// `kb_blobs` target per listed blob, in list order, each in the ONE strike-outcome template
-/// (`blob_strike_outcome_text`); it is read through the fence's own parser, so the service
-/// releases exactly what the fence would seed. The `blob_erased` events under the act's
-/// correlation id pair each strike with its row, and the content hash comes from that row, never
-/// from the pathname. A mismatch means the record and the ledger disagree: the act has
-/// committed, so the error names its reference rather than guessing a verdict.
-async fn strike_verdicts(
-    pool: &PgPool,
+/// The operator's strikes, in the operator's order, each labelled with its verdict. Built from
+/// the act's returned `targets` alone, with no read after the commit. The act appends one
+/// `kb_blobs` target per listed blob, in list order (the strike loop of
+/// `resource_erasure_execute`, 20260929040730; the plan's own `kb_blobs` entries go to the
+/// remainder, never to `targets`), so the pairing is positional, and each verdict is read
+/// through the fence's own parser. A count mismatch or an unrecognized verdict is LOGGED with
+/// the request reference, never returned: the act has committed, its record's `targets` still
+/// carry every verdict, and the fence alerts on one it cannot parse.
+fn label_strikes(
     request_reference: Uuid,
     listed: &[BlobId],
     targets: &[ErasureTargetOutcome],
-) -> ApiResult<Vec<SettledStrike>> {
-    let hashes: HashMap<Uuid, String> = sqlx::query!(
-        r#"
-        SELECT (e.payload->>'blob_id')::uuid AS "blob_id!: Uuid",
-               b.content_hash               AS "content_hash!"
-          FROM kb_events e
-          JOIN kb_event_types t ON t.id = e.event_type_id AND t.name = 'blob_erased'
-          JOIN kb_blobs b ON b.id = (e.payload->>'blob_id')::uuid
-         WHERE e.correlation_id = $1
-        "#,
-        request_reference,
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .map(|r| (r.blob_id, r.content_hash))
-    .collect();
-
-    let committed_but_unreadable = || {
-        ApiError::Internal(format!(
-            "resource erasure {request_reference} committed, but its strike record does not \
-             match the ledger"
-        ))
-    };
+) -> Vec<BlobStrikeOutcome> {
     let verdicts: Vec<&ErasureTargetOutcome> =
         targets.iter().filter(|t| t.target == BLOB_TARGET).collect();
-    if verdicts.len() != listed.len() || hashes.len() != listed.len() {
-        return Err(committed_but_unreadable());
+    if verdicts.len() != listed.len() {
+        tracing::error!(
+            request_reference = %request_reference,
+            listed = listed.len(),
+            verdicts = verdicts.len(),
+            "resource erasure committed, but its strike verdicts do not pair with the listed \
+             blobs; no strike is labelled, and the record's targets carry every verdict"
+        );
+        return Vec::new();
     }
-
     listed
         .iter()
         .zip(verdicts)
         .map(|(blob, verdict)| {
-            let content_hash = hashes
-                .get(&blob.uuid())
-                .cloned()
-                .ok_or_else(committed_but_unreadable)?;
-            let released_pathname = match classify_blob_outcome(&verdict.outcome) {
-                BlobOutcomeClass::Released(pathname) => Some(pathname),
-                BlobOutcomeClass::Known => None,
-                BlobOutcomeClass::Unrecognized => return Err(committed_but_unreadable()),
+            let released = match classify_blob_outcome(&verdict.outcome) {
+                BlobOutcomeClass::Released(_) => true,
+                BlobOutcomeClass::Known => false,
+                BlobOutcomeClass::Unrecognized => {
+                    tracing::error!(
+                        request_reference = %request_reference,
+                        blob = %blob.uuid(),
+                        "resource erasure committed, but a strike verdict has no known shape; \
+                         labelled unreleased, and the fence counts it as unparseable"
+                    );
+                    false
+                }
             };
-            Ok(SettledStrike {
-                outcome: BlobStrikeOutcome {
-                    blob_id: blob.uuid(),
-                    released: released_pathname.is_some(),
-                },
-                content_hash,
-                released_pathname,
-            })
+            BlobStrikeOutcome {
+                blob_id: blob.uuid(),
+                released,
+            }
         })
         .collect()
 }
 
-/// The post-commit byte release, once per released strike — the `blob_service` delete door's
-/// shape: `release_blob_bytes` re-derives released-ness under the hash lock and holds it across
-/// the provider delete. A skip or a failure is logged, never a door failure: the fence seeds the
-/// same pathname from the `resource_erased` payload and retries it with age alerting.
-async fn release_struck_bytes(pool: &PgPool, store: &dyn BlobStore, strikes: &[SettledStrike]) {
-    for strike in strikes {
-        let Some(pathname) = strike.released_pathname.as_deref() else {
+/// The post-commit byte release, once per released strike in the act's `targets` — the
+/// `blob_service` delete door's shape: `release_blob_bytes` re-derives released-ness under the
+/// hash lock and holds it across the provider delete. The hash is derived FROM the pathname, as
+/// the fence derives it, so the lock and the deleted pathname have one source. Each release is
+/// bounded by `timeout`. A skip, a failure or a timeout is logged with the request reference,
+/// never a door failure: the fence seeds the same pathname from the `resource_erased` payload
+/// and retries it with age alerting.
+async fn release_struck_bytes(
+    pool: &PgPool,
+    store: &dyn BlobStore,
+    request_reference: Uuid,
+    targets: &[ErasureTargetOutcome],
+    timeout: Duration,
+) {
+    for target in targets.iter().filter(|t| t.target == BLOB_TARGET) {
+        let BlobOutcomeClass::Released(pathname) = classify_blob_outcome(&target.outcome) else {
             continue;
         };
-        let blob = strike.outcome.blob_id;
-        match release_blob_bytes(pool, &strike.content_hash, pathname, store).await {
-            Ok(true) => {}
-            Ok(false) => tracing::info!(
-                blob = %blob,
+        let content_hash = content_hash_of_pathname(&pathname);
+        let release = release_blob_bytes(pool, content_hash, &pathname, store);
+        match tokio::time::timeout(timeout, release).await {
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => tracing::info!(
+                request_reference = %request_reference,
+                pathname = %pathname,
                 "post-commit release skipped: a live row re-holds the hash — the fence \
                  resolves its seeded row re-occupied"
             ),
-            Err(e) => tracing::warn!(
-                blob = %blob,
+            Ok(Err(e)) => tracing::warn!(
+                request_reference = %request_reference,
+                pathname = %pathname,
                 error = format!("{e:#}"),
                 "post-commit provider delete failed — the byte-delete fence retries with \
+                 age alerting"
+            ),
+            Err(_) => tracing::warn!(
+                request_reference = %request_reference,
+                pathname = %pathname,
+                timeout = ?timeout,
+                "post-commit provider delete timed out — the byte-delete fence retries with \
                  age alerting"
             ),
         }
@@ -747,7 +799,8 @@ async fn other_author_edge_properties(
         r#"
         SELECT p.id          AS "property_id!: Uuid",
                e.id          AS "edge_id!: Uuid",
-               en.profile_id AS "author!: Uuid"
+               en.profile_id AS "author!: Uuid",
+               p.is_folded   AS "folded!"
           FROM kb_properties p
           JOIN kb_edges e ON p.owner_table = 'kb_edges' AND e.id = p.owner_id
           JOIN kb_events ev ON ev.id = p.asserted_by_event_id
@@ -768,6 +821,7 @@ async fn other_author_edge_properties(
             property_id: PropertyId::from(r.property_id),
             edge_id: EdgeId::from(r.edge_id),
             author: ProfileId::from(r.author),
+            folded: r.folded,
         })
         .collect())
 }
@@ -933,6 +987,22 @@ mod classifier_tests {
         );
     }
 
+    // FAILS IF a message arm matches the act's text under a SQLSTATE that is not a bare RAISE.
+    #[test]
+    fn the_right_message_under_the_wrong_code_is_other() {
+        let msg = format!(
+            "resource_erasure_execute: edge {} missing or already folded",
+            id()
+        );
+        assert_eq!(classify_act_failure(P0001, &msg), ActFailure::Retryable);
+        assert_eq!(classify_act_failure(Some("XX000"), &msg), ActFailure::Other);
+        assert_eq!(classify_act_failure(None, &msg), ActFailure::Other);
+        assert_eq!(
+            classify_act_failure(Some("23505"), "resource_erasure_execute: already erased"),
+            ActFailure::Other
+        );
+    }
+
     #[test]
     fn an_unrelated_raise_is_other() {
         let msg = format!("resource {} is erased; writes are refused", id());
@@ -941,6 +1011,77 @@ mod classifier_tests {
             classify_act_failure(P0001, "resource_erasure_execute: something new"),
             ActFailure::Other
         );
+    }
+
+    fn blob_target(outcome: &str) -> ErasureTargetOutcome {
+        ErasureTargetOutcome {
+            target: BLOB_TARGET.to_string(),
+            outcome: outcome.to_string(),
+        }
+    }
+
+    // FAILS IF the strike labels stop pairing the listed blobs with the act's `kb_blobs` targets
+    // in list order, or a verdict's class is misread.
+    #[test]
+    fn strikes_pair_positionally_with_the_acts_blob_targets() {
+        let (a, b) = (BlobId::from(Uuid::now_v7()), BlobId::from(Uuid::now_v7()));
+        let targets = vec![
+            ErasureTargetOutcome {
+                target: "kb_resources".to_string(),
+                outcome: "husk".to_string(),
+            },
+            blob_target("erased; released=false; pathname=ab/abc"),
+            blob_target("erased; released=true; pathname=cd/cde"),
+        ];
+        assert_eq!(
+            label_strikes(Uuid::now_v7(), &[a, b], &targets),
+            vec![
+                BlobStrikeOutcome {
+                    blob_id: a.uuid(),
+                    released: false,
+                },
+                BlobStrikeOutcome {
+                    blob_id: b.uuid(),
+                    released: true,
+                },
+            ]
+        );
+    }
+
+    // FAILS IF a strike record that does not pair with the list (a count mismatch, or a verdict
+    // in no known shape) panics or is anything but a label set — the act has committed, and
+    // `label_strikes` has no error to return by construction.
+    #[test]
+    fn a_strike_record_that_does_not_pair_is_logged_not_failed() {
+        let a = BlobId::from(Uuid::now_v7());
+        let two = vec![
+            blob_target("erased; released=true; pathname=ab/abc"),
+            blob_target("erased; released=true; pathname=cd/cde"),
+        ];
+        assert!(label_strikes(Uuid::now_v7(), &[a], &two).is_empty());
+        assert!(label_strikes(Uuid::now_v7(), &[a], &[]).is_empty());
+        assert_eq!(
+            label_strikes(Uuid::now_v7(), &[a], &[blob_target("struck somehow")]),
+            vec![BlobStrikeOutcome {
+                blob_id: a.uuid(),
+                released: false,
+            }]
+        );
+    }
+
+    // FAILS IF a list naming one blob twice passes, or the 400 does not name the blob.
+    #[test]
+    fn a_list_naming_a_blob_twice_is_a_400_naming_it() {
+        let (a, b) = (BlobId::from(Uuid::now_v7()), BlobId::from(Uuid::now_v7()));
+        assert!(reject_duplicate_blobs(&[a, b]).is_ok());
+        assert!(reject_duplicate_blobs(&[]).is_ok());
+        match reject_duplicate_blobs(&[a, b, a]) {
+            Err(ApiError::BadRequest(msg)) => {
+                assert!(msg.contains(&a.uuid().to_string()), "{msg}");
+                assert!(!msg.contains(&b.uuid().to_string()), "{msg}");
+            }
+            other => panic!("a duplicate is a 400, got {other:?}"),
+        }
     }
 
     // FAILS IF the charter detail stops naming the map-grain task, or starts carrying the raise.
@@ -983,13 +1124,16 @@ mod tests {
     //! Service witnesses. Every test runs on a fresh database migrated by
     //! `temper_substrate::MIGRATOR` — no `reset_schema` — so every event type a migration
     //! registered is present (the substrate suite's re-registration trap does not apply).
+    use bytes::Bytes;
     use sha2::Digest as _;
     use sqlx::PgPool;
     use uuid::Uuid;
 
     use temper_core::types::property_owner::PropertyOwner;
     use temper_substrate::affinity::EdgeKind;
-    use temper_substrate::blob_store::{blob_pathname, InMemoryBlobStore};
+    use temper_substrate::blob_store::{
+        blob_pathname, BlobHead, ByteStream, InMemoryBlobStore, PutReceipt,
+    };
     use temper_substrate::events::{fire, EdgeHome, EventContext, SeedAction};
     use temper_substrate::ids::ContextId;
     use temper_substrate::payloads::{AnchorRef, EdgePolarity};
@@ -1012,6 +1156,51 @@ mod tests {
         "map-grain erasure is filed task",
         "already erased",
     ];
+
+    /// How a [`BadDeleteStore`]'s provider delete misbehaves.
+    #[derive(Debug, Clone, Copy)]
+    enum BadDelete {
+        Fails,
+        Hangs,
+    }
+
+    /// A provider whose delete errors or never returns, over a working in-memory store — the
+    /// post-commit release's two bad days. Everything but `delete` passes through.
+    #[derive(Debug)]
+    struct BadDeleteStore {
+        inner: InMemoryBlobStore,
+        mode: BadDelete,
+    }
+
+    #[async_trait::async_trait]
+    impl BlobStore for BadDeleteStore {
+        async fn exists(&self, pathname: &str) -> anyhow::Result<bool> {
+            self.inner.exists(pathname).await
+        }
+        async fn put(
+            &self,
+            pathname: &str,
+            content_type: &str,
+            body: Bytes,
+            cache_control_max_age: u32,
+        ) -> anyhow::Result<PutReceipt> {
+            self.inner
+                .put(pathname, content_type, body, cache_control_max_age)
+                .await
+        }
+        async fn get(&self, pathname: &str, consistent: bool) -> anyhow::Result<ByteStream> {
+            self.inner.get(pathname, consistent).await
+        }
+        async fn head(&self, pathname: &str) -> anyhow::Result<Option<BlobHead>> {
+            self.inner.head(pathname).await
+        }
+        async fn delete(&self, _pathnames: &[&str]) -> anyhow::Result<()> {
+            match self.mode {
+                BadDelete::Fails => anyhow::bail!("provider unavailable (the witness's outage)"),
+                BadDelete::Hangs => std::future::pending::<anyhow::Result<()>>().await,
+            }
+        }
+    }
 
     /// A principal: profile, its `<handle>@web` emitter entity, and a personal context.
     struct Principal {
@@ -1447,9 +1636,11 @@ mod tests {
     }
 
     /// ── WITNESS: no raise text reaches a caller ─────────────────────────────────────────────
-    /// FAILS IF any outcome or error string carries a raise literal. Not vacuous: the charter
-    /// and already-erased refusal events exist only because the SQL raised, and the two blob
-    /// 400s are produced only by the classifier's arms over a raised act.
+    /// FAILS IF a refusal's rendered detail or an error string carries a raise literal. The
+    /// scan reads the text a door renders (`detail.as_str()`, `ApiError`'s message), not a
+    /// `Debug` of the outcome, whose variant names could never match. Not vacuous: the charter
+    /// and already-erased refusals exist only because the SQL raised, and the two blob 400s are
+    /// produced only by the classifier's arms over a raised act.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
     async fn no_response_or_error_contains_a_raise_literal(pool: PgPool) {
         bootseed::seed_system(&pool).await.expect("boot seed");
@@ -1479,10 +1670,13 @@ mod tests {
             .expect("telos")
             .1
         };
-        texts.push(format!(
-            "{:?}",
-            execute(&pool, op, telos).await.expect("answers")
-        ));
+        let charter = refused(execute(&pool, op, telos).await.expect("answers"));
+        texts.extend(charter.detail.map(|d| d.as_str().to_string()));
+        assert_eq!(
+            texts.len(),
+            1,
+            "the charter refusal renders a detail to scan"
+        );
 
         // Already erased, and a blob struck once through a completed act.
         let r1 = resource(&pool, &owner, "raise-r1").await;
@@ -1494,10 +1688,9 @@ mod tests {
                 .await
                 .expect("r1 erases, striking the blob"),
         );
-        texts.push(format!(
-            "{:?}",
-            execute(&pool, op, r1).await.expect("answers")
-        ));
+        let repeat = refused(execute(&pool, op, r1).await.expect("answers"));
+        assert_eq!(repeat.reason, ResourceErasureRefusalReason::AlreadyErased);
+        texts.extend(repeat.detail.map(|d| d.as_str().to_string()));
         assert_eq!(
             events_of(&pool, "resource_erasure_refused").await,
             2,
@@ -1750,6 +1943,7 @@ mod tests {
                 property_id: foreign_prop,
                 edge_id: foreign,
                 author: other.profile,
+                folded: false,
             }]
         );
     }
@@ -1893,25 +2087,29 @@ mod tests {
     /// ── WITNESS: a remainder-only related blob never seeds ──────────────────────────────────
     /// Two related blobs; the operator lists neither. Both stay in `remainder` (D8), so the
     /// payload's `targets` carry no blob and the fence has nothing to derive.
-    /// FAILS IF the fence (or the act's payload) derives deletes from `remainder` rather than
-    /// `targets`: `seeded` would be nonzero and a blob's bytes would be deleted.
+    /// FAILS IF the act strikes an unlisted blob: the remainder would stop naming it, `targets`
+    /// would carry its verdict, and the fence would seed and delete its bytes.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
     async fn an_unlisted_related_blob_stays_in_the_remainder_and_is_never_seeded(pool: PgPool) {
         let owner = principal(&pool).await;
         let op = operator(&pool).await;
         let store = InMemoryBlobStore::default();
         let r = resource(&pool, &owner, "fence-remainder").await;
-        let (_, first) = related_blob(&pool, &store, &owner, &[r]).await;
-        let (_, second) = related_blob(&pool, &store, &owner, &[r]).await;
+        let (first_blob, first) = related_blob(&pool, &store, &owner, &[r]).await;
+        let (second_blob, second) = related_blob(&pool, &store, &owner, &[r]).await;
 
         let completion = completed(
             execute_resource_erasure(&pool, None, request(op, r, &[]))
                 .await
                 .expect("the act completes"),
         );
-        assert!(
-            !completion.remainder.is_empty(),
-            "the related blobs are named in the remainder"
+        let mut named = related_blob_ids(&completion.remainder).expect("the plan's shape");
+        named.sort();
+        let mut both = vec![first_blob.uuid(), second_blob.uuid()];
+        both.sort();
+        assert_eq!(
+            named, both,
+            "the remainder's kb_blobs entries are exactly the two related blobs"
         );
         assert!(
             completion.targets.iter().all(|t| t.target != "kb_blobs"),
@@ -1925,5 +2123,124 @@ mod tests {
         assert_eq!(summary.claimed, 0);
         assert_eq!(summary.deleted, 0);
         assert!(store.contains(&first) && store.contains(&second));
+    }
+
+    /// ── WITNESS: a committed act never answers as a failure ─────────────────────────────────
+    /// The provider misbehaves AFTER the act commits: its delete errors, or it never returns.
+    /// FAILS IF either turns the committed act into an error, or into a call that does not
+    /// return (the hang arm runs under a 200ms release bound inside a 30s outer limit, so an
+    /// unbounded release trips the outer bound): the answer must be `Completed`, carrying the
+    /// minted reference and the event id of the `resource_erased` correlated by it, with the
+    /// strike labelled from the act's own targets and the bytes left for the fence.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn a_failed_or_hung_post_commit_release_still_answers_completed(pool: PgPool) {
+        let owner = principal(&pool).await;
+        let op = operator(&pool).await;
+        for mode in [BadDelete::Fails, BadDelete::Hangs] {
+            let store = BadDeleteStore {
+                inner: InMemoryBlobStore::default(),
+                mode,
+            };
+            let r = resource(&pool, &owner, "bad-release").await;
+            let (blob, pathname) = related_blob(&pool, &store.inner, &owner, &[r]).await;
+
+            let outcome = tokio::time::timeout(
+                Duration::from_secs(30),
+                execute_with_release_timeout(
+                    &pool,
+                    Some(&store),
+                    request(op, r, &[blob]),
+                    Duration::from_millis(200),
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("{mode:?}: the door must answer, not wait on the provider"))
+            .unwrap_or_else(|e| panic!("{mode:?}: a committed act is not an error, got {e:?}"));
+            let completion = completed(outcome);
+
+            let (kind, correlation): (String, Uuid) = sqlx::query_as(
+                "SELECT t.name, e.correlation_id FROM kb_events e \
+                   JOIN kb_event_types t ON t.id = e.event_type_id WHERE e.id = $1",
+            )
+            .bind(completion.event_id)
+            .fetch_one(&pool)
+            .await
+            .expect("the completion's event");
+            assert_eq!(kind, "resource_erased", "{mode:?}");
+            assert_eq!(correlation, completion.request_reference, "{mode:?}");
+            assert_eq!(
+                completion.blob_strikes,
+                vec![BlobStrikeOutcome {
+                    blob_id: blob.uuid(),
+                    released: true,
+                }],
+                "{mode:?}"
+            );
+            assert!(erased_at(&pool, r).await.is_some(), "{mode:?}");
+            assert!(
+                store.inner.contains(&pathname),
+                "{mode:?}: the failed release left the bytes for the fence"
+            );
+        }
+        assert_eq!(events_of(&pool, "resource_erasure_refused").await, 0);
+    }
+
+    /// ── WITNESS: a list naming one blob twice ───────────────────────────────────────────────
+    /// FAILS IF an operator's duplicate reaches the act (the SQL would strike the blob, then
+    /// raise on its second mention and answer the false "struck by an earlier act" 400), or if
+    /// the validation answers before the gate: a non-operator sending the same list must get the
+    /// recorded `unauthorized` refusal, never the 400 (gate-first; the door's validation teaches
+    /// a refused caller nothing). The bite on the ordering: move the check above the gate and
+    /// the non-operator's call returns the 400, so `refused` panics. The last call — the same
+    /// blob listed once — completes.
+    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+    async fn a_blob_listed_twice_is_refused_after_the_gate_and_before_the_act(pool: PgPool) {
+        let owner = principal(&pool).await;
+        let caller = principal(&pool).await;
+        let op = operator(&pool).await;
+        let store = InMemoryBlobStore::default();
+        let r = resource(&pool, &owner, "duplicate").await;
+        let (blob, _) = related_blob(&pool, &store, &owner, &[r]).await;
+
+        let refusal = refused(
+            execute_resource_erasure(
+                &pool,
+                Some(&store),
+                request(caller.profile, r, &[blob, blob]),
+            )
+            .await
+            .expect("the gate answers a non-operator, whatever the body"),
+        );
+        assert_eq!(refusal.reason, ResourceErasureRefusalReason::Unauthorized);
+        assert_eq!(events_of(&pool, "resource_erasure_refused").await, 1);
+
+        let events_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        let err = execute_resource_erasure(&pool, Some(&store), request(op, r, &[blob, blob]))
+            .await
+            .expect_err("an operator's duplicate is refused");
+        let ApiError::BadRequest(msg) = &err else {
+            panic!("a duplicate is a 400, got {err:?}");
+        };
+        assert!(msg.contains("listed more than once"), "{msg}");
+        assert!(msg.contains(&blob.uuid().to_string()), "{msg}");
+        assert_no_raise_literal(msg);
+        let events_after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(
+            events_before, events_after,
+            "the operator's 400 appended nothing"
+        );
+        assert!(erased_at(&pool, r).await.is_none());
+
+        completed(
+            execute_resource_erasure(&pool, Some(&store), request(op, r, &[blob]))
+                .await
+                .expect("listed once, the act completes"),
+        );
     }
 }

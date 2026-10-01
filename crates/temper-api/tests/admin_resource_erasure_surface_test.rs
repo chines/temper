@@ -5,7 +5,9 @@
 //!   targets the act records equal the survey's prediction; a non-operator gets the **404
 //!   posture** while the `unauthorized` refusal is RECORDED, with a bite probe that stands the
 //!   gate down; an unknown id is 404; a body carrying `request_reference` is refused at the door
-//!   (`deny_unknown_fields`, axum answers 422), never silently honoured.
+//!   (`deny_unknown_fields`, axum answers 422), never silently honoured. A repeat erasure
+//!   renders 200 `refused` / `already_erased` with the recorded refusal's reference, and a
+//!   non-operator's unknown id is the same 404 with a recorded `unauthorized`.
 //! * the survey door (`POST /api/admin/resources/erasure/survey`) — a non-operator gets the same
 //!   404 and ZERO new events (a survey requests nothing).
 //! * the admin ledger lists both `resource_erased` and `resource_erasure_refused`.
@@ -352,4 +354,85 @@ async fn the_admin_ledger_lists_resource_erased_and_resource_erasure_refused(poo
         .collect();
     assert!(types.contains(&"resource_erased"), "got {types:?}");
     assert!(types.contains(&"resource_erasure_refused"), "got {types:?}");
+}
+
+// ── WITNESS: a repeat erasure renders the recorded refusal ───────────────────────────────────
+
+/// FAILS IF the door renders a repeat erasure as anything but 200 `{status: "refused", reason:
+/// "already_erased"}`, or if the `request_reference` and `event_id` it returns are not the
+/// recorded refusal's correlation id and id. The bite: the first call on the same resource
+/// renders `completed`, so the arm is chosen by the outcome, not fixed.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_repeat_erasure_renders_refused_already_erased_with_the_recorded_reference(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (token, _) = provision_operator(&app, "rx-repeat-op", "rx-repeat-op@example.com").await;
+    let resource = create_resource(&app).await;
+    let body = json!({ "resource": resource });
+
+    let first = post(&app, &token, EXECUTE, &body).await;
+    assert_eq!(first.status().as_u16(), 200);
+    let first: Value = first.json().await.expect("the tagged outcome");
+    assert_eq!(first["status"], "completed", "{first}");
+
+    let resp = post(&app, &token, EXECUTE, &body).await;
+    assert_eq!(
+        resp.status().as_u16(),
+        200,
+        "a recorded refusal renders 200"
+    );
+    let answer: Value = resp.json().await.expect("the tagged outcome");
+    assert_eq!(answer["status"], "refused", "{answer}");
+    assert_eq!(answer["reason"], "already_erased", "{answer}");
+
+    let (event_id, payload, correlation): (Uuid, Value, Uuid) = sqlx::query_as(
+        "SELECT e.id, e.payload, e.correlation_id FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'resource_erasure_refused'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("the one recorded refusal");
+    assert_eq!(payload["reason"], "already_erased");
+    assert_eq!(
+        answer["request_reference"],
+        Value::String(correlation.to_string()),
+        "the reference the door returns IS the refusal's correlation id"
+    );
+    assert_eq!(answer["event_id"], Value::String(event_id.to_string()));
+    assert_ne!(
+        answer["request_reference"], first["request_reference"],
+        "the repeat is its own attempt with its own reference"
+    );
+    assert_eq!(count_events(&app.pool, Some("resource_erased")).await, 1);
+}
+
+// ── WITNESS: a non-operator's unknown id ─────────────────────────────────────────────────────
+
+/// FAILS IF a non-operator naming an id that does not exist gets anything but the 404 a real
+/// id gets, or if the attempt goes unrecorded: the gate runs before any lookup, so the refusal
+/// is recorded against the unknown id as `unauthorized`, attributed to the attempter. The bite:
+/// the operator's 404 for the same id records nothing, so the refusal is the gate's work.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_non_operator_gets_404_and_a_recorded_unauthorized_for_an_unknown_id(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (token, non_admin) =
+        provision_non_operator(&app, "rx-ghost-nonadmin", "rx-ghost-na@example.com").await;
+    let (op_token, _) = provision_operator(&app, "rx-ghost-op2", "rx-ghost-op2@example.com").await;
+    let ghost = Uuid::now_v7();
+    let body = json!({ "resource": ghost });
+
+    let resp = post(&app, &token, EXECUTE, &body).await;
+    assert_eq!(resp.status().as_u16(), 404);
+    let (payload, _) = the_event(&app.pool, "resource_erasure_refused").await;
+    assert_eq!(payload["reason"], "unauthorized");
+    assert_eq!(payload["actor"], Value::String(non_admin.to_string()));
+    assert_eq!(payload["subject_id"], Value::String(ghost.to_string()));
+
+    let resp = post(&app, &op_token, EXECUTE, &body).await;
+    assert_eq!(resp.status().as_u16(), 404);
+    assert_eq!(
+        count_events(&app.pool, Some("resource_erasure_refused")).await,
+        1,
+        "the operator's 404 for the same id records nothing"
+    );
 }

@@ -997,6 +997,14 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             // deferred or not: its `occurred_at` stamps the husk. It calls THE ONE definition —
             // re-implement any of it here and there are two erasures that drift.
             EventKind::ResourceErased => {
+                let subject_table = payload["subject_table"]
+                    .as_str()
+                    .context("resource_erased payload missing subject_table")?;
+                anyhow::ensure!(
+                    subject_table == "kb_resources",
+                    "resource_erased event {id} names subject_table {subject_table:?}, not \
+                     kb_resources"
+                );
                 let subject: Uuid = payload["subject_id"]
                     .as_str()
                     .context("resource_erased payload missing subject_id")?
