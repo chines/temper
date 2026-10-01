@@ -776,26 +776,40 @@ pub async fn get_content_select(
 /// gets — so the `410` cannot become an erasure oracle. A tombstone (soft-deleted, not erased) is
 /// not a husk and keeps its `404`.
 ///
-/// `held!`: sqlx types a function-call column as nullable, but the function is `EXISTS (...) AND
-/// EXISTS (...)`, which is never NULL.
+/// The write side classifies its deny through the same probe
+/// (`backend::write_floor`), so a read and a write of one husk name the same population.
 async fn erased_or(
     pool: &PgPool,
     profile_id: ProfileId,
     id: ResourceId,
     not_found: ApiError,
 ) -> ApiError {
-    let held = sqlx::query_scalar!(
-        r#"SELECT resource_husk_held_by($1, $2) AS "held!""#,
-        profile_id.as_uuid(),
-        id.as_uuid(),
-    )
-    .fetch_one(pool)
-    .await;
-    match held {
+    match husk_held_by(pool, profile_id, id).await {
         Ok(true) => ApiError::ResourceErased(id),
         Ok(false) => not_found,
         Err(e) => ApiError::from(e),
     }
+}
+
+/// `resource_husk_held_by(profile, id)` (migration `20260930000060`), called, never restated: is
+/// `id` an erased husk `profile_id` holds standing on? The one copy of the probe, shared by the
+/// read classifier [`erased_or`] and the write floor (`backend::write_floor`), on whatever
+/// executor the caller is on — the pool for a read, the write's own transaction for a write.
+///
+/// `held!`: sqlx types a function-call column as nullable, but the function is `EXISTS (...) AND
+/// EXISTS (...)`, which is never NULL.
+pub(crate) async fn husk_held_by<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    profile_id: ProfileId,
+    id: ResourceId,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT resource_husk_held_by($1, $2) AS "held!""#,
+        profile_id.as_uuid(),
+        id.as_uuid(),
+    )
+    .fetch_one(executor)
+    .await
 }
 
 /// `get_meta` — one resource with both metadata tiers, as a [`ResourceView`].

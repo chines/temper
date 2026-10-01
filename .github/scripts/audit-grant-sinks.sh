@@ -128,10 +128,21 @@ MIGRATIONS_DIR="${MIGRATIONS_DIR:-migrations}"
 #                 self-grant: `arm4_…` seeds `granter` and `grantee` as two distinct profiles and
 #                 the grantee is deliberately NOT the context's owner — a grantee who administered
 #                 the context would resolve `Administers` and the test would prove nothing.
+# REVIEWED 2026-10-01 (resource erasure 2c, Step 1) — `backend/write_floor.rs` is a NEW entry and
+# is TEST-ONLY. The insert is `grant_read`, inside the `#[cfg(all(test, feature = "test-db"))]
+# mod tests`, in an ephemeral per-test database. It mints the one population the floor's
+# erased-vs-forbidden classification must reach beyond the owner: a read-grant holder of an erased
+# husk (`resource_husk_held_by`'s profile arm).
+#   AUTHORITY   — n/a: no production grantor; the fixture writes the row directly. The write floor
+#                 grants nothing; it only READS this table, through `can_modify_resource` and
+#                 `resource_husk_held_by`.
+#   ATTENUATION — `can_read=true` and nothing else; the other capability columns keep their
+#                 `false` defaults. Not a self-grant: grantee and granter are distinct profiles.
 read -r -d '' BASELINE <<'EOF' || true
 2 crates/temper-services/src/authz/audit_gate.rs
 1 crates/temper-services/src/authz/context_admin.rs
 1 crates/temper-services/src/backend/db_backend.rs
+1 crates/temper-services/src/backend/write_floor.rs
 1 crates/temper-services/src/services/access_service.rs
 2 crates/temper-services/src/services/connection_service.rs
 1 crates/temper-services/src/services/machine_authz.rs
