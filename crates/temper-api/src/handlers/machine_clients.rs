@@ -127,7 +127,7 @@ pub async fn list(
     get,
     operation_id = "get_machine_client",
     summary = "Get a machine client",
-    description = "Returns one machine client. Requires a system admin or the owner of the machine's owning team.",
+    description = "Returns one machine client. Requires a system admin or the owner of the machine's owning team. Any other caller is answered 404, exactly as for an id that does not exist.",
     path = "/api/machine-clients/{id}",
     tag = "Machine Clients",
     params(("id" = Uuid, Path, description = "Machine client ID")),
@@ -135,8 +135,8 @@ pub async fn list(
     responses(
         (status = 200, description = "The machine client", body = MachineClient),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
-        (status = 404, description = "No such machine client", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such machine client, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
 pub async fn get(
@@ -153,7 +153,7 @@ pub async fn get(
     delete,
     operation_id = "revoke_machine_client",
     summary = "Revoke a machine client",
-    description = "Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team.",
+    description = "Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller is answered 404, exactly as for an id that does not exist.",
     path = "/api/machine-clients/{id}",
     tag = "Machine Clients",
     params(("id" = Uuid, Path, description = "Machine client ID")),
@@ -161,8 +161,8 @@ pub async fn get(
     responses(
         (status = 200, description = "The revoked machine client", body = MachineClient),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
-        (status = 404, description = "No such machine client", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such machine client, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
 pub async fn revoke(
@@ -204,7 +204,7 @@ pub async fn issue(
     post,
     operation_id = "rotate_machine_client_secret",
     summary = "Rotate a machine client secret",
-    description = "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team.",
+    description = "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller is answered 404, exactly as for an id that does not exist.",
     path = "/api/machine-clients/{id}/rotate-secret",
     tag = "Machine Clients",
     params(("id" = Uuid, Path, description = "Machine client ID")),
@@ -214,8 +214,8 @@ pub async fn issue(
         (status = 200, description = "The machine client and its new one-time `client_secret`", body = IssuedMachineCredential),
         (status = 400, description = "`grace_seconds` is out of range, the client was not issued by temper, or the client is revoked", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
-        (status = 404, description = "No such machine client", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such machine client, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
 pub async fn rotate_secret(

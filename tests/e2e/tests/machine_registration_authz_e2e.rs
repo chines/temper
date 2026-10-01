@@ -389,38 +389,45 @@ async fn reads_and_lifecycle_are_scoped_to_the_owning_team(pool: PgPool) {
         "Bob owns a team, but none of Alice's machines"
     );
 
-    // Bob cannot GET, revoke, or rotate Alice's machine.
-    let resp = app
-        .reqwest_client
-        .get(app.url(&format!("/api/machine-clients/{machine_id}")))
-        .bearer_auth(&bob)
-        .send()
-        .await
-        .expect("get as bob");
-    assert_eq!(resp.status(), 403, "Bob cannot read Alice's machine");
-
-    let resp = app
-        .reqwest_client
-        .post(app.url(&format!("/api/machine-clients/{machine_id}/rotate-secret")))
-        .bearer_auth(&bob)
-        .json(&json!({ "grace_seconds": 0 }))
-        .send()
-        .await
-        .expect("rotate as bob");
-    assert_eq!(
-        resp.status(),
-        403,
-        "Bob cannot rotate Alice's machine's secret"
-    );
-
-    let resp = app
-        .reqwest_client
-        .delete(app.url(&format!("/api/machine-clients/{machine_id}")))
-        .bearer_auth(&bob)
-        .send()
-        .await
-        .expect("revoke as bob");
-    assert_eq!(resp.status(), 403, "Bob cannot revoke Alice's machine");
+    // Bob cannot GET, revoke, or rotate Alice's machine — and cannot tell it exists. Each act is
+    // answered exactly as it is for an id that names no machine at all: same status, same body.
+    let missing = Uuid::now_v7();
+    for (act, method, suffix, body) in [
+        ("read", reqwest::Method::GET, "", None),
+        (
+            "rotate",
+            reqwest::Method::POST,
+            "/rotate-secret",
+            Some(json!({ "grace_seconds": 0 })),
+        ),
+        ("revoke", reqwest::Method::DELETE, "", None),
+    ] {
+        let mut answers = Vec::new();
+        for id in [machine_id.to_string(), missing.to_string()] {
+            let mut req = app
+                .reqwest_client
+                .request(
+                    method.clone(),
+                    app.url(&format!("/api/machine-clients/{id}{suffix}")),
+                )
+                .bearer_auth(&bob);
+            if let Some(body) = &body {
+                req = req.json(body);
+            }
+            let resp = req.send().await.expect("request as bob");
+            let status = resp.status();
+            let text = resp.text().await.expect("body");
+            answers.push((status, text));
+        }
+        assert_eq!(
+            answers[0].0, 404,
+            "Bob cannot {act} Alice's machine, and is answered as if it did not exist"
+        );
+        assert_eq!(
+            answers[0], answers[1],
+            "{act}: Alice's machine must be indistinguishable from a missing one to Bob"
+        );
+    }
 
     let resp = app
         .reqwest_client

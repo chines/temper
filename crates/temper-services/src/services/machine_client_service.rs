@@ -2,8 +2,9 @@
 //!
 //! Read path (`lookup_by_client_id`, `touch_last_seen`) is on the authentication
 //! hot path for every machine call. Write paths are operator-driven and rare, and they
-//! authorize through `machine_authz` against the *existing row's* owning team (B2 D5):
-//! a system admin, or the owner of the team that owns the machine.
+//! authorize through `authz::MachineClientControlAuthority` against the *existing row's* owning
+//! team (B2 D5): a system admin, or the owner of the team that owns the machine. A caller outside
+//! that authority is refused exactly as a missing id is (`MACHINE_CLIENT_REFUSAL`).
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -14,10 +15,16 @@ use temper_core::types::machine::MachineClient;
 use temper_principal::{Act, ActorAuthority, Standing};
 
 use crate::auth::AuthenticatedProfile;
-use crate::authz::Principal;
+use crate::authz::{MachineClientControlAuthority, Principal};
 use crate::error::{ApiError, ApiResult};
-use crate::services::machine_authz;
 use crate::services::standing_service::{self, ApplyStandingParams};
+
+/// The refusal for a machine client the caller cannot see — absent, or present but outside the
+/// caller's authority. One sentence for both, on purpose: `get` renders it for a missing row and
+/// `authz::MachineClientControlAuthority` renders it for a denied one, so a caller probing ids
+/// cannot tell the two apart. A second literal would reopen that oracle the first time either one
+/// is "improved".
+pub(crate) const MACHINE_CLIENT_REFUSAL: &str = "machine client not found or not readable";
 
 /// The authentication-path lookup. `None` ⇒ unregistered. A revoked row still
 /// resolves here; the caller distinguishes (the gate needs the timestamp to
@@ -97,20 +104,35 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<MachineClient> {
     )
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| ApiError::NotFound("machine client not found".to_string()))
+    .ok_or_else(|| ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()))
 }
 
 /// [`get`], authorized for a surface caller (B2 D5). [`get`] itself stays unauthorized: it is the
 /// internal primitive the authentication path and the post-insert readbacks use, and gating it
 /// would break them.
+///
+/// A caller outside the machine's authority is refused exactly as a missing id is
+/// (`MACHINE_CLIENT_REFUSAL`) — see `authz::MachineClientControlAuthority`.
 pub async fn get_for_caller(
     pool: &PgPool,
     authed: &AuthenticatedProfile,
     id: Uuid,
 ) -> ApiResult<MachineClient> {
-    let client = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Proof(authed), client.team_id).await?;
-    Ok(client)
+    authorize_control(pool, authed, id).await?;
+    get(pool, id).await
+}
+
+/// The per-row gate every act on an existing machine client passes first: a system admin, or the
+/// owner of the machine's owning team, keyed on the row (B2 D5). A refusal is indistinguishable
+/// from a missing id. Ahead of any write, so a rejected act never touches the row.
+async fn authorize_control(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+    id: Uuid,
+) -> ApiResult<()> {
+    crate::authz::authorize::<MachineClientControlAuthority>(pool, Principal::Proof(authed), id)
+        .await?;
+    Ok(())
 }
 
 /// List machine clients visible to `caller` (B2 D5), newest first. Revoked rows are hidden
@@ -163,8 +185,8 @@ pub async fn revoke(
 ) -> ApiResult<MachineClient> {
     let revoker = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's owning team (B2 D5).
+    authorize_control(pool, authed, id).await?;
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Proof(authed), existing.team_id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_machine_clients
@@ -224,8 +246,7 @@ pub async fn rotate_secret(
 ) -> ApiResult<temper_core::types::machine::IssuedMachineCredential> {
     // Auth before writes, keyed on the existing row's owning team (B2 D5). Ahead of the
     // transaction, so a rejected rotation never touches the row.
-    let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Proof(authed), existing.team_id).await?;
+    authorize_control(pool, authed, id).await?;
 
     if !(0..=MAX_ROTATION_GRACE_SECONDS).contains(&grace_seconds) {
         return Err(ApiError::BadRequest(format!(
@@ -246,7 +267,7 @@ pub async fn rotate_secret(
     )
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or_else(|| ApiError::NotFound("machine client not found".to_string()))?;
+    .ok_or_else(|| ApiError::NotFound(MACHINE_CLIENT_REFUSAL.to_string()))?;
 
     if row.issuer != "temper" {
         return Err(ApiError::BadRequest(format!(
@@ -784,6 +805,69 @@ mod tests {
             state.as_deref(),
             Some("revoked"),
             "an unapproved machine has nothing to revoke on the admission axis"
+        );
+    }
+
+    /// The existence oracle, closed: a caller outside a machine's authority gets the **same** error
+    /// for an existing machine client as for a missing id — variant and message — on every per-row
+    /// act. A `Forbidden` on any of these would mean the row exists.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_denied_machine_client_is_indistinguishable_from_a_missing_one(pool: PgPool) {
+        // A teamless, temper-issued machine: only a system admin may act on it (spec D2).
+        let target = seed_temper_issued(&pool, "probe-target", "s3cret").await;
+        // Any non-admin principal will do as the prober; an agent profile is one.
+        let prober_profile = seed_agent_link(&pool, "probe-agent").await;
+        let prober = crate::test_support::authenticated_profile_for(&pool, prober_profile).await;
+        let missing = Uuid::now_v7();
+
+        let pairs = [
+            (
+                "get",
+                svc::get_for_caller(&pool, &prober, target)
+                    .await
+                    .expect_err("denied"),
+                svc::get_for_caller(&pool, &prober, missing)
+                    .await
+                    .expect_err("missing"),
+            ),
+            (
+                "revoke",
+                svc::revoke(&pool, target, &prober)
+                    .await
+                    .expect_err("denied"),
+                svc::revoke(&pool, missing, &prober)
+                    .await
+                    .expect_err("missing"),
+            ),
+            (
+                "rotate",
+                svc::rotate_secret(&pool, &prober, target, 0)
+                    .await
+                    .expect_err("denied"),
+                svc::rotate_secret(&pool, &prober, missing, 0)
+                    .await
+                    .expect_err("missing"),
+            ),
+        ];
+        for (act, denied, absent) in pairs {
+            assert!(
+                matches!(&denied, crate::error::ApiError::NotFound(m) if m == svc::MACHINE_CLIENT_REFUSAL),
+                "{act}: refused as a missing machine client, got {denied:?}"
+            );
+            assert_eq!(
+                denied.to_string(),
+                absent.to_string(),
+                "{act}: a denied id must refuse like a missing one"
+            );
+        }
+
+        assert!(
+            svc::get(&pool, target)
+                .await
+                .expect("get")
+                .revoked_at
+                .is_none(),
+            "the denied revoke wrote nothing"
         );
     }
 }

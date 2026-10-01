@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
+use crate::services::subscription_service::{self, SUBSCRIPTION_REFUSAL};
 use crate::services::{access_service, team_service};
 
 /// The caller's authority over subscriptions authored by a given team.
@@ -76,10 +77,68 @@ impl ScopedAuthority for SubscriptionAuthority {
         matches!(self, SubscriptionAuthority::None)
     }
 
-    /// `Forbidden` — the dialect these three acts have always refused in, preserved verbatim
-    /// through the move behind this type. A subscription's authoring team is not a secret the way
-    /// a team slug is (`read_gates.rs`), so there is nothing here for a `NotFound` to withhold.
+    /// `Forbidden` — create's dialect. A subscription's authoring team is not a secret the way a
+    /// team slug is (`read_gates.rs`), so there is nothing here for a `NotFound` to withhold. The
+    /// per-row acts (get, revoke) are gated by [`SubscriptionControlAuthority`] instead, whose
+    /// refusal is `NotFound`: there, the subscription's existence is what a refusal would disclose.
     fn denial() -> ApiError {
         ApiError::Forbidden
+    }
+}
+
+/// May this caller act on **this subscription** — the per-row gate behind get and revoke?
+///
+/// [`SubscriptionAuthority`] is keyed on an authoring team, which is right for create (the caller
+/// names the team). A per-row act is keyed on the row: the authoring team is read from it, and the
+/// policy is then `SubscriptionAuthority`'s, **called, not restated**.
+///
+/// **Its refusal is `NotFound`, where `SubscriptionAuthority`'s is `Forbidden`.** The authoring
+/// team is not a secret, which is why create keeps `Forbidden`; the *existence of a subscription*
+/// is. Keyed on the team, a refusal arrived only after the row was loaded, so a missing id answered
+/// 404 and a present-but-forbidden one 403. Here a denial renders
+/// `subscription_service::SUBSCRIPTION_REFUSAL`, the sentence the row lookup renders for a missing
+/// id, so the two are indistinguishable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubscriptionControlAuthority {
+    /// A system admin.
+    SystemAdmin,
+    /// Owner or maintainer of the subscription's authoring team.
+    TeamManager,
+    /// Neither.
+    None,
+}
+
+#[async_trait]
+impl ScopedAuthority for SubscriptionControlAuthority {
+    /// The subscription's own id. Its authoring team is derived from the row.
+    type Subject = Uuid;
+
+    async fn resolve(pool: &PgPool, caller: Principal<'_>, subscription: Uuid) -> ApiResult<Self> {
+        // A missing row is `NotFound(SUBSCRIPTION_REFUSAL)` from the lookup itself — the same
+        // refusal `denial` renders below.
+        let sub = subscription_service::get(pool, subscription).await?;
+
+        Ok(
+            match <SubscriptionAuthority as ScopedAuthority>::resolve(
+                pool,
+                caller,
+                sub.authoring_team_id,
+            )
+            .await?
+            {
+                SubscriptionAuthority::SystemAdmin => SubscriptionControlAuthority::SystemAdmin,
+                SubscriptionAuthority::TeamManager => SubscriptionControlAuthority::TeamManager,
+                SubscriptionAuthority::None => SubscriptionControlAuthority::None,
+            },
+        )
+    }
+
+    fn is_denial(&self) -> bool {
+        matches!(self, SubscriptionControlAuthority::None)
+    }
+
+    /// `NotFound`, byte-identical to the missing-row refusal — see the type's doc.
+    fn denial() -> ApiError {
+        ApiError::NotFound(SUBSCRIPTION_REFUSAL.to_string())
     }
 }

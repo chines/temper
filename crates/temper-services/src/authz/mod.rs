@@ -53,12 +53,15 @@ pub(crate) use audit_gate::{
     AuditorJobAuthority, FINDING_REFUSAL,
 };
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
+// The per-row control gates: one per family whose acts address an existing row by id. Each refuses
+// with the family's missing-row sentence, so a denied id and an absent one are indistinguishable.
+pub(crate) use machine::MachineClientControlAuthority;
 // The first authority to declare two refusal dialects, and so the first (and only) consumer of
 // `ScopedAuthority::denial_for`. Wired by Task 6: `context_service::rename` is its single gate.
 pub(crate) use context_admin::ContextAdminAuthority;
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority, ACTOR_HISTORY_REFUSAL};
-pub(crate) use subscription::SubscriptionAuthority;
+pub(crate) use subscription::{SubscriptionAuthority, SubscriptionControlAuthority};
 pub(crate) use two_sided::{TwoSidedAuthority, TwoSidedScope};
 
 use async_trait::async_trait;
@@ -266,17 +269,21 @@ pub(crate) async fn authorize<A: ScopedAuthority>(
 ///   `temper-artifacts:plans/2026-07-30-context-rename.md` Part 5; if the guard is later wanted it
 ///   belongs in `.github/scripts/audit-*.sh`, which pins a reviewed *set* and `rg`s the directory,
 ///   so a new `authz/*.rs` is caught for free.
-/// * **(c) `ContextAdminAuthority` is the only divergent authority** — the deliberate two-dialect
-///   exception, so it is asserted *positively* in the last two tests instead
-///   of being asserted voice-unchanged. Its behavioral guarantee is Task 11's, not this suite's; see
-///   the comment on those tests.
+/// * **(c) `ContextAdminAuthority` and `ConnectionAuthority` are the only divergent authorities** —
+///   the deliberate two-dialect exceptions, so each is asserted *positively* in the tests at the end
+///   instead of being asserted voice-unchanged. `ContextAdminAuthority`'s behavioral guarantee is
+///   Task 11's, not this suite's; `ConnectionAuthority`'s is the `grant_reach` service tests'. See
+///   the comments on those tests.
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::services::access_service::GrantAuthority;
+    use crate::services::connection_service::CONNECTION_REFUSAL;
     use crate::services::context_service::CONTEXT_REFUSAL;
     use crate::services::machine_authz::MachineAuthority;
+    use crate::services::machine_client_service::MACHINE_CLIENT_REFUSAL;
+    use crate::services::subscription_service::SUBSCRIPTION_REFUSAL;
 
     /// One denial arm refuses in exactly the dialect its domain declares.
     ///
@@ -323,9 +330,31 @@ mod tests {
         );
     }
 
+    /// The per-row connection gate refuses with the missing-row sentence — the property that
+    /// closes the existence oracle, asserted here so a "consistency" pass back to `Forbidden` reds.
     #[test]
-    fn connection_authority_denies_in_one_voice() {
-        assert_one_voice("ConnectionAuthority", ConnectionAuthority::None);
+    fn connection_control_authority_refuses_as_a_missing_connection() {
+        match ConnectionControlAuthority::None.denial_for() {
+            ApiError::NotFound(message) => assert_eq!(message, CONNECTION_REFUSAL),
+            other => panic!("ConnectionControlAuthority must refuse NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn machine_client_control_authority_denies_in_one_voice() {
+        assert_one_voice(
+            "MachineClientControlAuthority",
+            MachineClientControlAuthority::None,
+        );
+    }
+
+    /// Same property as the connection gate's: the refusal is the missing-row sentence.
+    #[test]
+    fn machine_client_control_authority_refuses_as_a_missing_machine_client() {
+        match MachineClientControlAuthority::None.denial_for() {
+            ApiError::NotFound(message) => assert_eq!(message, MACHINE_CLIENT_REFUSAL),
+            other => panic!("MachineClientControlAuthority must refuse NotFound, got {other:?}"),
+        }
     }
 
     #[test]
@@ -357,6 +386,23 @@ mod tests {
     #[test]
     fn subscription_authority_denies_in_one_voice() {
         assert_one_voice("SubscriptionAuthority", SubscriptionAuthority::None);
+    }
+
+    #[test]
+    fn subscription_control_authority_denies_in_one_voice() {
+        assert_one_voice(
+            "SubscriptionControlAuthority",
+            SubscriptionControlAuthority::None,
+        );
+    }
+
+    /// Same property again: the per-row subscription refusal is the missing-row sentence.
+    #[test]
+    fn subscription_control_authority_refuses_as_a_missing_subscription() {
+        match SubscriptionControlAuthority::None.denial_for() {
+            ApiError::NotFound(message) => assert_eq!(message, SUBSCRIPTION_REFUSAL),
+            other => panic!("SubscriptionControlAuthority must refuse NotFound, got {other:?}"),
+        }
     }
 
     #[test]
@@ -409,5 +455,34 @@ mod tests {
             ApiError::NotFound(message) => assert_eq!(message, CONTEXT_REFUSAL),
             other => panic!("Invisible must render NotFound(CONTEXT_REFUSAL), got {other:?}"),
         }
+    }
+
+    // `ConnectionAuthority` is the second deliberate two-dialect authority. Its behavioral guarantee
+    // lives in `connection_service`'s `grant_reach` tests, which drive both arms against a live
+    // database: an outsider is refused `NotFound`, an owner granting to an unmanaged team `Forbidden`.
+
+    /// The `404` half: a caller with no control over the connection is refused with the missing-row
+    /// sentence, so `grant_reach` probes no more than a `GET` does.
+    #[test]
+    fn connection_authority_invisible_refuses_as_a_missing_connection() {
+        assert!(ConnectionAuthority::Invisible.is_denial());
+
+        match ConnectionAuthority::Invisible.denial_for() {
+            ApiError::NotFound(message) => assert_eq!(message, CONNECTION_REFUSAL),
+            other => panic!("Invisible must render NotFound(CONNECTION_REFUSAL), got {other:?}"),
+        }
+    }
+
+    /// The `403` half: a caller who controls the connection but does not manage the receiving team
+    /// is refused `Forbidden`. Not an oracle — that caller can already `GET` the connection.
+    #[test]
+    fn connection_authority_not_target_manager_refuses_with_forbidden() {
+        assert!(ConnectionAuthority::NotTargetManager.is_denial());
+
+        let refusal = ConnectionAuthority::NotTargetManager.denial_for();
+        assert!(
+            matches!(refusal, ApiError::Forbidden),
+            "NotTargetManager must render Forbidden, got {refusal:?}"
+        );
     }
 }

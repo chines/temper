@@ -3,7 +3,8 @@
 //! **Not operator-only.** The gates are `ConnectionControlAuthority` and `ConnectionAuthority`
 //! (`temper-services/src/authz/connection.rs`): a system admin, **or** the owner of the
 //! connection's owning team — who, to confer reach, must also manage the receiving team. The
-//! `admin` grouping names the deployment *subject*, not an elevation bar.
+//! `admin` grouping names the deployment *subject*, not an elevation bar. A connection the caller
+//! does not control reads as not found, exactly like a missing id.
 //!
 //! Thin commands: parse, resolve refs to ids, call the client, render. `--owner-team` records
 //! only the connection's OWNER, never its reach — owning a connection does not confer the right

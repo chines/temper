@@ -1,10 +1,13 @@
 //! Persistence for `kb_connections` — temper's authed link to a remote system.
 //!
 //! A connection is a machine principal wearing an integration's clothes, so authorization is
-//! `machine_authz::authorize` **verbatim**: a system admin, or the OWNER of the team that owns
-//! the connection, with a teamless connection failing closed. Calling the machine gate rather
-//! than restating it is deliberate — tighten that predicate and this surface tightens with it.
-//! There is no second copy of the policy to drift.
+//! `MachineAuthority`'s policy **verbatim**: a system admin, or the OWNER of the team that owns
+//! the connection, with a teamless connection failing closed. Provisioning asks it directly
+//! (`machine_authz::authorize`, keyed on the team the caller names); every act on an existing
+//! connection asks it through `authz::ConnectionControlAuthority`, keyed on the row, whose refusal
+//! is indistinguishable from a missing id. Calling the machine gate rather than restating it is
+//! deliberate — tighten that predicate and this surface tightens with it. There is no second copy
+//! of the policy to drift.
 //!
 //! Writes are admin-driven and rare. Nothing here emits a ledger event: an admin creating a
 //! connection is not a receipt of anything external, and this goal's own invariant is that *the
@@ -22,7 +25,7 @@ use temper_core::types::ids::ProfileId;
 use temper_workflow::operations::sluggify;
 
 use crate::auth::AuthenticatedProfile;
-use crate::authz::{ConnectionAuthority, ConnectionScope, Principal};
+use crate::authz::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope, Principal};
 use crate::broker::{BrokerError, CredentialBroker, MintRequest, MintSubject};
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::InsertGrantParams;
@@ -37,6 +40,12 @@ use crate::services::{access_service, context_service, machine_authz, profile_se
 /// created directly instead, and intake resolves the emitter from `connection.emitter_entity_id`
 /// rather than from a surface marker.
 const WEBHOOK_EMITTER_MARKER: &str = "webhook";
+
+/// The refusal for a connection the caller cannot see — absent, or present but outside the caller's
+/// authority. One sentence for both, on purpose: `get` renders it for a missing row and
+/// `authz::ConnectionControlAuthority` for a denied one, so a caller probing ids cannot tell the
+/// two apart.
+pub(crate) const CONNECTION_REFUSAL: &str = "connection not found or not readable";
 
 /// Load one connection by its own id. Unauthorized: the internal primitive the post-insert
 /// readback uses. Surface callers want [`get_for_caller`].
@@ -54,7 +63,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Connection> {
     )
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| ApiError::NotFound("connection not found or not readable".to_string()))
+    .ok_or_else(|| ApiError::NotFound(CONNECTION_REFUSAL.to_string()))
 }
 
 /// Resolve a **verified inbound attestation** to the connection that receives it.
@@ -114,15 +123,28 @@ pub async fn resolve_inbound(
     }
 }
 
-/// [`get`], gated on the *existing row's* owning team.
+/// [`get`], gated on the *existing row's* owning team. A caller outside that authority is refused
+/// exactly as a missing id is (`CONNECTION_REFUSAL`) — see `authz::ConnectionControlAuthority`.
 pub async fn get_for_caller(
     pool: &PgPool,
     authed: &AuthenticatedProfile,
     id: Uuid,
 ) -> ApiResult<Connection> {
-    let connection = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Proof(authed), connection.owner_team_id).await?;
-    Ok(connection)
+    authorize_control(pool, authed, id).await?;
+    get(pool, id).await
+}
+
+/// The per-row gate every act on an existing connection passes first: a system admin, or the owner
+/// of the connection's owning team, keyed on the row. A refusal is indistinguishable from a missing
+/// id.
+async fn authorize_control(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+    id: Uuid,
+) -> ApiResult<()> {
+    crate::authz::authorize::<ConnectionControlAuthority>(pool, Principal::Proof(authed), id)
+        .await?;
+    Ok(())
 }
 
 /// List connections visible to `caller`, newest first. Revoked rows are hidden unless asked for.
@@ -291,8 +313,7 @@ pub async fn revoke(
 ) -> ApiResult<Connection> {
     let revoker = ProfileId::from(authed.profile().id);
     // Auth before writes, keyed on the existing row's owning team.
-    let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Proof(authed), existing.owner_team_id).await?;
+    authorize_control(pool, authed, id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_connections
@@ -308,16 +329,19 @@ pub async fn revoke(
 
 /// Gate a mutation on an existing, **live** connection.
 ///
-/// The machine gate keyed on the row's own owning team, plus the revoked check. A revoked
+/// The per-row gate keyed on the row's own owning team, plus the revoked check. A revoked
 /// connection is dead — reactivation is a new provisioning, never an UPDATE — so a mutator refuses
 /// one outright rather than issuing an UPDATE that silently matches no rows and reports success.
+///
+/// The revoked check runs **after** authorization, so only a caller who controls the connection
+/// learns that it is revoked.
 async fn authorize_live(
     pool: &PgPool,
     authed: &AuthenticatedProfile,
     id: Uuid,
 ) -> ApiResult<Connection> {
+    authorize_control(pool, authed, id).await?;
     let existing = get(pool, id).await?;
-    machine_authz::authorize(pool, Principal::Proof(authed), existing.owner_team_id).await?;
     if existing.revoked_at.is_some() {
         return Err(ApiError::Conflict(format!(
             "connection '{}' is revoked; reactivation is a new provisioning",
@@ -1686,17 +1710,20 @@ mod tests {
         .await
         .expect("provision");
 
-        assert!(matches!(
-            svc::attach_credential(
-                &pool,
-                &granting_broker(),
-                &crate::test_support::authenticated_profile_for(&pool, maintainer.uuid()).await,
-                c.id,
-                &credential()
-            )
-            .await,
-            Err(ApiError::Forbidden)
-        ));
+        assert!(
+            matches!(
+                svc::attach_credential(
+                    &pool,
+                    &granting_broker(),
+                    &crate::test_support::authenticated_profile_for(&pool, maintainer.uuid()).await,
+                    c.id,
+                    &credential()
+                )
+                .await,
+                Err(ApiError::NotFound(m)) if m == svc::CONNECTION_REFUSAL
+            ),
+            "a maintainer does not control the connection, so it reads as missing"
+        );
         assert!(
             svc::get(&pool, c.id).await.expect("get").needs_credential(),
             "a rejected attach writes nothing"
@@ -1898,7 +1925,10 @@ mod tests {
         )
         .await
         .expect_err("an owner of a different team is not authorized here");
-        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        assert!(
+            matches!(&err, ApiError::NotFound(m) if m == svc::CONNECTION_REFUSAL),
+            "no control over the connection reads as a missing connection, got {err:?}"
+        );
         assert!(
             !reach_grant_exists(&pool, c.id, team).await,
             "a denied grant must write nothing"
@@ -2104,7 +2134,10 @@ mod tests {
         )
         .await
         .expect_err("teamless is admin-only");
-        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        assert!(
+            matches!(&err, ApiError::NotFound(m) if m == svc::CONNECTION_REFUSAL),
+            "no control over the connection reads as a missing connection, got {err:?}"
+        );
     }
 
     /// `revoke_reach` removes a previously granted row, gated the same way.
@@ -2396,7 +2429,10 @@ mod tests {
         )
         .await
         .expect_err("auth runs before affirmation");
-        assert!(matches!(err, ApiError::Forbidden), "got {err:?}");
+        assert!(
+            matches!(&err, ApiError::NotFound(m) if m == svc::CONNECTION_REFUSAL),
+            "no control over the connection reads as a missing connection, got {err:?}"
+        );
 
         assert!(
             !reach_grant_exists(&pool, c.id, beta).await,
@@ -2739,6 +2775,105 @@ mod tests {
         assert!(
             !reach_grant_exists(&pool, c.id, beta).await,
             "writes nothing"
+        );
+    }
+
+    /// The existence oracle, closed: every per-row act refuses a caller who does not control the
+    /// connection with the **same** error a missing id gets — variant and message — so probing ids
+    /// learns nothing. A `Forbidden` on any of these would mean the row exists.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_denied_connection_is_indistinguishable_from_a_missing_one(pool: PgPool) {
+        let admin = seed_admin(&pool).await;
+        let (_owner, team) = seed_team_member(&pool, "conn-owner", "acme", TeamRole::Owner).await;
+        let c = svc::provision(
+            &pool,
+            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
+            &req("Acme GitHub", Some(team)),
+        )
+        .await
+        .expect("provision");
+        let (outsider, _other) =
+            seed_team_member(&pool, "conn-prober", "other", TeamRole::Owner).await;
+        let prober = crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await;
+        let missing = Uuid::now_v7();
+
+        let refusals = |a: ApiError, b: ApiError| (a.to_string(), b.to_string());
+        let pairs = [
+            (
+                "get",
+                refusals(
+                    svc::get_for_caller(&pool, &prober, c.id)
+                        .await
+                        .expect_err("denied"),
+                    svc::get_for_caller(&pool, &prober, missing)
+                        .await
+                        .expect_err("missing"),
+                ),
+            ),
+            (
+                "revoke",
+                refusals(
+                    svc::revoke(&pool, c.id, &prober).await.expect_err("denied"),
+                    svc::revoke(&pool, missing, &prober)
+                        .await
+                        .expect_err("missing"),
+                ),
+            ),
+            (
+                "webhook events",
+                refusals(
+                    svc::set_webhook_events(&pool, &prober, c.id, &["push".into()])
+                        .await
+                        .expect_err("denied"),
+                    svc::set_webhook_events(&pool, &prober, missing, &["push".into()])
+                        .await
+                        .expect_err("missing"),
+                ),
+            ),
+            (
+                "grant reach",
+                refusals(
+                    svc::grant_reach(&pool, &prober, c.id, team, None)
+                        .await
+                        .expect_err("denied"),
+                    svc::grant_reach(&pool, &prober, missing, team, None)
+                        .await
+                        .expect_err("missing"),
+                ),
+            ),
+            (
+                "revoke reach",
+                refusals(
+                    svc::revoke_reach(&pool, &prober, c.id, team)
+                        .await
+                        .expect_err("denied"),
+                    svc::revoke_reach(&pool, &prober, missing, team)
+                        .await
+                        .expect_err("missing"),
+                ),
+            ),
+        ];
+        for (act, (denied, absent)) in pairs {
+            assert_eq!(
+                denied, absent,
+                "{act}: a denied id must refuse like a missing one"
+            );
+        }
+
+        let err = svc::get_for_caller(&pool, &prober, c.id)
+            .await
+            .expect_err("denied");
+        assert!(
+            matches!(&err, ApiError::NotFound(m) if m == svc::CONNECTION_REFUSAL),
+            "the shared refusal is the missing-row sentence, got {err:?}"
+        );
+        assert!(
+            svc::get(&pool, c.id)
+                .await
+                .expect("get")
+                .revoked_at
+                .is_none(),
+            "the denied revoke wrote nothing"
         );
     }
 }
