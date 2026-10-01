@@ -51,6 +51,11 @@ use temper_workflow::operations::{Backend, ReblockResources};
             description = "The addressed resource does not exist or is not visible to the caller (resource scope only — context scope never answers 404; see the 200 description)",
             body = ErrorBody,
         ),
+        (
+            status = 410,
+            description = "The addressed resource was erased (code RESOURCE_ERASED; resource scope only); answered only to a caller who held standing on it, everyone else gets 404. A candidate erased under a running batch is a `denied` row inside the 200, never a 410",
+            body = ErrorBody,
+        ),
     )
 )]
 pub async fn reblock(

@@ -258,6 +258,7 @@ pub async fn read_block(
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn annotate(
@@ -297,8 +298,10 @@ pub async fn annotate(
         (status = 200, description = "Created resource", body = ResourceView),
         (status = 400, description = "Unknown context or doc_type ID", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Caller can read the context but cannot author into it", body = ErrorBody),
         (status = 404, description = "Context not visible to profile", body = ErrorBody),
         (status = 409, description = "Conflict", body = ErrorBody),
+        (status = 410, description = "An idempotent replay names a resource that has since been erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404", body = ErrorBody),
     )
 )]
 pub async fn create(
@@ -364,6 +367,7 @@ pub async fn create(
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn update(
@@ -465,6 +469,7 @@ pub async fn update(
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn delete(
@@ -501,6 +506,7 @@ pub async fn delete(
         (status = 200, description = "Grant minted (or updated in place)", body = GrantOutcome),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Caller may not administer grants on this resource", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn grant(
@@ -539,6 +545,7 @@ pub async fn grant(
         (status = 200, description = "Grant revoked (no-op safe)", body = RevokeOutcome),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Caller may not administer grants on this resource", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn revoke(

@@ -11134,6 +11134,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     cogmap_panorama: {
@@ -11563,12 +11572,30 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Caller cannot author into the home context or cognitive map; or a segmented idempotent replay names a resource the caller can no longer modify (e.g. since deleted) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description Context not found */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description An idempotent replay names a resource that has since been erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404 (one-shot) or 403 (segmented) */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -11607,12 +11634,30 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Caller cannot modify this resource */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description Resource not found */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -12104,6 +12149,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The source resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. An erased target is never a 410: it answers 404 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     list_edge_facets: {
@@ -12214,6 +12268,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     retract_edge_facet: {
@@ -12289,6 +12352,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     fold: {
@@ -12348,6 +12420,15 @@ export interface operations {
             };
             /** @description Relationship not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12421,6 +12502,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     reweight: {
@@ -12480,6 +12570,15 @@ export interface operations {
             };
             /** @description Relationship not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404 */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12676,6 +12775,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description Caller can read the context but cannot author into it */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description Context not visible to profile */
             404: {
                 headers: {
@@ -12687,6 +12795,15 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description An idempotent replay names a resource that has since been erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404 */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12750,6 +12867,15 @@ export interface operations {
             };
             /** @description The addressed resource does not exist or is not visible to the caller (resource scope only — context scope never answers 404; see the 200 description) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The addressed resource was erased (code RESOURCE_ERASED; resource scope only); answered only to a caller who held standing on it, everyone else gets 404. A candidate erased under a running batch is a `denied` row inside the 200, never a 410 */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12896,6 +13022,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     update_resource: {
@@ -12955,6 +13090,15 @@ export interface operations {
             };
             /** @description Not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13059,6 +13203,15 @@ export interface operations {
             };
             /** @description Resource not found or not visible */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13188,6 +13341,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
@@ -13619,6 +13781,33 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The landed block count or the body hash does not match what the caller declared */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The stored bytes do not match the declared content hash (code CONTENT_INTEGRITY); not resumable — discard and re-upload */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     grant_resource_access: {
@@ -13667,6 +13856,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     revoke_resource_access: {
@@ -13708,6 +13906,15 @@ export interface operations {
             };
             /** @description Caller may not administer grants on this resource */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13872,6 +14079,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     provenance: {
@@ -13982,6 +14198,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     reassign_resource: {
@@ -14025,6 +14250,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

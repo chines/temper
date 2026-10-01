@@ -126,6 +126,7 @@ class ResourcesApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -204,6 +205,7 @@ class ResourcesApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -282,6 +284,7 @@ class ResourcesApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -433,8 +436,10 @@ class ResourcesApi:
             '200': "ResourceView",
             '400': "ErrorBody",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
             '409': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -507,8 +512,10 @@ class ResourcesApi:
             '200': "ResourceView",
             '400': "ErrorBody",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
             '409': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -581,8 +588,10 @@ class ResourcesApi:
             '200': "ResourceView",
             '400': "ErrorBody",
             '401': "ErrorBody",
+            '403': "ErrorBody",
             '404': "ErrorBody",
             '409': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -760,6 +769,7 @@ class ResourcesApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -861,6 +871,7 @@ class ResourcesApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -962,6 +973,7 @@ class ResourcesApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1720,6 +1732,7 @@ class ResourcesApi:
             '200': "GrantOutcome",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1796,6 +1809,7 @@ class ResourcesApi:
             '200': "GrantOutcome",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1872,6 +1886,7 @@ class ResourcesApi:
             '200': "GrantOutcome",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -4005,6 +4020,7 @@ class ResourcesApi:
             '200': "ReassignAck",
             '403': None,
             '404': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -4081,6 +4097,7 @@ class ResourcesApi:
             '200': "ReassignAck",
             '403': None,
             '404': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -4157,6 +4174,7 @@ class ResourcesApi:
             '200': "ReassignAck",
             '403': None,
             '404': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5503,6 +5521,7 @@ class ResourcesApi:
             '200': "RevokeOutcome",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5579,6 +5598,7 @@ class ResourcesApi:
             '200': "RevokeOutcome",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5655,6 +5675,7 @@ class ResourcesApi:
             '200': "RevokeOutcome",
             '401': "ErrorBody",
             '403': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5812,6 +5833,7 @@ class ResourcesApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5890,6 +5912,7 @@ class ResourcesApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -5968,6 +5991,7 @@ class ResourcesApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

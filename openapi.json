@@ -4047,6 +4047,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4833,8 +4843,28 @@
           "400": {
             "description": "Invalid payload"
           },
+          "403": {
+            "description": "Caller cannot author into the home context or cognitive map; or a segmented idempotent replay names a resource the caller can no longer modify (e.g. since deleted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Context not found"
+          },
+          "410": {
+            "description": "An idempotent replay names a resource that has since been erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404 (one-shot) or 403 (segmented)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4903,8 +4933,28 @@
           "400": {
             "description": "Invalid payload"
           },
+          "403": {
+            "description": "Caller cannot modify this resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Resource not found"
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -5670,6 +5720,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The source resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. An erased target is never a 410: it answers 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -5826,6 +5886,16 @@
           },
           "404": {
             "description": "Relationship not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -6024,6 +6094,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -6121,6 +6201,16 @@
           },
           "404": {
             "description": "Relationship not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -6232,6 +6322,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -6329,6 +6429,16 @@
           },
           "404": {
             "description": "Relationship not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -6653,6 +6763,16 @@
               }
             }
           },
+          "403": {
+            "description": "Caller can read the context but cannot author into it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Context not visible to profile",
             "content": {
@@ -6665,6 +6785,16 @@
           },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "An idempotent replay names a resource that has since been erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -6757,6 +6887,16 @@
           },
           "404": {
             "description": "The addressed resource does not exist or is not visible to the caller (resource scope only — context scope never answers 404; see the 200 description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The addressed resource was erased (code RESOURCE_ERASED; resource scope only); answered only to a caller who held standing on it, everyone else gets 404. A candidate erased under a running batch is a `denied` row inside the 200, never a 410",
             "content": {
               "application/json": {
                 "schema": {
@@ -7030,6 +7170,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7110,6 +7260,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
             "content": {
               "application/json": {
                 "schema": {
@@ -7304,6 +7464,16 @@
           },
           "404": {
             "description": "Resource not found or not visible",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
             "content": {
               "application/json": {
                 "schema": {
@@ -7506,6 +7676,16 @@
           },
           "403": {
             "description": "Caller cannot modify this resource"
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -8219,6 +8399,36 @@
           },
           "403": {
             "description": "Caller cannot modify this resource"
+          },
+          "409": {
+            "description": "The landed block count or the body hash does not match what the caller declared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The stored bytes do not match the declared content hash (code CONTENT_INTEGRITY); not resumable — discard and re-upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -8303,6 +8513,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -8363,6 +8583,16 @@
           },
           "403": {
             "description": "Caller may not administer grants on this resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
             "content": {
               "application/json": {
                 "schema": {
@@ -8618,6 +8848,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -8782,6 +9022,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -8852,6 +9102,16 @@
           },
           "404": {
             "description": "Resource has no home / not found"
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [

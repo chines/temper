@@ -31,6 +31,7 @@ use temper_workflow::operations::{Backend, RetractFacet, SetFacet};
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Cannot modify resource", body = ErrorBody),
         (status = 404, description = "Resource not found", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn set_facet(
@@ -90,6 +91,7 @@ pub async fn set_facet(
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Cannot modify this relationship", body = ErrorBody),
         (status = 404, description = "Relationship not found", body = ErrorBody),
+        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404", body = ErrorBody),
     )
 )]
 pub async fn set_edge_facet(
@@ -143,6 +145,7 @@ pub async fn set_edge_facet(
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Cannot modify this relationship", body = ErrorBody),
         (status = 404, description = "No live facet row with that id on this relationship", body = ErrorBody),
+        (status = 410, description = "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404", body = ErrorBody),
     )
 )]
 pub async fn retract_edge_facet(
