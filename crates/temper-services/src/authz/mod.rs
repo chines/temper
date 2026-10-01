@@ -110,6 +110,10 @@ impl Principal<'_> {
 /// `GrantAuthority::Delegated` carries an attenuation obligation that `MachineAuthority::TeamOwner`
 /// does not, and collapsing them into one shared enum would erase a distinction the compiler is
 /// currently keeping for us. Same shape, different intent, separate types.
+// `#[async_trait]` stamps a bare `#[must_use]` on each method whose return it boxes into a
+// `Pin<Box<dyn Future>>` — already `#[must_use]` — which clippy 1.99's `double_must_use` rejects.
+// The attribute is the macro's, not ours; the allow is scoped to this trait's expansion.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub(crate) trait ScopedAuthority: Sized + Copy + Debug {
     /// What this authority is *about* — the scope the answer is bound to.
