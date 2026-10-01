@@ -49,9 +49,18 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   leaving it with its owner and out of the returned `resource_ids`, where it moved it.
   `POST`/`DELETE /api/resources/{id}/grants` refuse a system admin on a deleted or erased
   resource (`403`) where they admitted one, and answer a refused holder of an erased resource
-  `410`. Who observes: the owner or a grant
-  holder of an erased resource; a caller whose goal link is refused; a team admin reassigning a
-  departing member's resources; a system admin granting on a deleted resource. User-visible: yes.
+  `410`. They refuse the resource's owner the same way on a deleted resource (`403`) or an erased
+  one (`410`), where an owner's revoke, or a grant conferring nothing, was admitted. A relationship
+  assert into a TARGET, a blob relation (`POST /api/blobs/{id}/relations`) onto a resource peer, and
+  a grant or revoke on a resource each take the resource's row lock inside the write, so one racing
+  an erasure waits for it and is then refused: the edge and blob doors answer `404` where they
+  answered `500`, and the grant doors answer `410`/`403` where the grant landed on the erased
+  resource. `DELETE /api/teams/{id}/members/{profile_id}` counts only live resources in
+  `residual_owned`, where it counted the departing member's deleted and erased ones. Who observes:
+  the owner or a grant
+  holder of an erased resource; a caller whose goal link is refused; a team admin reassigning or
+  removing a departing member; a system admin granting on a deleted resource; the owner of a
+  deleted resource administering its grants. User-visible: yes.
   Release relevance: signal-only.
 pr: self
 classes: behavioral

@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::auth::{AuthenticatedProfile, SystemAdmin};
 use crate::backend::substrate_read::husk_held_by;
+use crate::backend::write_floor;
 // In scope so `GrantAuthority::resolve` — the grant-administration gate, which lives as this
 // enum's `ScopedAuthority` impl in `authz/grant.rs` — is callable here.
 use crate::authz::{Principal, ScopedAuthority};
@@ -366,8 +367,9 @@ pub(crate) async fn delete_grant(
 /// when the subject is an erased husk `caller` holds standing on (`resource_husk_held_by`,
 /// migration `20260930000060`, through the one probe `substrate_read::husk_held_by`), else the
 /// refusal unchanged. Only the uniform `Forbidden` is classified — a husk is refused on every
-/// authority arm (the delegated arm by `can()`'s subject-liveness floor, migration
-/// `20260902000010`; the admin arm by `GrantAuthority::resolve`'s), so that is the answer a husk
+/// authority arm (the delegated arm by `can()`: its explicit branch's subject-liveness floor,
+/// migration `20260902000010`, and the owner's derived `grant` arm's, migration
+/// `20261001000010`; the admin arm by `GrantAuthority::resolve`'s), so that is the answer a husk
 /// arrives as. Any other subject kind, and any other refusal, passes through. Runs on the deny path
 /// only, so an admitted grant pays nothing.
 async fn erased_or_refused(
@@ -385,6 +387,28 @@ async fn erased_or_refused(
         Ok(false) => refusal,
         Err(e) => ApiError::from(e),
     }
+}
+
+/// The grant doors' subject floor, inside the grant write's own transaction (resource erasure
+/// spec D13: a write that races the erasure act lands before it or refuses after it). A
+/// `kb_resources` subject is locked `FOR KEY SHARE` and must be live, through the write floor's
+/// liveness check ([`write_floor::liveness_floor_in_tx`]), which classifies a refusal exactly as
+/// [`erased_or_refused`] does: `410 RESOURCE_ERASED` to a holder of an erased husk, else `403`.
+/// The authority gate ran before this on the pool and refuses a dead subject on every arm; this
+/// floor is what holds the subject live until the grant row commits, so an act that commits
+/// while the door waits on the lock refuses the grant rather than leaving it on the husk. Every
+/// other subject kind passes unlocked.
+async fn grant_subject_floor_in_tx(
+    conn: &mut sqlx::PgConnection,
+    caller: ProfileId,
+    subject: RefTarget,
+) -> ApiResult<()> {
+    if subject.kind != AnchorTable::Resources {
+        return Ok(());
+    }
+    write_floor::liveness_floor_in_tx(conn, caller, ResourceId::from(subject.id))
+        .await
+        .map_err(ApiError::from)
 }
 
 /// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
@@ -408,12 +432,15 @@ pub async fn grant_capability(
             Ok(proof) => proof,
             Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
         };
+    // The subject floor at the head of the grant write's own transaction; its lock holds until
+    // the grant row commits. The emitter is resolved only after it admits.
+    let mut tx = pool.begin().await?;
+    grant_subject_floor_in_tx(&mut tx, caller, subject).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut conn = pool.acquire().await?;
     let granted = insert_grant(
-        &mut conn,
+        &mut tx,
         // The subject travels in the warrant. `req.subject_table`/`req.subject_id` are NOT passed
         // alongside it — they are what `wire_subject` typed into `subject` above, which is what the
         // proof was minted over.
@@ -430,6 +457,7 @@ pub async fn grant_capability(
         emitter,
     )
     .await?;
+    tx.commit().await?;
     Ok(GrantOutcome { granted })
 }
 
@@ -454,12 +482,14 @@ pub async fn revoke_capability(
             Ok(proof) => proof,
             Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
         };
+    // The subject floor at the head of the revoke's own transaction (see `grant_capability`).
+    let mut tx = pool.begin().await?;
+    grant_subject_floor_in_tx(&mut tx, caller, subject).await?;
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut conn = pool.acquire().await?;
     let revoked = delete_grant(
-        &mut conn,
+        &mut tx,
         &crate::authz::RevokeWarrant::Administered(&proof),
         &req.principal_table,
         req.principal_id,
@@ -467,6 +497,7 @@ pub async fn revoke_capability(
         emitter,
     )
     .await?;
+    tx.commit().await?;
     Ok(RevokeOutcome { revoked })
 }
 

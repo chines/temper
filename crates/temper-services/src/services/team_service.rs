@@ -500,7 +500,8 @@ pub async fn remove_member(
     }
 
     // Removal succeeded. Surface (read-only) the reach the removed member still
-    // OWNS in this team's contexts, so the caller can hand it off deliberately via
+    // OWNS in this team's contexts (live resources only; a soft-deleted or erased one
+    // is nothing to hand off), so the caller can hand it off deliberately via
     // `reassign_team_resources`. The scope query is membership-independent, so it is
     // correct post-delete; we reuse the exact definition the handoff moves, so the
     // warning and the handoff can never disagree.

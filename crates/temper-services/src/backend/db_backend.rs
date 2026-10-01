@@ -1269,6 +1269,12 @@ impl DbBackend {
     /// predicate's read floor (`resources_visible_to` joins `kb_resources.is_active`) hides it, and
     /// the caller is not writing the target, so the erased classification does not apply to it.
     ///
+    /// **A resource target is locked first** (`write_floor::lock_resource_key_share`: `FOR KEY
+    /// SHARE` on its row, held to the edge write's commit), so the erasure act cannot commit
+    /// between this check and the edge. An edge assert that races the act either lands before it
+    /// (and the act folds the edge) or waits on the act's lock and then reads the husk as
+    /// unreadable here. Other endpoint kinds are read unlocked.
+    ///
     /// On a caller-supplied connection only: every caller is an edge write gating inside its own
     /// transaction (see [`Self::check_cogmap_authorable_in_tx`] for why), so no pool form exists.
     async fn check_endpoint_readable_in_tx(
@@ -1277,6 +1283,9 @@ impl DbBackend {
         endpoint_table: &str,
         endpoint_id: uuid::Uuid,
     ) -> Result<(), TemperError> {
+        if endpoint_table == "kb_resources" {
+            write_floor::lock_resource_key_share(&mut *conn, ResourceId::from(endpoint_id)).await?;
+        }
         let can: Option<bool> = sqlx::query_scalar!(
             "SELECT endpoint_readable_by_profile($1, $2, $3)",
             *self.profile_id,

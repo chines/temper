@@ -168,10 +168,12 @@ pub struct ScopedOwnedRow {
     pub context_ref: String,
 }
 
-/// Resources owned by `profile_id` and homed in a *live* context shared to `team_id`.
-/// A retired context drops out of this scope, so the bulk handoff and `remove_member`'s
-/// residual surfacing both stop counting it. Witness:
-/// `bulk_excludes_a_retired_contexts_resources`.
+/// *Live* resources owned by `profile_id` and homed in a *live* context shared to `team_id`.
+/// A retired context drops out of this scope, and so does a soft-deleted or erased resource
+/// (`kb_resources.is_active`), so the bulk handoff and `remove_member`'s residual surfacing
+/// both stop counting either and agree on what is left to hand off. Witnesses:
+/// `bulk_excludes_a_retired_contexts_resources`, and in `resource_husk_write_test.rs`
+/// `remove_member_and_team_reassign_leave_out_a_husk_and_a_tombstone`.
 ///
 /// Ordered by `(context slug, resource_id)` for stable output only — consumers
 /// that group by context MUST key on `context_id` (a slug is unique only per-owner,
@@ -193,6 +195,7 @@ pub async fn team_scoped_owned(
         FROM kb_team_contexts tc
         JOIN kb_resource_homes h
           ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
+        JOIN kb_resources r ON r.id = h.resource_id AND r.is_active
         JOIN kb_contexts c ON c.id = tc.context_id AND c.is_active
         LEFT JOIN kb_teams    t ON c.owner_table = 'kb_teams'    AND t.id = c.owner_id
         LEFT JOIN kb_profiles p ON c.owner_table = 'kb_profiles' AND p.id = c.owner_id
@@ -217,8 +220,9 @@ pub async fn team_scoped_owned(
 
 /// Bulk-reassign, from `from_profile_id` to `to_profile_id`, every LIVE resource owned by
 /// `from` and homed in a context shared to `team_id`. Auth: caller manages the team AND
-/// `to` is a member of it. One transaction; returns the reassigned resource ids — a tombstoned
-/// or erased resource in the scope fails the liveness floor, is skipped, and is not among them.
+/// `to` is a member of it. One transaction; returns the reassigned resource ids. A tombstoned or
+/// erased resource is outside the scope; one tombstoned or erased after the scope read fails the
+/// liveness floor, is skipped, and is not among them.
 pub async fn reassign_team_resources(
     pool: &PgPool,
     caller: ProfileId,
@@ -274,11 +278,10 @@ pub async fn reassign_team_resources(
     for &rid in &targets {
         let resource = temper_substrate::ids::ResourceId::from(rid);
         // The liveness floor per resource (controller ruling 5), in the run's transaction, ahead
-        // of its write. `team_scoped_owned` does not filter `kb_resources.is_active`, so a
-        // tombstone or an erased husk the departing owner still holds a home row on IS enumerated;
-        // the floor also catches one erased or deleted after the scope read. Either is SKIPPED —
-        // left with its owner and absent from the returned ids — never a whole-run failure. Only
-        // the floor's two refusals skip; a fault aborts the run as before.
+        // of its write. `team_scoped_owned` enumerates live resources only, so the floor refuses
+        // one erased or deleted after the scope read. It is SKIPPED — left with its owner and
+        // absent from the returned ids — never a whole-run failure. Only the floor's two refusals
+        // skip; a fault aborts the run as before.
         match write_floor::liveness_floor_in_tx(&mut tx, caller, resource).await {
             Ok(()) => {}
             Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => continue,

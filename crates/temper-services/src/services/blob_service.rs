@@ -919,18 +919,31 @@ async fn check_home_authorable(
 /// the same predicate the incumbent edge writes apply — its `kb_blobs` arm landed with the S1
 /// reads migration). Invisible-or-absent renders `NotFound`: the write must not become an
 /// existence oracle over anchors the caller cannot read.
+///
+/// Runs on the relation write's own transaction (`conn`; resource erasure spec D13). A resource
+/// peer is locked first (`write_floor::lock_resource_key_share`: `FOR KEY SHARE`, held to the
+/// write's commit), so the erasure act cannot commit between this check and the edge: a relate
+/// that races the act either lands before it (and the act folds the edge) or waits on the act's
+/// lock and then reads the husk as unreadable here.
 async fn check_peer_readable(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     caller: ProfileId,
     peer: &temper_substrate::payloads::AnchorRef,
 ) -> ApiResult<()> {
+    if peer.table == temper_substrate::payloads::AnchorTable::Resources {
+        crate::backend::write_floor::lock_resource_key_share(
+            &mut *conn,
+            temper_core::types::ids::ResourceId::from(peer.id),
+        )
+        .await?;
+    }
     let readable: Option<bool> = sqlx::query_scalar!(
         "SELECT endpoint_readable_by_profile($1, $2, $3)",
         caller.uuid(),
         peer.table.as_str(),
         peer.id,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
     if !readable.unwrap_or(false) {
         return Err(ApiError::NotFound(
@@ -941,7 +954,8 @@ async fn check_peer_readable(
 }
 
 /// Assert one relation between a blob and a peer anchor. Gate train, in order (auth before
-/// writes): blob readable → 404; home authorable → 403; peer readable → 404. Then the
+/// writes): blob readable → 404; home authorable → 403; peer readable → 404, the last inside
+/// the relation write's own transaction, under the peer's row lock. Then the
 /// substrate's ordinary relationship write, homed on the BLOB's home — the blob-scoped
 /// surface answers to the blob's standing, and the edge is therefore readable by exactly
 /// the blob-home's readers, which is the visibility story D3's negative face rides on.
@@ -990,7 +1004,11 @@ pub async fn relate_blob(
         table: peer_table,
         id: req.peer_id,
     };
-    check_peer_readable(pool, caller, &peer).await?;
+    // The peer gate and the relation write share one transaction, so the peer's row lock holds
+    // until the edge commits (see `check_peer_readable`). The blob gates above read only the blob
+    // and its home, so they stay on the pool.
+    let mut tx = pool.begin().await?;
+    check_peer_readable(&mut tx, caller, &peer).await?;
 
     let home = match home_table {
         temper_substrate::payloads::AnchorTable::Contexts => {
@@ -1025,8 +1043,8 @@ pub async fn relate_blob(
         .map_err(|e| ApiError::internal_scrubbed("blob emitter resolve failed", e))?;
     let label = (!req.label.is_empty()).then_some(req.label.as_str());
 
-    let edge = temper_substrate::writes::assert_anchored_edge_with(
-        pool,
+    let edge = temper_substrate::writes::assert_anchored_edge_in_tx(
+        &mut tx,
         temper_substrate::writes::AssertAnchoredEdgeParams {
             source,
             target,
@@ -1045,6 +1063,7 @@ pub async fn relate_blob(
     )
     .await
     .map_err(|e| ApiError::internal_scrubbed("blob relation assert failed", e))?;
+    tx.commit().await?;
 
     Ok(WireRelationAck {
         edge_handle: edge.uuid(),

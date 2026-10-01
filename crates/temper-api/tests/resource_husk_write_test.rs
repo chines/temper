@@ -35,7 +35,17 @@
 //!   authority gate — owner or admin reach — runs first); a team reassign skips a husk and a
 //!   tombstone instead of failing the run;
 //! * a system admin is refused a grant on a tombstone (`403`) and answered `410` on a husk they
-//!   hold.
+//!   hold;
+//! * the owner is refused grant administration on a dead resource: revoke on a tombstone `403`,
+//!   on a husk `410`, and an all-false grant on a tombstone `403` (the owner's derived `grant`
+//!   arm floors on liveness, migration `20261001000010`);
+//! * `remove_member`'s residual warning and the team handoff count live resources only.
+//!
+//! Plus the races (resource erasure spec D13: "a write that races the act either lands before it
+//! or refuses after it"), each with the act held open on R and the write shown waiting on R's row
+//! lock before the act commits: an edge assert into R answers `404` and lands no edge; a blob
+//! relate onto R answers `404` and lands no edge; the owner's grant on R answers `410` and lands no
+//! grant row.
 //!
 //! Every state is made by a real door: the resource by `POST /api/ingest`, the grant by
 //! `POST /api/resources/{id}/grants`, the husk by the operator door
@@ -349,8 +359,9 @@ fn doors(resource: Uuid) -> Vec<Door> {
             })),
         },
         // The resource as a grant SUBJECT. Every arm refuses a dead subject (`can()`'s
-        // subject-liveness floor, `20260902000010`; for the owner, attenuation — the read it would
-        // confer is one it no longer holds); the door classifies the refusal. `kb_access_grants`
+        // subject-liveness floor on the explicit branch, `20260902000010`; the owner's derived
+        // `grant` arm, `20261001000010`; the admin arm's own floor), and so does the door's
+        // in-transaction subject floor; the door classifies the refusal. `kb_access_grants`
         // carries no FK on `principal_id`, and the refusal precedes the insert.
         Door {
             name: "POST /api/resources/{id}/grants",
@@ -625,31 +636,18 @@ async fn reblock_addressed_at_an_erased_resource_answers_410_to_a_holder_and_404
     }
 }
 
-// ── WITNESS: a candidate erased under the batch is a denied row, never a 410 ──────────────────
+// ── The race choreography: the act held open, a write waiting on its lock ─────────────────────
 
-/// FAILS IF a reblock candidate that is erased between the candidate read and its write floor
-/// surfaces as anything but a `denied` row in a `200` receipt. No scope can ENUMERATE an erased
-/// resource (every candidate read filters `is_active`), so the floor's erased classification
-/// reaches the batch only through this race — and it must read `denied`, exactly as a `Forbidden`
-/// does, never a `410` inside a `200` and never an `error` row.
-///
-/// The choreography is `resource_erasure_act.rs`'s: the act runs uncommitted in its own
-/// transaction (holding `FOR UPDATE` on R), the reblock starts, a 2-second timeout that EXPIRES
-/// shows its floor waiting on R's row lock, then the act commits. The act is called as the SQL
-/// function the operator door calls (`resource_erasure_execute`), because the door commits its
-/// own transaction and a race needs one held open; its `SystemAdmin` gate is the door's, not the
-/// function's.
-///
-/// The bite: in `DbBackend::reblock_candidate`, narrow the floor's refusal arm to
-/// `Err(TemperError::Forbidden)` — the `ResourceErased` classification then falls to `row_error`
-/// and the row reads `error`.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_candidate_erased_under_the_batch_reads_denied(pool: PgPool) {
-    let app = common::setup_test_app(pool).await;
-    let (owner, _) = caller(&app.pool, "owner").await;
+/// The erasure act on `resource`, executed and NOT committed: the returned transaction holds
+/// `FOR UPDATE` on R's row until the caller commits it. The act is called as the SQL function the
+/// operator door calls (`resource_erasure_execute`), because the door commits its own transaction
+/// and a race needs one held open; its `SystemAdmin` gate is the door's, not the function's. The
+/// choreography is `resource_erasure_act.rs`'s.
+async fn hold_the_act(
+    app: &common::TestApp,
+    resource: Uuid,
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
     let (operator, _) = caller(&app.pool, "operator").await;
-    let home = team_context(&app.pool, &[owner.profile]).await;
-    let resource = ingest(&app, &owner, home).await;
     let operator_emitter: Uuid = sqlx::query_scalar(
         "SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id \
           WHERE e.profile_id = $1 AND e.name = p.handle || '@web'",
@@ -658,8 +656,6 @@ async fn a_candidate_erased_under_the_batch_reads_denied(pool: PgPool) {
     .fetch_one(&app.pool)
     .await
     .expect("the operator's web emitter");
-
-    // The act, executed and NOT committed: it holds FOR UPDATE on R's row.
     let mut act = app.pool.begin().await.expect("begin the act");
     sqlx::query("SELECT resource_erasure_execute($1, $2, $3, $4, '{}'::uuid[])")
         .bind(resource)
@@ -669,41 +665,96 @@ async fn a_candidate_erased_under_the_batch_reads_denied(pool: PgPool) {
         .execute(&mut *act)
         .await
         .expect("the act runs inside its open transaction");
+    act
+}
+
+/// Send `method path` as `who` while `act` holds the row, assert the request is still waiting
+/// after 2 seconds (a 2-second timeout that EXPIRES shows the write blocked on the act's lock),
+/// then commit the act and return the request's answer: the status and the parsed body (`Null`
+/// when the body is not JSON).
+async fn raced_by_the_act(
+    app: &common::TestApp,
+    act: sqlx::Transaction<'static, sqlx::Postgres>,
+    who: &Caller,
+    method: Method,
+    path: String,
+    body: Value,
+) -> (u16, Value) {
+    let client = app.client.clone();
+    let url = app.url(&path);
+    let token = who.token.clone();
+    let mut request = tokio::spawn(async move {
+        let resp = client
+            .request(method, url)
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&body)
+            .send()
+            .await
+            .expect("raced request");
+        let status = resp.status().as_u16();
+        let text = resp.text().await.expect("raced body");
+        (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+    });
+    let finished_within_window =
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut request).await;
+    assert!(
+        finished_within_window.is_err(),
+        "{path} completed while the act held the row — it did not wait on the act's lock"
+    );
+    act.commit().await.expect("commit the act");
+    request.await.expect("the raced request must not panic")
+}
+
+/// Is `resource` an erased husk?
+async fn is_erased(pool: &PgPool, resource: Uuid) -> bool {
+    sqlx::query_scalar("SELECT erased_at IS NOT NULL FROM kb_resources WHERE id = $1")
+        .bind(resource)
+        .fetch_one(pool)
+        .await
+        .expect("husk probe")
+}
+
+// ── WITNESS: a candidate erased under the batch is a denied row, never a 410 ──────────────────
+
+/// FAILS IF a reblock candidate that is erased between the candidate read and its write floor
+/// surfaces as anything but a `denied` row in a `200` receipt. No scope can ENUMERATE an erased
+/// resource (every candidate read filters `is_active`), so the floor's erased classification
+/// reaches the batch only through this race — and it must read `denied`, exactly as a `Forbidden`
+/// does, never a `410` inside a `200` and never an `error` row.
+///
+/// The choreography is [`hold_the_act`] and [`raced_by_the_act`]: the act runs uncommitted in its
+/// own transaction (holding `FOR UPDATE` on R), the reblock starts and its floor waits on R's row
+/// lock, then the act commits.
+///
+/// The bite: in `DbBackend::reblock_candidate`, narrow the floor's refusal arm to
+/// `Err(TemperError::Forbidden)` — the `ResourceErased` classification then falls to `row_error`
+/// and the row reads `error`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_candidate_erased_under_the_batch_reads_denied(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, _) = caller(&app.pool, "owner").await;
+    let home = team_context(&app.pool, &[owner.profile]).await;
+    let resource = ingest(&app, &owner, home).await;
+
+    // The act, executed and NOT committed: it holds FOR UPDATE on R's row.
+    let act = hold_the_act(&app, resource).await;
 
     // The reblock: R is still live to its candidate read (the act has not committed), so R is a
     // candidate; its floor's FOR KEY SHARE then waits on the act's FOR UPDATE.
-    let client = app.client.clone();
-    let url = app.url("/api/resources/reblock");
-    let token = owner.token.clone();
-    let mut reblock = tokio::spawn(async move {
-        let resp = client
-            .post(url)
-            .header("Authorization", format!("Bearer {token}"))
-            .json(&json!({ "scope": { "resource": resource }, "dry_run": false }))
-            .send()
-            .await
-            .expect("reblock request");
-        let status = resp.status().as_u16();
-        let body: Value = resp.json().await.expect("reblock receipt JSON");
-        (status, body)
-    });
-    let finished_within_window =
-        tokio::time::timeout(std::time::Duration::from_secs(2), &mut reblock).await;
+    let (status, receipt) = raced_by_the_act(
+        &app,
+        act,
+        &owner,
+        Method::POST,
+        "/api/resources/reblock".to_string(),
+        json!({ "scope": { "resource": resource }, "dry_run": false }),
+    )
+    .await;
+
     assert!(
-        finished_within_window.is_err(),
-        "the reblock completed while the act held R's row — its floor did not wait"
+        is_erased(&app.pool, resource).await,
+        "precondition: the act committed an erasure"
     );
-
-    act.commit().await.expect("commit the act");
-    let (status, receipt) = reblock.await.expect("the reblock task must not panic");
-
-    let erased: bool =
-        sqlx::query_scalar("SELECT erased_at IS NOT NULL FROM kb_resources WHERE id = $1")
-            .bind(resource)
-            .fetch_one(&app.pool)
-            .await
-            .expect("husk probe");
-    assert!(erased, "precondition: the act committed an erasure");
 
     assert_eq!(
         status, 200,
@@ -981,20 +1032,8 @@ async fn blob_app(pool: PgPool) -> common::TestApp {
     .await
 }
 
-/// Blob relate keeps its authority on the BLOB's home by design (no `can_modify` on the peer). Its
-/// peer gate is `endpoint_readable_by_profile`, whose `kb_resources` arm is `resources_visible_to`
-/// and joins `kb_resources.is_active` — so an erased peer (`is_active` false with the husk) and a
-/// deleted one are refused `404`, in both directions, to the owner who held them.
-///
-/// FAILS IF relate admits an edge onto a dead resource peer. The bite: delete
-/// `check_peer_readable(pool, caller, &peer).await?;` from `blob_service::relate_blob`.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn blob_relate_refuses_an_erased_or_deleted_resource_peer(pool: PgPool) {
-    let app = blob_app(pool).await;
-    let (owner, own_context) = caller(&app.pool, "owner").await;
-    let erased = ingest(&app, &owner, own_context).await;
-    let deleted = ingest(&app, &owner, own_context).await;
-
+/// `owner` commits a blob homed in `context` through `POST /api/blobs`; returns its id.
+async fn commit_blob(app: &common::TestApp, owner: &Caller, context: Uuid) -> Uuid {
     let part = reqwest::multipart::Part::bytes(b"husk-peer".to_vec())
         .file_name("figure.png")
         .mime_str("image/png")
@@ -1002,7 +1041,7 @@ async fn blob_relate_refuses_an_erased_or_deleted_resource_peer(pool: PgPool) {
     let form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("home_table", "kb_contexts".to_string())
-        .text("home_id", own_context.to_string());
+        .text("home_id", context.to_string());
     let resp = app
         .client
         .post(app.url("/api/blobs"))
@@ -1013,7 +1052,36 @@ async fn blob_relate_refuses_an_erased_or_deleted_resource_peer(pool: PgPool) {
         .expect("blob commit request");
     assert_eq!(resp.status().as_u16(), 200, "the owner commits a blob");
     let committed: Value = resp.json().await.expect("blob JSON");
-    let blob = Uuid::parse_str(committed["blob_id"].as_str().expect("blob_id")).expect("uuid");
+    Uuid::parse_str(committed["blob_id"].as_str().expect("blob_id")).expect("uuid")
+}
+
+/// The blob's relation count, folded or not — any edge touching `blob` at all.
+async fn blob_edges(pool: &PgPool, blob: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_edges \
+          WHERE (source_table = 'kb_blobs' AND source_id = $1) \
+             OR (target_table = 'kb_blobs' AND target_id = $1)",
+    )
+    .bind(blob)
+    .fetch_one(pool)
+    .await
+    .expect("edge count")
+}
+
+/// Blob relate keeps its authority on the BLOB's home by design (no `can_modify` on the peer). Its
+/// peer gate is `endpoint_readable_by_profile`, whose `kb_resources` arm is `resources_visible_to`
+/// and joins `kb_resources.is_active` — so an erased peer (`is_active` false with the husk) and a
+/// deleted one are refused `404`, in both directions, to the owner who held them.
+///
+/// FAILS IF relate admits an edge onto a dead resource peer. The bite: delete
+/// `check_peer_readable(&mut tx, caller, &peer).await?;` from `blob_service::relate_blob`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn blob_relate_refuses_an_erased_or_deleted_resource_peer(pool: PgPool) {
+    let app = blob_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let erased = ingest(&app, &owner, own_context).await;
+    let deleted = ingest(&app, &owner, own_context).await;
+    let blob = commit_blob(&app, &owner, own_context).await;
 
     erase(&app, erased).await;
     delete(&app, &owner, deleted).await;
@@ -1046,16 +1114,11 @@ async fn blob_relate_refuses_an_erased_or_deleted_resource_peer(pool: PgPool) {
             );
         }
     }
-    let edges: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM kb_edges \
-          WHERE (source_table = 'kb_blobs' AND source_id = $1) \
-             OR (target_table = 'kb_blobs' AND target_id = $1)",
-    )
-    .bind(blob)
-    .fetch_one(&app.pool)
-    .await
-    .expect("edge count");
-    assert_eq!(edges, 0, "no relation landed on a dead peer");
+    assert_eq!(
+        blob_edges(&app.pool, blob).await,
+        0,
+        "no relation landed on a dead peer"
+    );
 }
 
 // ── WITNESS: single reassign — owner of a husk 410, everyone else 403, nothing moves ─────────
@@ -1208,16 +1271,18 @@ async fn team_with(pool: &PgPool, members: &[(Uuid, &str)]) -> Uuid {
     team
 }
 
-/// `team_scoped_owned` (the bulk run's scope) filters the CONTEXT's liveness but not the
-/// resource's, so a departing member's tombstone and husk ARE enumerated. The liveness floor in the
-/// run's transaction skips each: the run answers `200`, moves the live resource, leaves the dead
-/// ones with their owner, and returns only the moved id. (`BulkReassignAck` has no slot to count a
-/// skip; the skip is visible as the id's absence.)
+/// A departing member's tombstone and husk are kept out of the bulk run twice over:
+/// `team_scoped_owned` (the run's scope) enumerates live resources only, and the liveness floor in
+/// the run's transaction skips one that died after the scope read. The run answers `200`, moves
+/// the live resource, leaves the dead ones with their owner, and returns only the moved id.
+/// (`BulkReassignAck` has no slot to count a skip; the skip is visible as the id's absence.)
 ///
-/// FAILS IF a dead resource is moved, or fails the whole run. The bites: in
-/// `reassign_service::reassign_team_resources`, turn the floor's refusal arm into
-/// `return Err(..)` (the run answers `403`/`410` and nothing moves), or delete the floor call (the
-/// husk and the tombstone move to the recipient).
+/// FAILS IF a dead resource is moved, or fails the whole run. Each layer alone holds this test, so
+/// the bite takes both: drop `JOIN kb_resources r ON r.id = h.resource_id AND r.is_active` from
+/// `team_scoped_owned` AND, in `reassign_service::reassign_team_resources`, turn the floor's
+/// refusal arm into `return Err(..)` (the run answers `403`/`410` and nothing moves) or delete the
+/// floor call (the husk and the tombstone move to the recipient). The scope half alone is bitten
+/// by `remove_member_and_team_reassign_leave_out_a_husk_and_a_tombstone`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn team_reassign_skips_an_erased_and_a_deleted_resource(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -1362,4 +1427,362 @@ async fn a_system_admin_is_refused_on_a_dead_resource(pool: PgPool) {
         );
         assert_ne!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
     }
+}
+
+// ── WITNESS: an edge assert racing the act into its TARGET waits, then answers 404 ────────────
+
+/// Live, unfolded `source → target` edges.
+async fn live_edges(pool: &PgPool, source: Uuid, target: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_edges \
+          WHERE source_table = 'kb_resources' AND source_id = $1 \
+            AND target_table = 'kb_resources' AND target_id = $2 \
+            AND NOT is_folded",
+    )
+    .bind(source)
+    .bind(target)
+    .fetch_one(pool)
+    .await
+    .expect("edge count")
+}
+
+/// The owner of a live source S asserts S → R while the act holds R. The target clause
+/// (`check_endpoint_readable_in_tx`) locks R `FOR KEY SHARE` before it reads, so the assert waits
+/// on the act; once the act commits, the read sees the husk and refuses `404` — the target floor's
+/// answer, never `410` — and no edge lands on R.
+///
+/// FAILS IF the target check is not serialized against the act. The bite: delete the
+/// `write_floor::lock_resource_key_share(..)` call in `check_endpoint_readable_in_tx`. The read
+/// then admits R on the pre-act snapshot, and the edge write reaches
+/// `_project_relationship_asserted`'s `_resource_write_guard` on R, which waits on the act and
+/// then RAISEs: the assert answers `500`, not `404`. (No edge lands either way: the guard is the
+/// substrate's backstop; the lock is what turns it into the door's own refusal.)
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_edge_assert_racing_the_act_into_its_target_answers_404_and_lands_nothing(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let source = ingest(&app, &owner, own_context).await;
+    let target = ingest(&app, &owner, own_context).await;
+
+    let act = hold_the_act(&app, target).await;
+    let (status, body) = raced_by_the_act(
+        &app,
+        act,
+        &owner,
+        Method::POST,
+        "/api/relationships".to_string(),
+        json!({
+            "source": source,
+            "target": target,
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "raced-into-a-husk",
+            "weight": 1.0,
+        }),
+    )
+    .await;
+
+    assert!(
+        is_erased(&app.pool, target).await,
+        "precondition: the act committed an erasure"
+    );
+    assert_eq!(
+        status, 404,
+        "the target read, after the act, refuses the husk; body: {body}"
+    );
+    assert_ne!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+    assert_eq!(
+        live_edges(&app.pool, source, target).await,
+        0,
+        "no live edge landed on the husk"
+    );
+}
+
+// ── WITNESS: a blob relate racing the act onto its PEER waits, then answers 404 ───────────────
+
+/// The owner relates a blob to R while the act holds R. The peer check and the relation write
+/// share one transaction, and the peer is locked `FOR KEY SHARE` before it is read, so the relate
+/// waits on the act; once the act commits, the read refuses the husk `404` ("relation peer not
+/// found or not readable") and no edge touches the blob.
+///
+/// FAILS IF the peer check is not serialized against the act. The bite: delete the
+/// `crate::backend::write_floor::lock_resource_key_share(..)` call in
+/// `blob_service::check_peer_readable`. The read then admits R on the pre-act snapshot, and the
+/// relation write reaches `_project_relationship_asserted`'s `_resource_write_guard` on R, which
+/// waits on the act and then RAISEs: the relate answers `500`, not `404`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_blob_relate_racing_the_act_onto_its_peer_answers_404_and_lands_nothing(pool: PgPool) {
+    let app = blob_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let peer = ingest(&app, &owner, own_context).await;
+    let blob = commit_blob(&app, &owner, own_context).await;
+
+    let act = hold_the_act(&app, peer).await;
+    let (status, body) = raced_by_the_act(
+        &app,
+        act,
+        &owner,
+        Method::POST,
+        format!("/api/blobs/{blob}/relations"),
+        json!({
+            "direction": "blob_as_source",
+            "peer_table": "kb_resources",
+            "peer_id": peer,
+            "edge_kind": "express",
+            "polarity": "forward",
+            "label": "raced-husk-peer",
+            "weight": 1.0,
+        }),
+    )
+    .await;
+
+    assert!(
+        is_erased(&app.pool, peer).await,
+        "precondition: the act committed an erasure"
+    );
+    assert_eq!(
+        status, 404,
+        "the peer read, after the act, refuses the husk; body: {body}"
+    );
+    assert_ne!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+    assert_eq!(
+        blob_edges(&app.pool, blob).await,
+        0,
+        "no relation landed on the husk"
+    );
+}
+
+// ── WITNESS: the owner's grant racing the act waits, then answers 410 and lands no row ────────
+
+/// Grant rows naming `principal` on `subject`.
+async fn grant_rows(pool: &PgPool, subject: Uuid, principal: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_access_grants \
+          WHERE subject_table = 'kb_resources' AND subject_id = $1 \
+            AND principal_table = 'kb_profiles' AND principal_id = $2",
+    )
+    .bind(subject)
+    .bind(principal)
+    .fetch_one(pool)
+    .await
+    .expect("grant row count")
+}
+
+/// The owner grants read on R while the act holds R. The authority gate runs on the pool and sees
+/// R live (the act has not committed); the door's subject floor then locks R `FOR KEY SHARE` at the
+/// head of the grant write's transaction and waits on the act. Once the act commits, the floor
+/// sees the husk and classifies it: `410 RESOURCE_ERASED` to its owner. No grant row lands.
+///
+/// FAILS IF the grant write is not serialized against the act. The bite: delete the
+/// `grant_subject_floor_in_tx(&mut tx, caller, subject).await?;` call in
+/// `access_service::grant_capability` — nothing in the grant write touches R's row, so the request
+/// answers `200` inside the 2-second window and its row survives the act.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_grant_racing_the_act_answers_its_owner_410_and_lands_no_row(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+    let grantee = Uuid::now_v7();
+
+    let act = hold_the_act(&app, resource).await;
+    let (status, body) = raced_by_the_act(
+        &app,
+        act,
+        &owner,
+        Method::POST,
+        format!("/api/resources/{resource}/grants"),
+        json!({
+            "principal_table": "kb_profiles",
+            "principal_id": grantee,
+            "can_read": true,
+            "can_write": false,
+            "can_delete": false,
+            "can_grant": false,
+        }),
+    )
+    .await;
+
+    assert!(
+        is_erased(&app.pool, resource).await,
+        "precondition: the act committed an erasure"
+    );
+    assert_eq!(
+        status, 410,
+        "the subject floor, after the act, refuses the husk; body: {body}"
+    );
+    assert_eq!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+    assert_eq!(
+        grant_rows(&app.pool, resource, grantee).await,
+        0,
+        "no grant row landed on the husk"
+    );
+}
+
+// ── WITNESS: the owner administers no grant on a dead resource ────────────────────────────────
+
+/// `who` revokes `principal`'s grant on `resource` through `DELETE /api/resources/{id}/grants`.
+async fn revoke_as(
+    app: &common::TestApp,
+    who: &Caller,
+    resource: Uuid,
+    principal: Uuid,
+) -> (u16, Value) {
+    call(
+        app,
+        who,
+        Method::DELETE,
+        format!("/api/resources/{resource}/grants"),
+        Some(json!({
+            "principal_table": "kb_profiles",
+            "principal_id": principal,
+        })),
+    )
+    .await
+}
+
+/// The owner's derived `grant` arm (`derived_access_profile`, migration `20261001000010`) answers a
+/// live resource only, so the owner may not administer grants on a tombstone or a husk:
+///
+/// * revoke on a live resource: admitted (`200`) — the precondition that the owner arm is live;
+/// * revoke on a tombstone: `403`, never `410`;
+/// * revoke on a husk the owner holds: `410 RESOURCE_ERASED`;
+/// * an all-false grant on a tombstone: `403`. Attenuation has nothing to check on an all-false
+///   request, so only the authority arm (or the subject floor) can refuse it.
+///
+/// FAILS IF the owner is admitted on a dead resource. Two layers hold each refusal — the derived
+/// arm (authority) and the door's in-transaction subject floor — so the bite takes both: revert
+/// the `AND EXISTS (SELECT 1 FROM kb_resources r WHERE r.id = p_subject_id AND r.is_active)`
+/// conjunct on the `grant` arm in `20261001000010` AND delete the `grant_subject_floor_in_tx(..)`
+/// calls in `access_service`: the tombstone revoke and the all-false grant then answer `200`. The
+/// arm alone is bitten by `can_subject_liveness_test.rs`'s
+/// `the_owners_derived_grant_and_delete_close_on_a_tombstone`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_owner_administers_no_grant_on_a_dead_resource(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let live = ingest(&app, &owner, own_context).await;
+    let tombstone = ingest(&app, &owner, own_context).await;
+    let husk = ingest(&app, &owner, own_context).await;
+    let principal = Uuid::now_v7();
+
+    let (status, body) = revoke_as(&app, &owner, live, principal).await;
+    assert_eq!(
+        status, 200,
+        "precondition: the owner administers grants on a live resource; body: {body}"
+    );
+
+    delete(&app, &owner, tombstone).await;
+    erase(&app, husk).await;
+
+    let (status, body) = revoke_as(&app, &owner, tombstone, principal).await;
+    assert_eq!(status, 403, "owner revoke on a tombstone; body: {body}");
+    assert_ne!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+
+    let (status, body) = revoke_as(&app, &owner, husk, principal).await;
+    assert_eq!(status, 410, "owner revoke on their husk; body: {body}");
+    assert_eq!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+
+    let (status, body) = call(
+        &app,
+        &owner,
+        Method::POST,
+        format!("/api/resources/{tombstone}/grants"),
+        Some(json!({
+            "principal_table": "kb_profiles",
+            "principal_id": principal,
+            "can_read": false,
+            "can_write": false,
+            "can_delete": false,
+            "can_grant": false,
+        })),
+    )
+    .await;
+    assert_eq!(
+        status, 403,
+        "owner all-false grant on a tombstone; body: {body}"
+    );
+    assert_ne!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+    assert_eq!(
+        grant_rows(&app.pool, tombstone, principal).await,
+        0,
+        "no grant row landed on the tombstone"
+    );
+}
+
+// ── WITNESS: the residual warning and the team handoff count live resources only ──────────────
+
+/// `remove_member`'s residual warning and the team handoff read one scope,
+/// `reassign_service::team_scoped_owned`, which enumerates live resources only: a departing
+/// member's husk and tombstone are nothing to hand off. The member owns three resources in a
+/// context shared to the team — one live, one erased, one deleted. Removing them answers a
+/// residual of exactly the live one; the handoff then moves exactly the live one.
+///
+/// FAILS IF the scope enumerates a dead resource. The bite: drop
+/// `JOIN kb_resources r ON r.id = h.resource_id AND r.is_active` from `team_scoped_owned` — the
+/// residual then counts `3`. (The handoff's `resource_ids` stays `[live]` under that bite: its
+/// liveness floor skips the dead ones, see `team_reassign_skips_an_erased_and_a_deleted_resource`.)
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn remove_member_and_team_reassign_leave_out_a_husk_and_a_tombstone(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (admin, _) = caller(&app.pool, "admin").await;
+    let (from, from_context) = caller(&app.pool, "departing").await;
+    let (to, _) = caller(&app.pool, "recipient").await;
+    let team = team_with(
+        &app.pool,
+        &[
+            (admin.profile, "owner"),
+            (from.profile, "member"),
+            (to.profile, "member"),
+        ],
+    )
+    .await;
+    sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+        .bind(from_context)
+        .bind(team)
+        .execute(&app.pool)
+        .await
+        .expect("share the departing member's context to the team");
+
+    let live = ingest(&app, &from, from_context).await;
+    let husk = ingest(&app, &from, from_context).await;
+    let tombstone = ingest(&app, &from, from_context).await;
+    erase(&app, husk).await;
+    delete(&app, &from, tombstone).await;
+
+    let (status, body) = call(
+        &app,
+        &admin,
+        Method::DELETE,
+        format!("/api/teams/{team}/members/{}", from.profile),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "the admin removes the member; body: {body}");
+    assert_eq!(
+        body["residual_owned"]["count"], 1,
+        "the residual counts the live resource only; body: {body}"
+    );
+    let contexts = body["residual_owned"]["contexts"]
+        .as_array()
+        .expect("residual contexts");
+    assert_eq!(contexts.len(), 1, "one shared context; body: {body}");
+    assert_eq!(
+        contexts[0]["count"], 1,
+        "its count is the live resource only; body: {body}"
+    );
+
+    let (status, body) = call(
+        &app,
+        &admin,
+        Method::POST,
+        format!("/api/teams/{team}/reassign"),
+        Some(json!({ "from_profile_id": from.profile, "to_profile_id": to.profile })),
+    )
+    .await;
+    assert_eq!(status, 200, "the handoff completes; body: {body}");
+    assert_eq!(
+        body["resource_ids"],
+        json!([live]),
+        "the handoff moves the live resource only; body: {body}"
+    );
 }

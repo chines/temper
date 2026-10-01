@@ -32,6 +32,10 @@
 //! NULL) is denied by both floors and classified `Forbidden`: `resource_husk_held_by` reads
 //! `erased_at`, never `is_active`.
 //!
+//! **A check that is not a write floor takes the same lock.** A write that names a resource it does
+//! not modify (an edge's target, a blob relation's peer, a grant's subject) still must not land on
+//! a husk; `lock_resource_key_share` takes the lock alone, ahead of that write's own check.
+//!
 //! The connection is the caller's transaction (`&mut tx`), the shape every `writes::*_in_tx` takes.
 //! Called on a bare pool connection it still answers, but the lock is released at once and the
 //! floor is a pre-check again — the gap this module exists to close.
@@ -79,6 +83,21 @@ pub async fn liveness_floor_in_tx(
         Some(true) => Ok(()),
         Some(false) | None => Err(erased_or_forbidden(conn, profile, resource).await),
     }
+}
+
+/// The lock alone, for a write whose own check on the resource is not a write floor: an edge's
+/// target read clause, a blob relation's resource peer, a grant door's subject. `FOR KEY SHARE` on
+/// the `kb_resources` row in the caller's transaction, held to its end, so the erasure act (which
+/// takes `FOR UPDATE` on the row) cannot commit between that check and the write. The caller runs
+/// its check as the NEXT statement on the same connection: a lock that waited behind the act
+/// returns only after the act committed, so that statement's fresh snapshot sees the husk (this
+/// module's two-statement argument). An unknown id locks nothing and is not an error; the
+/// caller's check answers it.
+pub(crate) async fn lock_resource_key_share(
+    conn: &mut PgConnection,
+    resource: ResourceId,
+) -> Result<(), TemperError> {
+    lock_resource_row(conn, resource).await.map(|_| ())
 }
 
 /// `FOR KEY SHARE` on the `kb_resources` row, returning its `is_active` — `None` when no row has
