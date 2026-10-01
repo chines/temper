@@ -593,6 +593,23 @@ pub fn remove_resource_file_for_row(vault_root: &Path, row: &ResourceView) -> Re
     Ok(())
 }
 
+/// What [`remove_resource_files_by_id`] did: the files it removed, and every directory it could
+/// not read or file it could not remove, each continued past rather than ending the sweep.
+#[derive(Debug, Default)]
+pub struct ByIdRemoval {
+    /// How many projection files of the resource were removed.
+    pub removed: usize,
+    /// One entry per failure, naming the path and why.
+    pub failures: Vec<String>,
+}
+
+impl ByIdRemoval {
+    /// The failures as one error, `None` when the sweep met none.
+    pub fn error(&self) -> Option<TemperError> {
+        (!self.failures.is_empty()).then(|| TemperError::Vault(self.failures.join("; ")))
+    }
+}
+
 /// Remove every projection file of resource `id`, found by the uuid its stem carries.
 ///
 /// For the one caller that has the id but no row: a resource the server reported ERASED
@@ -600,33 +617,41 @@ pub fn remove_resource_file_for_row(vault_root: &Path, row: &ResourceView) -> Re
 /// [`remove_resource_file_for_row`] builds the path from are not in hand. The stem is, by
 /// construction, the decorated ref ending in the uuid (`projection_stem`), so the file is
 /// found by that and nothing else. Walks the same `<owner>/<context>/<doctype>/*.md` shape
-/// [`prune_context`] walks, skipping hidden directories. Returns how many files were removed;
-/// an absent vault root is zero, not an error.
+/// [`prune_context`] walks, skipping hidden directories. An absent vault root removes nothing
+/// and is not a failure.
+///
+/// **A failure on one directory or file does not end the sweep.** The resource's file may sit
+/// under any owner, so stopping at the first unreadable directory would leave a later match on
+/// disk; each failure is recorded in [`ByIdRemoval::failures`] and the walk continues. The
+/// return is therefore the count AND the failures, not a `Result` that would drop the count.
 pub fn remove_resource_files_by_id(
     vault_root: &Path,
     id: temper_core::types::ids::ResourceId,
-) -> Result<usize> {
+) -> ByIdRemoval {
     let bare = id.to_string();
     let decorated_tail = format!("-{bare}");
-    let mut removed = 0usize;
-    let owner_iter = match std::fs::read_dir(vault_root) {
+    let mut out = ByIdRemoval::default();
+    let owners = match std::fs::read_dir(vault_root) {
         Ok(iter) => iter,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(e) => return Err(e.into()),
-    };
-    for owner_entry in owner_iter.flatten() {
-        if !is_visible_dir(&owner_entry) {
-            continue;
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return out,
+        Err(e) => {
+            out.failures.push(format!("{}: {e}", vault_root.display()));
+            return out;
         }
-        for context_entry in std::fs::read_dir(owner_entry.path())?.flatten() {
-            if !is_visible_dir(&context_entry) {
-                continue;
-            }
-            for doctype_entry in std::fs::read_dir(context_entry.path())?.flatten() {
-                if !is_visible_dir(&doctype_entry) {
-                    continue;
-                }
-                for file_entry in std::fs::read_dir(doctype_entry.path())?.flatten() {
+    };
+    let owners = collect_entries(vault_root, owners, &mut out.failures);
+    for owner_entry in owners.into_iter().filter(is_visible_dir) {
+        for context_entry in visible_subdirs(&owner_entry.path(), &mut out.failures) {
+            for doctype_entry in visible_subdirs(&context_entry.path(), &mut out.failures) {
+                let doctype_dir = doctype_entry.path();
+                let files = match std::fs::read_dir(&doctype_dir) {
+                    Ok(iter) => collect_entries(&doctype_dir, iter, &mut out.failures),
+                    Err(e) => {
+                        out.failures.push(format!("{}: {e}", doctype_dir.display()));
+                        continue;
+                    }
+                };
+                for file_entry in files {
                     let path = file_entry.path();
                     if path.extension().and_then(|e| e.to_str()) != Some("md") {
                         continue;
@@ -635,14 +660,48 @@ pub fn remove_resource_files_by_id(
                         continue;
                     };
                     if stem == bare || stem.ends_with(&decorated_tail) {
-                        std::fs::remove_file(&path)?;
-                        removed += 1;
+                        match std::fs::remove_file(&path) {
+                            Ok(()) => out.removed += 1,
+                            Err(e) => out.failures.push(format!("{}: {e}", path.display())),
+                        }
                     }
                 }
             }
         }
     }
-    Ok(removed)
+    out
+}
+
+/// The visible subdirectories of `dir`; an unreadable `dir` is recorded in `failures` and
+/// yields none, so the caller's walk continues with its siblings.
+fn visible_subdirs(dir: &Path, failures: &mut Vec<String>) -> Vec<std::fs::DirEntry> {
+    match std::fs::read_dir(dir) {
+        Ok(iter) => collect_entries(dir, iter, failures)
+            .into_iter()
+            .filter(is_visible_dir)
+            .collect(),
+        Err(e) => {
+            failures.push(format!("{}: {e}", dir.display()));
+            Vec::new()
+        }
+    }
+}
+
+/// Every readable entry of `dir`'s listing; an entry that fails to read is recorded in
+/// `failures` rather than dropped silently.
+fn collect_entries(
+    dir: &Path,
+    iter: std::fs::ReadDir,
+    failures: &mut Vec<String>,
+) -> Vec<std::fs::DirEntry> {
+    let mut entries = Vec::new();
+    for entry in iter {
+        match entry {
+            Ok(entry) => entries.push(entry),
+            Err(e) => failures.push(format!("{}: {e}", dir.display())),
+        }
+    }
+    entries
 }
 
 /// A directory entry that is a directory and not hidden (`.temper` and friends).
@@ -1093,11 +1152,63 @@ mod tests {
                 .unwrap()
                 .unwrap();
 
-        let removed = remove_resource_files_by_id(dir.path(), erased.id).unwrap();
+        let removal = remove_resource_files_by_id(dir.path(), erased.id);
 
-        assert_eq!(removed, 1);
+        assert!(removal.failures.is_empty(), "{:?}", removal.failures);
+        assert_eq!(removal.removed, 1);
         assert!(!gone.exists(), "the erased resource's file survived");
         assert!(kept.exists(), "a different resource's file was removed");
+    }
+
+    /// An unreadable directory does not end the sweep: every one is recorded, and the erased
+    /// resource's file is still removed wherever it sits. FAILS IF a `read_dir` failure returns
+    /// early (only one of the two unreadable owners is recorded, and — when it is walked first —
+    /// the file survives).
+    #[cfg(unix)]
+    #[test]
+    fn the_by_id_remover_continues_past_an_unreadable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let erased = row_titled("An Erased Resource", Uuid::now_v7());
+        let gone = write_resource_file_from_parts(dir.path(), &erased, &body_only("# e\n"), None)
+            .unwrap()
+            .unwrap();
+        let locked: Vec<PathBuf> = ["@locked-a", "@locked-b"]
+            .iter()
+            .map(|name| dir.path().join(name))
+            .collect();
+        for path in &locked {
+            std::fs::create_dir(path).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        if std::fs::read_dir(&locked[0]).is_ok() {
+            // Root reads a mode-000 directory; the unreadable state this test needs cannot be
+            // made, so there is nothing to witness here.
+            for path in &locked {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            eprintln!("skipped: a mode-000 directory is readable to this user (root?)");
+            return;
+        }
+
+        let removal = remove_resource_files_by_id(dir.path(), erased.id);
+
+        for path in &locked {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(removal.removed, 1, "{:?}", removal.failures);
+        assert!(!gone.exists(), "the erased resource's file survived");
+        assert_eq!(
+            removal.failures.len(),
+            2,
+            "both unreadable owners are recorded: {:?}",
+            removal.failures
+        );
+        assert!(
+            removal.error().is_some(),
+            "the failures surface as an error"
+        );
     }
 
     /// `@me` is a sigil in the layout AND a possible handle, and the prune must not

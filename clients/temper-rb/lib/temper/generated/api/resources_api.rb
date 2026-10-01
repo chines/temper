@@ -870,7 +870,7 @@ module Temper::Generated
     end
 
     # Read one content block by address (the three-state resolution)
-    # The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
+    # The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. A home resource that was erased answers `410` under the error envelope (`RESOURCE_ERASED`) to a caller who held it, and `404` to everyone else. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
     # @param id [String] Resource ID
     # @param block_id [String] Content block ID
     # @param [Hash] opts the optional parameters
@@ -882,7 +882,7 @@ module Temper::Generated
     end
 
     # Read one content block by address (the three-state resolution)
-    # The defined-dangling-state design: &#x60;200&#x60; the block is live (identity, chunk identities, provenance), &#x60;410 Gone&#x60; the block is folded (the envelope carries its attribution history and its gated successor dispositions), &#x60;404&#x60; absent. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
+    # The defined-dangling-state design: &#x60;200&#x60; the block is live (identity, chunk identities, provenance), &#x60;410 Gone&#x60; the block is folded (the envelope carries its attribution history and its gated successor dispositions), &#x60;404&#x60; absent. A home resource that was erased answers &#x60;410&#x60; under the error envelope (&#x60;RESOURCE_ERASED&#x60;) to a caller who held it, and &#x60;404&#x60; to everyone else. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
     # @param id [String] Resource ID
     # @param block_id [String] Content block ID
     # @param [Hash] opts the optional parameters

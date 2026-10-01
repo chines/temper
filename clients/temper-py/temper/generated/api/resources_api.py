@@ -3677,7 +3677,7 @@ class ResourcesApi:
     ) -> BlockRead:
         """Read one content block by address (the three-state resolution)
 
-        The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
+        The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. A home resource that was erased answers `410` under the error envelope (`RESOURCE_ERASED`) to a caller who held it, and `404` to everyone else. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
 
         :param id: Resource ID (required)
         :type id: UUID
@@ -3755,7 +3755,7 @@ class ResourcesApi:
     ) -> ApiResponse[BlockRead]:
         """Read one content block by address (the three-state resolution)
 
-        The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
+        The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. A home resource that was erased answers `410` under the error envelope (`RESOURCE_ERASED`) to a caller who held it, and `404` to everyone else. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
 
         :param id: Resource ID (required)
         :type id: UUID
@@ -3833,7 +3833,7 @@ class ResourcesApi:
     ) -> RESTResponseType:
         """Read one content block by address (the three-state resolution)
 
-        The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
+        The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. A home resource that was erased answers `410` under the error envelope (`RESOURCE_ERASED`) to a caller who held it, and `404` to everyone else. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
 
         :param id: Resource ID (required)
         :type id: UUID

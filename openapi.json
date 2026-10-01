@@ -7649,7 +7649,7 @@
             }
           },
           "404": {
-            "description": "Context not found"
+            "description": "Context not found; or a one-shot idempotent replay names a resource that has since been deleted (or erased, to a caller who never held it)"
           },
           "410": {
             "description": "An idempotent replay names a resource that has since been erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404 (one-shot) or 403 (segmented)",
@@ -10178,7 +10178,7 @@
             }
           },
           "404": {
-            "description": "Context not visible to profile",
+            "description": "Context not visible to profile; or an idempotent replay names a resource that has since been deleted (or erased, to a caller who never held it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11121,7 +11121,7 @@
           "Resources"
         ],
         "summary": "Read one content block by address (the three-state resolution)",
-        "description": "The defined-dangling-state design: `200` the block is live (identity, chunk identities,\nprovenance), `410 Gone` the block is folded (the envelope carries its attribution history\nand its gated successor dispositions), `404` absent. No redirect — successor names ride as\ndata inside the gated envelope, never as a Location the caller may not be authorized to\nfollow.",
+        "description": "The defined-dangling-state design: `200` the block is live (identity, chunk identities,\nprovenance), `410 Gone` the block is folded (the envelope carries its attribution history\nand its gated successor dispositions), `404` absent. A home resource that was erased\nanswers `410` under the error envelope (`RESOURCE_ERASED`) to a caller who held it, and\n`404` to everyone else. No redirect — successor names ride as\ndata inside the gated envelope, never as a Location the caller may not be authorized to\nfollow.",
         "operationId": "read_block",
         "parameters": [
           {
@@ -11167,7 +11167,7 @@
             }
           },
           "404": {
-            "description": "No such block (or not visible — indistinguishable, denying existence)",
+            "description": "No such block (or its home resource is not visible, or was erased and the caller never held it — indistinguishable, denying existence)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11177,7 +11177,7 @@
             }
           },
           "410": {
-            "description": "The block is folded: state envelope with disposition and successors",
+            "description": "The block is folded: state envelope with disposition and successors (body: BlockRead). Also answered when the block's home resource was erased (code RESOURCE_ERASED, body: ErrorBody) — only to a caller who held standing on that resource; everyone else gets 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -11799,7 +11799,7 @@
             "description": "Segmented ingest finalized"
           },
           "400": {
-            "description": "Landed block count or body hash mismatch"
+            "description": "The path id is not a UUID, or the request body is not syntactically valid JSON (the extractor's plain-text rejection). A landed block count or body hash mismatch is the 409, never a 400"
           },
           "403": {
             "description": "Caller cannot modify this resource"
@@ -12508,7 +12508,7 @@
             "description": "Resource has no home / not found"
           },
           "410": {
-            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "description": "The resource was erased (code RESOURCE_ERASED); answered to the owner (or an admin with reach) when they hold the erased resource; everyone else gets 403",
             "content": {
               "application/json": {
                 "schema": {

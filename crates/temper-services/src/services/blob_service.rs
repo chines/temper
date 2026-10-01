@@ -1008,7 +1008,9 @@ pub async fn relate_blob(
     // until the edge commits (see `check_peer_readable`). The blob gates above read only the blob
     // and its home, so they stay on the pool.
     let mut tx = pool.begin().await?;
-    check_peer_readable(&mut tx, caller, &peer).await?;
+    if let Err(refusal) = check_peer_readable(&mut tx, caller, &peer).await {
+        return Err(crate::backend::write_floor::rollback_with(tx, refusal).await);
+    }
 
     let home = match home_table {
         temper_substrate::payloads::AnchorTable::Contexts => {
@@ -1038,7 +1040,9 @@ pub async fn relate_blob(
         WirePolarity::Forward => temper_substrate::payloads::EdgePolarity::Forward,
         WirePolarity::Inverse => temper_substrate::payloads::EdgePolarity::Inverse,
     };
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, surface.marker())
+    // On the relation's own transaction, never the pool: the transaction already holds a pool
+    // connection, and a second acquire while it is open is how concurrent writers stall the pool.
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, surface.marker())
         .await
         .map_err(|e| ApiError::internal_scrubbed("blob emitter resolve failed", e))?;
     let label = (!req.label.is_empty()).then_some(req.label.as_str());

@@ -33,9 +33,15 @@ use temper_ingest::section::slice_sections;
 /// IS the substrate profile id — synthesis preserves profile ids verbatim (WS2), and the auth path
 /// (`check_can_modify`) already binds it directly as the substrate principal — so this is an existence
 /// check that returns the same id typed. Errors if no such profile exists.
-pub async fn resolve_profile(pool: &PgPool, prod_profile: Uuid) -> Result<ProfileId> {
+///
+/// Generic over the executor so a write door can run it on its own open transaction (`&mut *tx`)
+/// rather than checking out a second pool connection while the first is held.
+pub async fn resolve_profile(
+    executor: impl sqlx::PgExecutor<'_>,
+    prod_profile: Uuid,
+) -> Result<ProfileId> {
     let id = sqlx::query_scalar!("SELECT id FROM kb_profiles WHERE id = $1", prod_profile)
-        .fetch_one(pool)
+        .fetch_one(executor)
         .await
         .with_context(|| format!("profile {prod_profile} not found"))?;
     Ok(ProfileId::from(id))
@@ -49,7 +55,14 @@ pub async fn resolve_profile(pool: &PgPool, prod_profile: Uuid) -> Result<Profil
 /// `fetch_one`, so a missing emitter is a hard error — there is no lazy creation. A new marker
 /// therefore needs its entity provisioned (`profile_service`) *and* backfilled (a migration)
 /// before any caller can send it.
-pub async fn resolve_emitter(pool: &PgPool, profile: ProfileId, surface: &str) -> Result<EntityId> {
+///
+/// Generic over the executor, as [`resolve_profile`] is, so a write door resolves on its own
+/// transaction.
+pub async fn resolve_emitter(
+    executor: impl sqlx::PgExecutor<'_>,
+    profile: ProfileId,
+    surface: &str,
+) -> Result<EntityId> {
     let id = sqlx::query_scalar!(
         r#"SELECT e.id FROM kb_entities e
              JOIN kb_profiles p ON p.id = e.profile_id
@@ -57,7 +70,7 @@ pub async fn resolve_emitter(pool: &PgPool, profile: ProfileId, surface: &str) -
         profile.uuid(),
         surface,
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .with_context(|| format!("no emitter entity <handle>@{surface} for the resolved profile"))?;
     Ok(EntityId::from(id))

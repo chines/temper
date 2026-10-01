@@ -26,7 +26,7 @@ use temper_services::state::AppState;
         (status = 200, description = "Owner reassigned", body = ReassignAck),
         (status = 403, description = "Forbidden (not owner, or admin reach not satisfied)"),
         (status = 404, description = "Resource has no home / not found"),
-        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered to the owner (or an admin with reach) when they hold the erased resource; everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn reassign_resource(

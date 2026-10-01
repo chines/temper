@@ -1652,7 +1652,7 @@ pub fn delete(
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })
-    .map_err(|e| drop_projection_if_erased(&config.vault_root, e))?;
+    .map_err(|e| drop_projection_if_erased(&config.vault_root, id, e))?;
 
     let cmd = DeleteResource {
         resource: id,
@@ -1700,14 +1700,26 @@ pub fn delete(
 /// carries the id alone — no row — so the file is found by the uuid its stem carries
 /// ([`crate::projection::remove_resource_files_by_id`]); a removal failure is a warning beside
 /// the erasure, never a replacement for it.
-fn drop_projection_if_erased(vault_root: &std::path::Path, e: TemperError) -> TemperError {
+///
+/// The id the remover sweeps for is parsed from the server's sentence, so it is trusted only
+/// when it equals `addressed` — the id this command asked about. A `410` naming any other
+/// resource is not about this command's file: the error still passes through, the file stays.
+fn drop_projection_if_erased(
+    vault_root: &std::path::Path,
+    addressed: temper_core::types::ids::ResourceId,
+    e: TemperError,
+) -> TemperError {
     if let TemperError::ResourceErased(id) = &e {
-        match crate::projection::remove_resource_files_by_id(vault_root, *id) {
-            Ok(0) => {}
-            Ok(_) => output::warning("resource was erased: removed its local copy"),
-            Err(err) => output::warning(format!(
-                "resource was erased, but its local copy could not be removed: {err}"
-            )),
+        if *id == addressed {
+            let removal = crate::projection::remove_resource_files_by_id(vault_root, *id);
+            if removal.removed > 0 {
+                output::warning("resource was erased: removed its local copy");
+            }
+            if let Some(err) = removal.error() {
+                output::warning(format!(
+                    "resource was erased, but its local copy could not be fully removed: {err}"
+                ));
+            }
         }
     }
     e
@@ -2492,7 +2504,7 @@ fn resolve_update_target(
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })
-    .map_err(|e| drop_projection_if_erased(&config.vault_root, e))?;
+    .map_err(|e| drop_projection_if_erased(&config.vault_root, id, e))?;
     if let Some(tt) = params.type_to {
         let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
     }
@@ -2784,7 +2796,7 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })
-    .map_err(|e| drop_projection_if_erased(&config.vault_root, e))?;
+    .map_err(|e| drop_projection_if_erased(&config.vault_root, id, e))?;
 
     // Resolve --sources refs → provenance records. A ref that fails to parse is a hard error
     // (escalate, never a silent drop). clap guarantees the list is non-empty (`required = true`).
@@ -4771,5 +4783,58 @@ mod split_block_address_tests {
             split_block_address(&long, Some("019f0000-0000-7000-8000-000000000001")).unwrap();
         assert_eq!(r, long);
         assert!(b.is_some());
+    }
+}
+
+#[cfg(test)]
+mod erased_projection_tests {
+    use super::*;
+    use temper_core::types::ids::ResourceId;
+
+    /// A projection file for `id` under the `<owner>/<context>/<doctype>/` shape the by-id
+    /// remover walks, its stem the decorated ref ending in the uuid.
+    fn projection_file(root: &std::path::Path, id: ResourceId) -> std::path::PathBuf {
+        let dir = root.join("@me/home/research");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("a-title-{id}.md"));
+        std::fs::write(&path, "# body\n").unwrap();
+        path
+    }
+
+    /// An erasure the server reports for the addressed resource removes its projection, and the
+    /// error passes through. FAILS IF the erased arm stops removing.
+    #[test]
+    fn an_erasure_of_the_addressed_resource_removes_its_projection() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let id = ResourceId::from(uuid::Uuid::now_v7());
+        let file = projection_file(dir.path(), id);
+
+        let e = drop_projection_if_erased(dir.path(), id, TemperError::ResourceErased(id));
+
+        assert!(matches!(e, TemperError::ResourceErased(got) if got == id));
+        assert!(!file.exists(), "the erased resource's projection survived");
+    }
+
+    /// The id is parsed from the server's sentence; one that names a resource other than the
+    /// addressed one licenses no removal — that resource's file stays, and the error still passes
+    /// through. FAILS IF the remover sweeps for the reported id without comparing it to
+    /// `addressed` (the other resource's file is removed).
+    #[test]
+    fn an_erasure_naming_another_resource_removes_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let addressed = ResourceId::from(uuid::Uuid::now_v7());
+        let reported = ResourceId::from(uuid::Uuid::now_v7());
+        let reported_file = projection_file(dir.path(), reported);
+        let addressed_file = projection_file(dir.path(), addressed);
+
+        let e =
+            drop_projection_if_erased(dir.path(), addressed, TemperError::ResourceErased(reported));
+
+        assert!(matches!(e, TemperError::ResourceErased(got) if got == reported));
+        assert!(reported_file.exists(), "the reported id's file was removed");
+        assert!(
+            addressed_file.exists(),
+            "the addressed id's file was removed"
+        );
     }
 }

@@ -68,6 +68,26 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
 }
 
+/// Bridge an error raised inside a floored write transaction: a statement that lost a race
+/// (`write_floor::is_contention` — a deadlock `40P01` or serialization failure `40001`, found
+/// anywhere in the source chain) is `write_floor::contention_conflict`'s retryable `409`; anything
+/// else is [`api_err`]'s `500`. Narrower than `api_err` on purpose: `api_err` takes any `Display`
+/// (strings included) across the whole backend and cannot see a SQLSTATE; this takes a typed
+/// error and is used on the write transactions' lock-taking statements and commits, and as the
+/// fallback of the substrate write mappers ([`write_err`], [`conflict_if_unique_violation`],
+/// [`finalize_err`]).
+fn tx_err<E: Into<anyhow::Error>>(e: E) -> TemperError {
+    let e: anyhow::Error = e.into();
+    if e.chain().any(|cause| {
+        cause
+            .downcast_ref::<sqlx::Error>()
+            .is_some_and(write_floor::is_contention)
+    }) {
+        return write_floor::contention_conflict();
+    }
+    api_err(e)
+}
+
 /// Map a substrate write error, TYPING the addressable refusals before the generic
 /// Display bridge: a data-artifact refusal carries its own words (400 under
 /// `DATA_ARTIFACT_REFUSAL_CODE` — the wrapper's vocabulary, not the 500 class), a folded
@@ -84,7 +104,7 @@ fn write_err(e: anyhow::Error) -> TemperError {
         }
         None => match e.downcast_ref::<writes::PropertyRetractError>() {
             Some(_) => TemperError::NotFound(e.to_string()),
-            None => api_err(e),
+            None => tx_err(e),
         },
     }
 }
@@ -807,6 +827,65 @@ impl DbBackend {
         write_floor::modify_floor_in_tx(&mut conn, self.profile_id, resource).await
     }
 
+    /// Open a write transaction with the modify floor ([`write_floor::modify_floor_in_tx`]) at its
+    /// head — the shape every floored resource door opens with. A refusal rolls the transaction
+    /// back explicitly ([`write_floor::rollback_with`]) before it is returned, so the floor's row
+    /// lock is released before the door answers. Admitted, the transaction is the caller's, with
+    /// the floor's `FOR KEY SHARE` held until it commits.
+    ///
+    /// **Nothing in the transaction may use `self.pool`.** The transaction holds one pool
+    /// connection; a statement on the pool while it is open waits for a second, and a pool of
+    /// `max_connections` concurrent writers each holding one and waiting for another stalls
+    /// until the acquire times out. Every lookup a door makes after its floor runs on `&mut *tx`.
+    async fn begin_floored(
+        &self,
+        resource: ResourceId,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, TemperError> {
+        let mut tx = self.pool.begin().await.map_err(tx_err)?;
+        match write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await {
+            Ok(()) => Ok(tx),
+            Err(refusal) => Err(write_floor::rollback_with(tx, refusal).await),
+        }
+    }
+
+    /// Open an edge-mutation transaction gated at its head: [`Self::check_edge_mutable`] (the
+    /// edge's source floor, container-write on its home, its target readable), then the
+    /// correlation-integrity check on the act's invocation, both on the transaction — the order
+    /// the retype, reweight, fold and facet-retract doors gate in. A refusal of either rolls the
+    /// transaction back explicitly ([`write_floor::rollback_with`]) before it is returned.
+    async fn begin_edge_mutation(
+        &self,
+        edge: uuid::Uuid,
+        invocation: Option<InvocationId>,
+    ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, TemperError> {
+        let mut tx = self.pool.begin().await.map_err(tx_err)?;
+        let gated = match self.check_edge_mutable(&mut tx, edge).await {
+            Ok(()) => self.check_act_invocation_on(&mut *tx, invocation).await,
+            Err(refusal) => Err(refusal),
+        };
+        match gated {
+            Ok(()) => Ok(tx),
+            Err(refusal) => Err(write_floor::rollback_with(tx, refusal).await),
+        }
+    }
+
+    /// The acting profile and its `<handle>@<surface>` emitter, resolved on the door's own write
+    /// transaction (never the pool — see [`Self::begin_floored`]). Every door resolves these only
+    /// AFTER its floor admits: a principal the floor refuses (a read-only machine client has no
+    /// emitter) must get the floor's `403`/`410`, not a `500`.
+    async fn resolve_actor_in_tx(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        surface: Surface,
+    ) -> Result<EntityId, TemperError> {
+        let owner = writes::resolve_profile(&mut *conn, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        writes::resolve_emitter(&mut *conn, owner, surface.marker())
+            .await
+            .map_err(api_err)
+    }
+
     /// The landed (non-folded) segment set for a resource, ordered by `seq`, plus the resource's
     /// live `body_hash` — the whole [`BlocksResponse`] every segmented read returns.
     ///
@@ -887,8 +966,7 @@ impl DbBackend {
         source_uri: &str,
         source_hash: Option<&str>,
     ) -> Result<(), TemperError> {
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await?;
+        let mut tx = self.begin_floored(resource).await?;
         writes::upsert_ingestion_record_in_tx(
             &mut tx,
             writes::IngestionRecord {
@@ -901,8 +979,8 @@ impl DbBackend {
             },
         )
         .await
-        .map_err(api_err)?;
-        tx.commit().await.map_err(api_err)
+        .map_err(tx_err)?;
+        tx.commit().await.map_err(tx_err)
     }
 
     /// Auth-before-writes gate for authoring INTO a cognitive map: the acting profile must hold an
@@ -1370,14 +1448,16 @@ impl DbBackend {
         // cannot be erased or tombstoned between the check and the edge. Its deny is classified:
         // 410 to a holder of an erased source, 403 to everyone else — the same bare refusal for an
         // absent source and an unauthorized one, so the order's oracle argument is unchanged.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, ResourceId::from(edge.src))
-            .await?;
+        let mut tx = self.begin_floored(ResourceId::from(edge.src)).await?;
         // Clauses 2 and 3 and the write, on the same transaction.
-        let edge_id = self
+        let edge_id = match self
             .assert_edge_from_source_home_in_tx(&mut tx, edge, act_ctx)
-            .await?;
-        tx.commit().await.map_err(api_err)?;
+            .await
+        {
+            Ok(edge_id) => edge_id,
+            Err(refusal) => return Err(write_floor::rollback_with(tx, refusal).await),
+        };
+        tx.commit().await.map_err(tx_err)?;
         Ok(edge_id)
     }
 
@@ -1468,7 +1548,7 @@ impl DbBackend {
                 act_ctx,
             )
             .await
-            .map_err(api_err)?,
+            .map_err(tx_err)?,
             // Context-homed, resource target: the incumbent fire call, unchanged.
             (false, RelationshipTarget::Resource) => writes::assert_relationship_in_tx(
                 &mut *conn,
@@ -1485,7 +1565,7 @@ impl DbBackend {
                 act_ctx,
             )
             .await
-            .map_err(api_err)?,
+            .map_err(tx_err)?,
             // Context-homed, blob target: the same anchored fire path `blob relate` uses
             // (one fire path for every endpoint pairing), homed on the SOURCE's home.
             (false, RelationshipTarget::Blob) => writes::assert_anchored_edge_in_tx(
@@ -1503,7 +1583,7 @@ impl DbBackend {
                 act_ctx,
             )
             .await
-            .map_err(api_err)?,
+            .map_err(tx_err)?,
         };
         Ok(EdgeId::from(edge.uuid()))
     }
@@ -1550,7 +1630,7 @@ impl DbBackend {
                 act_ctx.clone(),
             )
             .await
-            .map_err(api_err)?;
+            .map_err(tx_err)?;
         }
         Ok(())
     }
@@ -2173,6 +2253,17 @@ impl DbBackend {
         &self,
         invocation: Option<InvocationId>,
     ) -> Result<(), TemperError> {
+        self.check_act_invocation_on(&self.pool, invocation).await
+    }
+
+    /// [`Self::check_act_invocation`] on a caller-supplied executor: the write transaction a door
+    /// already holds (`&mut *tx`), so a door whose gate order puts this check after its floor does
+    /// not check out a second pool connection while its transaction holds the first.
+    async fn check_act_invocation_on(
+        &self,
+        executor: impl sqlx::PgExecutor<'_>,
+        invocation: Option<InvocationId>,
+    ) -> Result<(), TemperError> {
         let Some(inv) = invocation else {
             return Ok(());
         };
@@ -2184,7 +2275,7 @@ impl DbBackend {
             inv.uuid(),
             *self.profile_id,
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(executor)
         .await
         .map_err(api_err)?
         .ok_or_else(|| TemperError::NotFound(format!("invocation {} not found", inv.uuid())))?;
@@ -2692,8 +2783,24 @@ impl Backend for DbBackend {
         // One transaction for the update AND its goal-edge patch, floored at its head (resource
         // erasure spec D13): the floor's `FOR KEY SHARE` holds until commit, so the write either
         // lands before an erasure or is refused after it — never separated from its check.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, ResourceId::from(new_id)).await?;
+        let mut tx = self.begin_floored(ResourceId::from(new_id)).await?;
+        // LOCK ORDER (the rule for every floored write): lock every `kb_resources` row the write
+        // touches up front, before any other row lock. The source is locked by the floor above; a
+        // goal-set also touches the GOAL's row, whose `FOR KEY SHARE` the edge's target clause
+        // (`check_endpoint_readable_in_tx`) takes — so it is taken HERE, before the update and the
+        // goal-edge folds lock edge, block and remote-source rows. Taken after them, an erasure of
+        // the goal (which holds the goal's `FOR UPDATE` and then folds every edge touching it)
+        // deadlocks against this update: each holds a lock the other waits on. Taken first, the
+        // update either locks the goal before the act and the act waits for the commit, or waits on
+        // the act having written nothing — holding only the source row's `FOR KEY SHARE`, which
+        // the act's `FOR UPDATE` on the goal does not touch — and then the target clause reads
+        // the goal erased and refuses the whole update. A lock on an unknown id locks nothing;
+        // the target clause answers it.
+        if let Some(GoalPatch::Set(goal)) = &cmd.goal {
+            if let Err(refusal) = write_floor::lock_resource_key_share(&mut tx, *goal).await {
+                return Err(write_floor::rollback_with(tx, refusal).await);
+            }
+        }
         writes::update_resource_in_tx(&mut tx, params, act_ctx.clone(), defer)
             .await
             .map_err(write_err)?;
@@ -2710,31 +2817,40 @@ impl Backend for DbBackend {
         // writes can take that admission away: it never tombstones, and a re-home moves the
         // resource only into a context `check_context_authorable` admitted, which is
         // `can_modify_resource`'s own container-write arm on the new home.
-        match cmd.goal {
+        let goal_patched = match cmd.goal {
             Some(GoalPatch::Set(goal)) => {
-                Self::fold_goal_edges(&mut tx, new_id, emitter, &act_ctx).await?;
-                self.assert_edge_from_source_home_in_tx(
-                    &mut tx,
-                    SourceHomedEdge {
-                        src: new_id,
-                        tgt: goal.into(),
-                        tgt_table: RelationshipTarget::Resource,
-                        edge_kind: graph::EdgeKind::LeadsTo,
-                        polarity: graph::Polarity::Forward,
-                        label: GOAL_EDGE_LABEL,
-                        weight: 1.0,
-                        emitter,
-                    },
-                    act_ctx,
-                )
-                .await?;
+                let folded = Self::fold_goal_edges(&mut tx, new_id, emitter, &act_ctx).await;
+                match folded {
+                    Ok(()) => self
+                        .assert_edge_from_source_home_in_tx(
+                            &mut tx,
+                            SourceHomedEdge {
+                                src: new_id,
+                                tgt: goal.into(),
+                                tgt_table: RelationshipTarget::Resource,
+                                edge_kind: graph::EdgeKind::LeadsTo,
+                                polarity: graph::Polarity::Forward,
+                                label: GOAL_EDGE_LABEL,
+                                weight: 1.0,
+                                emitter,
+                            },
+                            act_ctx,
+                        )
+                        .await
+                        .map(|_| ()),
+                    Err(e) => Err(e),
+                }
             }
             Some(GoalPatch::Clear) => {
-                Self::fold_goal_edges(&mut tx, new_id, emitter, &act_ctx).await?;
+                Self::fold_goal_edges(&mut tx, new_id, emitter, &act_ctx).await
             }
-            None => {}
+            None => Ok(()),
+        };
+        // A refused goal (the edge's clauses 2 and 3) rolls the whole update back, explicitly.
+        if let Err(refusal) = goal_patched {
+            return Err(write_floor::rollback_with(tx, refusal).await);
         }
-        tx.commit().await.map_err(api_err)?;
+        tx.commit().await.map_err(tx_err)?;
 
         if defer {
             // Enqueue the off-request backfill for the revised chunks. Resource-id single-flight means a
@@ -2802,6 +2918,13 @@ impl Backend for DbBackend {
         self.check_act_invocation(cmd.act.invocation).await?;
         let act_ctx = act_context(&cmd.act);
 
+        // Admission first, UNLOCKED, on the pool (`write_floor::modify_admission_unlocked` — the
+        // floor's admission and classification without its lock): a caller the floor refuses gets
+        // its 403/410 here and never queues for, or holds, the `FOR UPDATE` below — which would
+        // otherwise let a refused caller stall every writer on the resource for as long as its
+        // transaction lived. It binds nothing; the floor inside the transaction decides.
+        write_floor::modify_admission_unlocked(&self.pool, self.profile_id, resource).await?;
+
         // Auth before any write (WS2), inside the delete's own transaction (resource erasure spec
         // D13). ORDER IS LOAD-BEARING: `FOR UPDATE` on the row FIRST, the floor SECOND.
         //
@@ -2812,27 +2935,26 @@ impl Backend for DbBackend {
         // `FOR KEY SHARE` is already covered by this transaction's stronger lock. The reverse order
         // deadlocks: two concurrent deletes of one resource would each hold `KEY SHARE` and each
         // wait on the other to upgrade to `FOR UPDATE`.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        let mut tx = self.pool.begin().await.map_err(tx_err)?;
         sqlx::query!(
             "SELECT id FROM kb_resources WHERE id = $1 FOR UPDATE",
             resource.uuid(),
         )
         .fetch_optional(&mut *tx)
         .await
-        .map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await?;
-        // Resolved only after the floor admits: a principal the floor refuses (a read-only
-        // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
+        .map_err(tx_err)?;
+        // The floor again, under the lock: the admission above was a snapshot, and a write or an
+        // erasure may have committed between it and the lock. This call is the one that binds.
+        let floored = write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await;
+        if let Err(refusal) = floored {
+            return Err(write_floor::rollback_with(tx, refusal).await);
+        }
+        // Resolved only after the floor admits, on the delete's own transaction.
+        let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
         writes::delete_resource_in_tx(&mut tx, resource, emitter, act_ctx)
             .await
-            .map_err(api_err)?;
-        tx.commit().await.map_err(api_err)?;
+            .map_err(tx_err)?;
+        tx.commit().await.map_err(tx_err)?;
 
         // Queue the region settle for the anchor the deleted resource was homed in — the same
         // enqueue posture create and update use, and never failing the write for the same reason.
@@ -2886,16 +3008,9 @@ impl Backend for DbBackend {
         let act_ctx = act_context(&cmd.act);
         // Auth before any write (WS2): the modify floor, at the head of the write's own
         // transaction (resource erasure spec D13), so the check and the annotate cannot separate.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, ResourceId::from(new_id)).await?;
-        // Resolved only after the floor admits: a principal the floor refuses (a read-only
-        // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
+        let mut tx = self.begin_floored(ResourceId::from(new_id)).await?;
+        // Resolved only after the floor admits, on the annotate's own transaction.
+        let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
         writes::annotate_block_sources_in_tx(
             &mut tx,
             writes::AnnotateParams {
@@ -2908,7 +3023,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(write_err)?;
-        tx.commit().await.map_err(api_err)?;
+        tx.commit().await.map_err(tx_err)?;
         let view =
             native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id)).await?;
         Ok(CommandOutput::new(view))
@@ -2934,16 +3049,9 @@ impl Backend for DbBackend {
         let act_ctx = act_context(&cmd.act);
         // Auth before any write (WS2): the modify floor, at the head of the write's own
         // transaction (resource erasure spec D13), so the check and the commit cannot separate.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, cmd.resource).await?;
-        // Resolved only after the floor admits: a principal the floor refuses (a read-only
-        // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
+        let mut tx = self.begin_floored(cmd.resource).await?;
+        // Resolved only after the floor admits, on the commit's own transaction.
+        let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
         let artifact_id = writes::commit_data_artifact_in_tx(
             &mut tx,
             writes::CommitDataArtifactParams {
@@ -2960,7 +3068,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(write_err)?;
-        tx.commit().await.map_err(api_err)?;
+        tx.commit().await.map_err(tx_err)?;
         // Read back the committed artifact as an ArtifactView for the response.
         let view =
             crate::backend::substrate_read::get_artifact(&self.pool, self.profile_id, artifact_id)
@@ -3003,20 +3111,13 @@ impl Backend for DbBackend {
         // the edge carries the caller's emitter, and the emitter is resolved only after the floor
         // admits: a principal the floor refuses (a read-only machine client has no emitter to
         // resolve) must get the floor's 403/410, not a 500.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, ResourceId::from(src_next))
-            .await?;
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
+        let mut tx = self.begin_floored(ResourceId::from(src_next)).await?;
+        let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
         // Home-detect + kernel-vs-context branch is shared with the create/update goal-edge
         // projection via `assert_edge_from_source_home_in_tx`, which owns clauses 2 and 3 (F-1):
         // container-write on the source's home, then the TARGET's read floor — an erased or
         // tombstoned target stays that clause's 404, never the source floor's 410.
-        let edge = self
+        let edge = match self
             .assert_edge_from_source_home_in_tx(
                 &mut tx,
                 SourceHomedEdge {
@@ -3031,8 +3132,12 @@ impl Backend for DbBackend {
                 },
                 act_ctx,
             )
-            .await?;
-        tx.commit().await.map_err(api_err)?;
+            .await
+        {
+            Ok(edge) => edge,
+            Err(refusal) => return Err(write_floor::rollback_with(tx, refusal).await),
+        };
+        tx.commit().await.map_err(tx_err)?;
         Ok(CommandOutput::new(edge))
     }
 
@@ -3047,18 +3152,11 @@ impl Backend for DbBackend {
         // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`. It
         // runs at the head of the write's own transaction, so the source's write floor holds its
         // row lock until the retype commits (resource erasure spec D13).
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        self.check_edge_mutable(&mut tx, handle).await?;
-        // Correlation-integrity gate — additive to the modify authz above, before the write.
-        self.check_act_invocation(cmd.act.invocation).await?;
-        // Resolved only after the gate admits: a principal it refuses (a read-only machine client
-        // has no emitter to resolve) must get the gate's answer, not a 500.
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
+        let mut tx = self.begin_edge_mutation(handle, cmd.act.invocation).await?;
+        // Resolved only after the gates admit, on the write's own transaction: a principal they
+        // refuse (a read-only machine client has no emitter to resolve) must get their answer,
+        // not a 500.
+        let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
         let act_ctx = act_context(&cmd.act);
         writes::retype_relationship_in_tx(
             &mut tx,
@@ -3069,8 +3167,8 @@ impl Backend for DbBackend {
             act_ctx,
         )
         .await
-        .map_err(api_err)?;
-        tx.commit().await.map_err(api_err)?;
+        .map_err(tx_err)?;
+        tx.commit().await.map_err(tx_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
@@ -3083,17 +3181,11 @@ impl Backend for DbBackend {
         // Auth before any write (WS2): the edge's source resource AND container-write on the edge's
         // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`. It
         // runs at the head of the write's own transaction (resource erasure spec D13).
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        self.check_edge_mutable(&mut tx, handle).await?;
-        // Correlation-integrity gate — additive to the modify authz above, before the write.
-        self.check_act_invocation(cmd.act.invocation).await?;
-        // Resolved only after the gate admits (see `retype_relationship`).
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
+        let mut tx = self.begin_edge_mutation(handle, cmd.act.invocation).await?;
+        // Resolved only after the gates admit, on the write's own transaction: a principal they
+        // refuse (a read-only machine client has no emitter to resolve) must get their answer,
+        // not a 500.
+        let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
         let act_ctx = act_context(&cmd.act);
         writes::reweight_relationship_in_tx(
             &mut tx,
@@ -3103,8 +3195,8 @@ impl Backend for DbBackend {
             act_ctx,
         )
         .await
-        .map_err(api_err)?;
-        tx.commit().await.map_err(api_err)?;
+        .map_err(tx_err)?;
+        tx.commit().await.map_err(tx_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
@@ -3117,17 +3209,11 @@ impl Backend for DbBackend {
         // Auth before any write (WS2): the edge's source resource AND container-write on the edge's
         // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`. It
         // runs at the head of the write's own transaction (resource erasure spec D13).
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        self.check_edge_mutable(&mut tx, handle).await?;
-        // Correlation-integrity gate — additive to the modify-source authz above.
-        self.check_act_invocation(cmd.act.invocation).await?;
-        // Resolved only after the gate admits (see `retype_relationship`).
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
+        let mut tx = self.begin_edge_mutation(handle, cmd.act.invocation).await?;
+        // Resolved only after the gates admit, on the write's own transaction: a principal they
+        // refuse (a read-only machine client has no emitter to resolve) must get their answer,
+        // not a 500.
+        let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
         let act_ctx = act_context(&cmd.act);
         writes::fold_relationship_in_tx(
             &mut tx,
@@ -3137,8 +3223,8 @@ impl Backend for DbBackend {
             act_ctx,
         )
         .await
-        .map_err(api_err)?;
-        tx.commit().await.map_err(api_err)?;
+        .map_err(tx_err)?;
+        tx.commit().await.map_err(tx_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
@@ -3318,16 +3404,9 @@ impl Backend for DbBackend {
                 // the invocation, never the resource, so running it ahead of the floor discloses
                 // nothing about the resource.
                 self.check_act_invocation(cmd.act.invocation).await?;
-                let mut tx = self.pool.begin().await.map_err(api_err)?;
-                write_floor::modify_floor_in_tx(&mut tx, self.profile_id, id).await?;
-                // Resolved only after the floor admits: a principal the floor refuses (a read-only
-                // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
-                let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-                    .await
-                    .map_err(api_err)?;
-                let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-                    .await
-                    .map_err(api_err)?;
+                let mut tx = self.begin_floored(id).await?;
+                // Resolved only after the floor admits, on the facet write's own transaction.
+                let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
                 let property_ids = writes::set_facet_in_tx(
                     &mut tx,
                     cmd.owner,
@@ -3338,28 +3417,37 @@ impl Backend for DbBackend {
                 )
                 .await
                 .map_err(map_facet_write_err)?;
-                tx.commit().await.map_err(api_err)?;
+                tx.commit().await.map_err(tx_err)?;
                 property_ids
             }
             PropertyOwner::Edge { id } => {
-                let mut tx = self.pool.begin().await.map_err(api_err)?;
-                self.check_edge_mutable(&mut tx, uuid::Uuid::from(id))
-                    .await?;
-                self.validate_keyed_edge_write(
-                    uuid::Uuid::from(id),
-                    cmd.property_key.as_deref(),
-                    &cmd.values,
-                )
-                .await?;
-                // Correlation-integrity gate — additive to the authz, before the write.
-                self.check_act_invocation(cmd.act.invocation).await?;
-                // Resolved only after the gate admits (see the resource arm).
-                let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-                    .await
-                    .map_err(api_err)?;
-                let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-                    .await
-                    .map_err(api_err)?;
+                let mut tx = self.pool.begin().await.map_err(tx_err)?;
+                // The edge gate, then the keyed write's structure, then the correlation-integrity
+                // gate (additive to the authz) — all on the facet write's own transaction, and a
+                // refusal of any of them rolls it back before it is answered.
+                let gated = match self.check_edge_mutable(&mut tx, uuid::Uuid::from(id)).await {
+                    Ok(()) => match self
+                        .validate_keyed_edge_write(
+                            &mut tx,
+                            uuid::Uuid::from(id),
+                            cmd.property_key.as_deref(),
+                            &cmd.values,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            self.check_act_invocation_on(&mut *tx, cmd.act.invocation)
+                                .await
+                        }
+                        Err(refusal) => Err(refusal),
+                    },
+                    Err(refusal) => Err(refusal),
+                };
+                if let Err(refusal) = gated {
+                    return Err(write_floor::rollback_with(tx, refusal).await);
+                }
+                // Resolved only after the gates admit (see the resource arm).
+                let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
                 let property_ids = match cmd.property_key {
                     None => writes::set_facet_in_tx(
                         &mut tx,
@@ -3386,7 +3474,7 @@ impl Backend for DbBackend {
                         vec![id]
                     }
                 };
-                tx.commit().await.map_err(api_err)?;
+                tx.commit().await.map_err(tx_err)?;
                 property_ids
             }
         };
@@ -3414,18 +3502,11 @@ impl Backend for DbBackend {
         // Auth before any write (WS2) — the same clauses that governed asserting the row
         // (F-1). See `check_edge_mutable`. It runs at the head of the retract's own transaction
         // (resource erasure spec D13), so the source's write floor holds to commit.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        self.check_edge_mutable(&mut tx, handle).await?;
-        // Correlation-integrity gate — additive to the modify authz above, before the write.
-        self.check_act_invocation(cmd.act.invocation).await?;
-        // Resolved only after the gate admits: a principal it refuses (a read-only machine client
-        // has no emitter to resolve) must get the gate's answer, not a 500.
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
+        let mut tx = self.begin_edge_mutation(handle, cmd.act.invocation).await?;
+        // Resolved only after the gates admit, on the write's own transaction: a principal they
+        // refuse (a read-only machine client has no emitter to resolve) must get their answer,
+        // not a 500.
+        let emitter = self.resolve_actor_in_tx(&mut tx, cmd.origin).await?;
         let act_ctx = act_context(&cmd.act);
         let retracted = writes::retract_property_in_tx(
             &mut tx,
@@ -3436,7 +3517,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(write_err)?;
-        tx.commit().await.map_err(api_err)?;
+        tx.commit().await.map_err(tx_err)?;
         Ok(CommandOutput::new(retracted))
     }
 
@@ -3448,14 +3529,14 @@ impl Backend for DbBackend {
     /// SERIALIZABLE makes concurrent reconciles abort-and-retry (SQLSTATE 40001 → `Conflict`) instead of
     /// corrupting state — the old app-level open-invocation "mutex" is gone.
     ///
-    /// **Reconcile requires authorship of the map, by regime** (ruled 2026-10-01). A map in the
-    /// admin-only regime (the L0 kernel, or a map joined to the gating team — nobody authors those
-    /// by design) is gated by `access_service::require_cogmap_write_admin` at the handler, as
-    /// before. Every other map is gated HERE, on the shared write path, by `check_cogmap_authorable`
-    /// — for a system admin too: reach on an ordinary map comes from a grant, as everywhere else in
-    /// the map model. The gate runs first, ahead of the system-actor resolution and of the
-    /// pre-flight, which reads the map's contents: a caller who may not author the map learns
-    /// nothing from how its manifest would have failed.
+    /// **Reconcile requires authorship of the map, by regime** (ruled 2026-10-01), decided once,
+    /// HERE, on the shared write path. A map in the admin-only regime (the L0 kernel, or a map
+    /// joined to the gating team — nobody authors those by design;
+    /// `access_service::cogmap_write_requires_admin`) requires a system admin. Every other map is
+    /// gated by `check_cogmap_authorable` — for a system admin too: reach on an ordinary map comes
+    /// from a grant, as everywhere else in the map model. The gate runs first, ahead of the
+    /// system-actor resolution and of the pre-flight, which reads the map's contents: a caller who
+    /// may not author the map learns nothing from how its manifest would have failed.
     #[act_span]
     async fn reconcile_cognitive_map(
         &self,
@@ -3464,10 +3545,15 @@ impl Backend for DbBackend {
         let cogmap_uuid = uuid::Uuid::from(cmd.cogmap_id);
         let cogmap = CogmapId::from(cogmap_uuid);
 
-        if !crate::services::access_service::cogmap_write_requires_admin(&self.pool, cogmap)
+        // The regime, decided once, here: a map in the admin-only regime requires a system admin
+        // (the bare-id spelling of `require_system_admin`, as the reblock seam's deployment-wide
+        // arm asks it — no middleware sits above this seam); every other map requires authorship.
+        if crate::services::access_service::cogmap_write_requires_admin(&self.pool, cogmap)
             .await
             .map_err(TemperError::from)?
         {
+            crate::auth::require_system_admin_by_id(&self.pool, self.profile_id).await?;
+        } else {
             self.check_cogmap_authorable(cogmap_uuid).await?;
         }
 
@@ -4729,8 +4815,7 @@ impl Backend for DbBackend {
         // The modify floor at the head of the append's own transaction (resource erasure spec
         // D13), so the check and the append cannot separate: an erasure or soft delete that landed
         // while the block was being prepared is answered here, and nothing is appended.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await?;
+        let mut tx = self.begin_floored(resource).await?;
         writes::append_block_in_tx(
             &mut tx,
             writes::AppendParams {
@@ -4745,8 +4830,8 @@ impl Backend for DbBackend {
             EventContext::default(),
         )
         .await
-        .map_err(api_err)?;
-        tx.commit().await.map_err(api_err)?;
+        .map_err(tx_err)?;
+        tx.commit().await.map_err(tx_err)?;
 
         let landed = Self::landed_blocks(&self.pool, resource).await?;
         Ok(CommandOutput::new(landed))
@@ -4762,16 +4847,9 @@ impl Backend for DbBackend {
         // transaction (resource erasure spec D13), so the check and the finalize cannot separate.
         // No pool fast-fail: nothing runs before the transaction opens — the write-path policy
         // application already runs inside the finalize's transaction.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await?;
-        // Resolved only after the floor admits: a principal the floor refuses (a read-only
-        // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, origin.marker())
-            .await
-            .map_err(api_err)?;
+        let mut tx = self.begin_floored(resource).await?;
+        // Resolved only after the floor admits, on the finalize's own transaction.
+        let emitter = self.resolve_actor_in_tx(&mut tx, origin).await?;
 
         writes::finalize_ingest_in_tx(
             &mut tx,
@@ -4785,7 +4863,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(finalize_err)?;
-        tx.commit().await.map_err(api_err)?;
+        tx.commit().await.map_err(tx_err)?;
 
         Ok(CommandOutput::new(()))
     }
@@ -4829,19 +4907,17 @@ impl DbBackend {
         match write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await {
             Ok(()) => {}
             Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => {
-                return Ok(ReblockOutcome::Denied)
+                // The refusal is a receipt row, but the candidate's transaction still ends here,
+                // explicitly, so its row lock is not held across the next candidate's work.
+                return Ok(write_floor::rollback_with(tx, ReblockOutcome::Denied).await);
             }
             Err(e) => return Ok(row_error(correlation, id, e)),
         }
         let emitter = match *emitter {
             Some(resolved) => resolved,
             None => {
-                let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-                    .await
-                    .map_err(api_err)?;
-                let resolved = writes::resolve_emitter(&self.pool, owner, origin.marker())
-                    .await
-                    .map_err(api_err)?;
+                // On the candidate's own transaction, never the pool (see `begin_floored`).
+                let resolved = self.resolve_actor_in_tx(&mut tx, origin).await?;
                 *emitter = Some(resolved);
                 resolved
             }
@@ -4885,6 +4961,7 @@ impl DbBackend {
     /// the whole-object pre-grain shape the projector layer retired.
     async fn validate_keyed_edge_write(
         &self,
+        conn: &mut sqlx::PgConnection,
         edge_id: uuid::Uuid,
         property_key: Option<&str>,
         value: &serde_json::Value,
@@ -4948,7 +5025,7 @@ impl DbBackend {
                FROM kb_edges WHERE id = $1",
             edge_id
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(api_err)?
         .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))?;
@@ -5025,15 +5102,14 @@ impl DbBackend {
     }
 }
 
-/// Map a `tx.commit()` error: a SERIALIZABLE serialization failure (SQLSTATE `40001`) is a concurrent-
-/// reconcile conflict → retryable [`TemperError::Conflict`]; any other DB error is a 500 ([`api_err`]).
+/// Map a `tx.commit()` error: a transaction that lost a race (`write_floor::is_contention` — a
+/// SERIALIZABLE serialization failure `40001`, or a deadlock `40P01`) is a concurrent-reconcile
+/// conflict → retryable [`TemperError::Conflict`]; any other DB error is a 500 ([`api_err`]).
 fn map_commit_err(e: sqlx::Error) -> TemperError {
-    if let sqlx::Error::Database(db) = &e {
-        if db.code().as_deref() == Some("40001") {
-            return TemperError::Conflict(
-                "reconcile conflicted with a concurrent run; retry".to_string(),
-            );
-        }
+    if write_floor::is_contention(&e) {
+        return TemperError::Conflict(
+            "reconcile conflicted with a concurrent run; retry".to_string(),
+        );
     }
     api_err(e)
 }
@@ -5069,7 +5145,7 @@ fn conflict_if_unique_violation(e: anyhow::Error, conflict: &str) -> TemperError
             }
         }
     }
-    api_err(e)
+    tx_err(e)
 }
 
 /// Map a `resource_finalize` write error, preserving its custom SQLSTATEs (W2 PR 5) so the caller gets
@@ -5094,7 +5170,7 @@ fn finalize_err(e: anyhow::Error) -> TemperError {
             }
         }
     }
-    api_err(e)
+    tx_err(e)
 }
 
 #[cfg(test)]

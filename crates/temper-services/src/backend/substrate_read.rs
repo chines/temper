@@ -1633,20 +1633,26 @@ pub async fn cogmap_charter_select(
 /// denying existence, never 403. All three arms return as DATA (MCP renders the envelope
 /// verbatim); the HTTP handler maps `Absent` → 404 and `Folded` → 410 so the route keeps its
 /// status contract.
+///
+/// **A not-visible home resource that is an erased husk** the caller holds answers
+/// [`ApiError::ResourceErased`] (`410`, the error envelope — not the folded `BlockRead`) through
+/// `erased_or`, exactly as `show_view_select` and `get_content_select` classify their misses;
+/// everyone else keeps the `404`. Only the `NotVisible` arm asks; a fault stays a fault.
 pub async fn block_read_select(
     pool: &PgPool,
     profile_id: ProfileId,
     resource_id: uuid::Uuid,
     block_id: uuid::Uuid,
 ) -> ApiResult<temper_core::types::provenance::BlockRead> {
-    readback::block_read(
-        pool,
-        profile_id,
-        ResourceId::from(resource_id),
-        BlockId::from(block_id),
-    )
-    .await
-    .map_err(|e| ApiError::from(map_readback_err(e)))
+    let resource_id = ResourceId::from(resource_id);
+    match readback::block_read(pool, profile_id, resource_id, BlockId::from(block_id)).await {
+        Ok(read) => Ok(read),
+        Err(e @ readback::ReadbackError::NotVisible { .. }) => {
+            let not_found = ApiError::from(map_readback_err(e));
+            Err(erased_or(pool, profile_id, resource_id, not_found).await)
+        }
+        Err(e) => Err(ApiError::from(map_readback_err(e))),
+    }
 }
 
 /// `resource_block_provenance` — the itemized per-block provenance read for one resource. Service-direct

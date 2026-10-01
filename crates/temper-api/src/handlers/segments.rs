@@ -66,7 +66,7 @@ pub async fn append_block_handler(
     request_body = FinalizePayload,
     responses(
         (status = 204, description = "Segmented ingest finalized"),
-        (status = 400, description = "Landed block count or body hash mismatch"),
+        (status = 400, description = "The path id is not a UUID, or the request body is not syntactically valid JSON (the extractor's plain-text rejection). A landed block count or body hash mismatch is the 409, never a 400"),
         (status = 403, description = "Caller cannot modify this resource"),
         (status = 409, description = "The landed block count or the body hash does not match what the caller declared", body = ErrorBody),
         (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),

@@ -86,9 +86,14 @@ pub async fn fetch(params: ShowCacheParams<'_>) -> Result<ShowCacheResult> {
         // Erased is the one answer that licenses dropping the local copy: the content is gone
         // for good, and the server said so to a caller who held it. A `NotFound` never does —
         // it may be a soft delete, a move, or a resource this caller can no longer read (spec
-        // §8) — so it falls through to the arm below with the file untouched.
-        Err(err @ TemperError::ResourceErased(_)) => {
-            remove_erased_local_copy(params.local_path);
+        // §8) — so it falls through to the arm below with the file untouched. The erasure
+        // licenses removing the file only when it names the resource this read addressed: the id
+        // is parsed from the server's sentence, and a 410 naming any other resource is not about
+        // this file — the error still propagates, the file stays.
+        Err(err @ TemperError::ResourceErased(erased)) => {
+            if erased == params.resource_id {
+                remove_erased_local_copy(params.local_path);
+            }
             Err(err)
         }
         Err(err) => Err(err),
@@ -340,6 +345,39 @@ mod tests {
         assert!(
             !file.path().exists(),
             "the erased resource's local copy survived"
+        );
+    }
+
+    /// An erasure naming a DIFFERENT resource than the one addressed is not about this file: the
+    /// error still reaches the caller, and the local copy stays. FAILS IF the removal keys on the
+    /// erased variant alone, without comparing its id to `params.resource_id` (the file is removed).
+    #[tokio::test]
+    async fn an_erased_answer_naming_another_resource_keeps_the_local_copy() {
+        let addressed = ResourceId::from(uuid::Uuid::now_v7());
+        let other = ResourceId::from(uuid::Uuid::now_v7());
+        let body = serde_json::json!({"error": {
+            "code": temper_core::error::RESOURCE_ERASED_CODE,
+            "message": TemperError::ResourceErased(other).to_string(),
+        }})
+        .to_string();
+        let client = client_answering(axum::http::StatusCode::GONE, body);
+        let file = local_copy();
+
+        let result = fetch(ShowCacheParams {
+            client: &client,
+            resource_id: addressed,
+            local_path: file.path(),
+            debounce: Duration::ZERO,
+        })
+        .await;
+
+        assert!(
+            matches!(result, Err(TemperError::ResourceErased(got)) if got == other),
+            "the erasure still propagates: got {result:?}"
+        );
+        assert!(
+            file.path().exists(),
+            "an erasure naming another resource removed this one's local copy"
         );
     }
 

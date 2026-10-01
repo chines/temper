@@ -115,24 +115,30 @@ pub async fn reassign_resource(
     // is: 410 `RESOURCE_ERASED` to a holder of an erased husk, 403 otherwise (a tombstone always
     // 403). It runs ahead of the no-op return so a husk is never answered `200`.
     let mut tx = pool.begin().await?;
-    write_floor::liveness_floor_in_tx(
+    if let Err(refusal) = write_floor::liveness_floor_in_tx(
         &mut tx,
         caller,
         temper_substrate::ids::ResourceId::from(resource_id),
     )
-    .await?;
+    .await
+    {
+        return Err(write_floor::rollback_with(tx, ApiError::from(refusal)).await);
+    }
     if home.owner == to_profile_id {
         return Ok(()); // idempotent no-op
     }
 
     // The owner path admits any target; verify it's a real profile so a bad UUID is a
     // clean 400 rather than an FK-violation 500 in the projector. (The admin path's
-    // membership join already guarantees existence, but this covers both uniformly.)
+    // membership join already guarantees existence, but this covers both uniformly.) This and the
+    // emitter below run on the reassign's own transaction, never the pool: the transaction already
+    // holds a pool connection, and a second acquire while it is open is how concurrent writers
+    // stall the pool.
     let to_exists = sqlx::query_scalar!(
         r#"SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE id = $1) AS "e!: bool""#,
         to_profile_id,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
     if !to_exists {
         return Err(ApiError::BadRequest(
@@ -140,7 +146,7 @@ pub async fn reassign_resource(
         ));
     }
 
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     temper_substrate::writes::reassign_resource_in_tx(

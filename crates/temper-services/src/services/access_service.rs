@@ -433,10 +433,14 @@ pub async fn grant_capability(
             Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
         };
     // The subject floor at the head of the grant write's own transaction; its lock holds until
-    // the grant row commits. The emitter is resolved only after it admits.
+    // the grant row commits, and a refusal rolls the transaction back before it is answered. The
+    // emitter is resolved only after it admits, on the same transaction — never the pool, which a
+    // transaction already holding a connection would wait on for a second.
     let mut tx = pool.begin().await?;
-    grant_subject_floor_in_tx(&mut tx, caller, subject).await?;
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+    if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
+        return Err(write_floor::rollback_with(tx, refusal).await);
+    }
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let granted = insert_grant(
@@ -484,8 +488,10 @@ pub async fn revoke_capability(
         };
     // The subject floor at the head of the revoke's own transaction (see `grant_capability`).
     let mut tx = pool.begin().await?;
-    grant_subject_floor_in_tx(&mut tx, caller, subject).await?;
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+    if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
+        return Err(write_floor::rollback_with(tx, refusal).await);
+    }
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
     let revoked = delete_grant(

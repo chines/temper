@@ -460,8 +460,9 @@ async fn enriched_view(
 /// The resource read's refusals. A not-found is the caller's (an unknown, unreadable, or
 /// soft-deleted id — the server does not say which, and neither does this) and an erasure is
 /// named by its own arm; only what is left is a fault. Before this, every one of them — a
-/// typo'd id included — reported `internal_error`.
-fn map_read_err(e: ClientError) -> rmcp::ErrorData {
+/// typo'd id included — reported `internal_error`. Shared with the MCP resources protocol
+/// (`crate::resources`), whose `temper://resources/{id}` reads hit the same doors.
+pub(crate) fn map_read_err(e: ClientError) -> rmcp::ErrorData {
     match e {
         ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
         ClientError::ResourceErased { id } => erased_error(id),
@@ -649,40 +650,11 @@ pub async fn create_resource(
         segmented: None,
     };
 
-    let view = client.ingest().create(&payload).await.across_auth(|e| {
-        match e {
-        // F-2: placing a resource into a context requires WRITE on that context, and the
-        // door's own gate enforces it for both home kinds. The sentences are the gate's,
-        // carried arm-for-arm from the direct binding's error mapping.
-        ClientError::ForbiddenDetail { message } => {
-            rmcp::ErrorData::invalid_params(message, None)
-        }
-        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
-            "Not authorized to create in this context: placing a resource requires write access, \
-             and read access alone (watcher role, a read-only grant, a shared context, or \
-             membership in an enclosing team) is not enough."
-                .to_string(),
-            None,
-        ),
-        // The service's own sentence, un-prefixed: the direct binding's tool wrapped the
-        // resolver's failure with "context not found: ", a prefix the door does not
-        // re-apply — the kind (invalid_params) and the gate are identical.
-        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
-        // The 400 arm speaks the server's own sentence bare: `api_error_cause` strips the
-        // API Display's `Bad request: ` status label the relayed body carries — the strip
-        // the G3c families introduced, adopted here as this family's declared parity delta.
-        // The direct binding destructured the variant and rendered bare; the label was a
-        // door-introduced artifact. Kind (invalid_params) and gate identical.
-        ClientError::Server {
-            status: 400,
-            message,
-        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
-        other => rmcp::ErrorData::internal_error(
-            format!("Failed to create resource: {other}"),
-            None,
-        ),
-        }
-    })?;
+    let view = client
+        .ingest()
+        .create(&payload)
+        .await
+        .across_auth(map_create_err)?;
 
     // Read back through the same door `get_resource` uses so the response carries both
     // tiers plus derived embedding status, exactly as the shape it replaced did.
@@ -694,6 +666,42 @@ pub async fn create_resource(
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&response)),
     ]))
+}
+
+/// The create door's refusals (`POST /api/ingest`, one-shot). An idempotent replay onto a
+/// resource that has since been erased answers `410 RESOURCE_ERASED` to a caller who held it;
+/// that arm names the erasure (`erased_error`) instead of falling to the internal-error catch-all.
+fn map_create_err(e: ClientError) -> rmcp::ErrorData {
+    match e {
+        // F-2: placing a resource into a context requires WRITE on that context, and the
+        // door's own gate enforces it for both home kinds. The sentences are the gate's,
+        // carried arm-for-arm from the direct binding's error mapping.
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Forbidden => rmcp::ErrorData::invalid_params(
+            "Not authorized to create in this context: placing a resource requires write access, \
+             and read access alone (watcher role, a read-only grant, a shared context, or \
+             membership in an enclosing team) is not enough."
+                .to_string(),
+            None,
+        ),
+        // The service's own sentence, un-prefixed: the direct binding's tool wrapped the
+        // resolver's failure with "context not found: ", a prefix the door does not
+        // re-apply — the kind (invalid_params) and the gate are identical.
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::ResourceErased { id } => erased_error(id),
+        // The 400 arm speaks the server's own sentence bare: `api_error_cause` strips the
+        // API Display's `Bad request: ` status label the relayed body carries — the strip
+        // the G3c families introduced, adopted here as this family's declared parity delta.
+        // The direct binding destructured the variant and rendered bare; the label was a
+        // door-introduced artifact. Kind (invalid_params) and gate identical.
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        other => {
+            rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)
+        }
+    }
 }
 
 /// Map a `ProjectionError` to an `rmcp::ErrorData` invalid-params response.
@@ -784,7 +792,9 @@ pub async fn get_block_provenance(
 /// synthesizes it from the route's own block-naming 404, never from a foreign one — and
 /// renders as data (`state: "absent"`), while a not-visible home arrives as
 /// `ClientError::NotFound` and maps to `invalid_params` — denying existence, never 403.
-/// A folded successor is addressed by calling this again with its own block id.
+/// A home resource erased under a caller who held it arrives as
+/// `ClientError::ResourceErased` (the server's `410 RESOURCE_ERASED`) and maps to the named
+/// erased error. A folded successor is addressed by calling this again with its own block id.
 pub async fn get_block(
     svc: &TemperMcpService,
     parts: &http::request::Parts,
@@ -798,8 +808,9 @@ pub async fn get_block(
         .await
         .across_auth(|e| match e {
             ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
-            // The block's HOME resource was erased (the client reads the code before the
-            // `BlockRead` parse, so it arrives typed, not as a JSON fault).
+            // The block's HOME resource was erased and the caller held it: the server answers
+            // 410 `RESOURCE_ERASED`, which the client reads before the `BlockRead` parse, so it
+            // arrives typed, not as a JSON fault.
             ClientError::ResourceErased { id } => erased_error(id),
             other => rmcp::ErrorData::internal_error(format!("block read failed: {other}"), None),
         })?;
@@ -1292,6 +1303,9 @@ fn map_grant_error(context: &str, err: ClientError) -> rmcp::ErrorData {
             format!("{context}: caller may not administer grants on this resource"),
             None,
         ),
+        // A grant or revoke on an erased resource answers `410 RESOURCE_ERASED` to a caller who
+        // held it — the caller's state, named, never an internal fault.
+        ClientError::ResourceErased { id } => erased_error(id),
         other => rmcp::ErrorData::internal_error(format!("{context} failed: {other}"), None),
     }
 }
@@ -1404,6 +1418,28 @@ mod tests {
         });
         assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
         assert!(!err.message.contains("erased"), "{}", err.message);
+    }
+
+    /// An idempotent create replayed onto an erased resource answers `410 RESOURCE_ERASED`; the
+    /// tool names it. FAILS IF the erased arm is removed from `map_create_err` (the catch-all
+    /// answers `INTERNAL_ERROR`).
+    #[test]
+    fn the_create_maps_an_erasure_to_a_named_invalid_params() {
+        let id = ResourceId::from(Uuid::now_v7());
+        let err = map_create_err(ClientError::ResourceErased { id });
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(err.message, format!("resource {id} was erased"));
+    }
+
+    /// A grant or revoke on an erased resource answers `410 RESOURCE_ERASED`; the tool names it.
+    /// FAILS IF the erased arm is removed from `map_grant_error` (the catch-all answers
+    /// `INTERNAL_ERROR`).
+    #[test]
+    fn the_grant_maps_an_erasure_to_a_named_invalid_params() {
+        let id = ResourceId::from(Uuid::now_v7());
+        let err = map_grant_error("resource_grant", ClientError::ResourceErased { id });
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(err.message, format!("resource {id} was erased"));
     }
 
     /// Everything else is still a fault, as before.

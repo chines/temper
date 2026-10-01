@@ -2589,7 +2589,9 @@ export interface paths {
          * Read one content block by address (the three-state resolution)
          * @description The defined-dangling-state design: `200` the block is live (identity, chunk identities,
          *     provenance), `410 Gone` the block is folded (the envelope carries its attribution history
-         *     and its gated successor dispositions), `404` absent. No redirect — successor names ride as
+         *     and its gated successor dispositions), `404` absent. A home resource that was erased
+         *     answers `410` under the error envelope (`RESOURCE_ERASED`) to a caller who held it, and
+         *     `404` to everyone else. No redirect — successor names ride as
          *     data inside the gated envelope, never as a Location the caller may not be authorized to
          *     follow.
          */
@@ -15266,7 +15268,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Context not found */
+            /** @description Context not found; or a one-shot idempotent replay names a resource that has since been deleted (or erased, to a caller who never held it) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -16877,7 +16879,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Context not visible to profile */
+            /** @description Context not visible to profile; or an idempotent replay names a resource that has since been deleted (or erased, to a caller who never held it) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -17481,7 +17483,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such block (or not visible — indistinguishable, denying existence) */
+            /** @description No such block (or its home resource is not visible, or was erased and the caller never held it — indistinguishable, denying existence) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -17490,7 +17492,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description The block is folded: state envelope with disposition and successors */
+            /** @description The block is folded: state envelope with disposition and successors (body: BlockRead). Also answered when the block's home resource was erased (code RESOURCE_ERASED, body: ErrorBody) — only to a caller who held standing on that resource; everyone else gets 404 */
             410: {
                 headers: {
                     [name: string]: unknown;
@@ -17860,7 +17862,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Landed block count or body hash mismatch */
+            /** @description The path id is not a UUID, or the request body is not syntactically valid JSON (the extractor's plain-text rejection). A landed block count or body hash mismatch is the 409, never a 400 */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -18344,7 +18346,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
+            /** @description The resource was erased (code RESOURCE_ERASED); answered to the owner (or an admin with reach) when they hold the erased resource; everyone else gets 403 */
             410: {
                 headers: {
                     [name: string]: unknown;

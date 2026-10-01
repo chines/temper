@@ -51,7 +51,7 @@ impl IntoResponse for IngestCreateResponse {
         (status = 200, description = "Resource created (or existing on dedup); a SegmentedBeginResponse when the payload set `segmented`", body = IngestCreateResponse),
         (status = 400, description = "Invalid payload"),
         (status = 403, description = "Caller cannot author into the home context or cognitive map; or a segmented idempotent replay names a resource the caller can no longer modify (e.g. since deleted)", body = ErrorBody),
-        (status = 404, description = "Context not found"),
+        (status = 404, description = "Context not found; or a one-shot idempotent replay names a resource that has since been deleted (or erased, to a caller who never held it)"),
         (status = 410, description = "An idempotent replay names a resource that has since been erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404 (one-shot) or 403 (segmented)", body = ErrorBody),
     )
 )]

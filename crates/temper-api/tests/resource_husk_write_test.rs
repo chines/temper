@@ -47,10 +47,13 @@
 //!   replay it.
 //!
 //! Plus the races (resource erasure spec D13: "a write that races the act either lands before it
-//! or refuses after it"), each with the act held open on R and the write shown waiting on R's row
-//! lock before the act commits: an edge assert into R answers `404` and lands no edge; a blob
-//! relate onto R answers `404` and lands no edge; the owner's grant on R answers `410` and lands no
-//! grant row.
+//! or refuses after it"), each with the act held open on R and the write shown waiting on a row
+//! lock (`pg_stat_activity`) before the act commits: an edge assert into R answers `404` and lands
+//! no edge; a blob relate onto R answers `404` and lands no edge; the owner's grant on R answers
+//! `410` and lands no grant row; the owner's annotate of R — a door with no pool fast-fail —
+//! answers `410` and lands no annotation; a goal-set naming R as the goal locks R before it writes
+//! anything and answers `404`. And the delete door, driven for real, waits on a writer's floor
+//! lock and completes once the writer commits.
 //!
 //! Every state is made by a real door: the resource by `POST /api/ingest`, the grant by
 //! `POST /api/resources/{id}/grants`, the husk by the operator door
@@ -688,40 +691,81 @@ async fn hold_the_act(
     act
 }
 
-/// Send `method path` as `who` while `act` holds the row, assert the request is still waiting
-/// after 2 seconds (a 2-second timeout that EXPIRES shows the write blocked on the act's lock),
-/// then commit the act and return the request's answer: the status and the parsed body (`Null`
-/// when the body is not JSON).
+/// Send `method path` as `who` with a JSON body, on its own task: the handle yields the status
+/// and the parsed body (`Null` when the body is not JSON).
+fn spawn_request(
+    app: &common::TestApp,
+    who: &Caller,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+) -> tokio::task::JoinHandle<(u16, Value)> {
+    let client = app.client.clone();
+    let url = app.url(path);
+    let token = who.token.clone();
+    tokio::spawn(async move {
+        let mut req = client
+            .request(method, url)
+            .header("Authorization", format!("Bearer {token}"));
+        if let Some(body) = &body {
+            req = req.json(body);
+        }
+        let resp = req.send().await.expect("raced request");
+        let status = resp.status().as_u16();
+        let text = resp.text().await.expect("raced body");
+        (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+    })
+}
+
+/// Poll — every 50ms, for up to 10 seconds — until a backend in this test's database is blocked
+/// on a lock (`pg_stat_activity.wait_event_type = 'Lock'`; a row-lock wait shows as a wait on
+/// the holder's transaction id), and return that backend's pid. Panics if `request` finishes first
+/// (it never waited on the held row) or no backend waits within the deadline. The test's own
+/// held transaction is idle, never waiting, so the one waiter is the request's.
+async fn a_backend_waits_on_a_lock<T>(
+    pool: &PgPool,
+    request: &tokio::task::JoinHandle<T>,
+    what: &str,
+) -> i32 {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        assert!(
+            !request.is_finished(),
+            "{what} completed while the row was held — it did not wait on the row lock"
+        );
+        let waiter: Option<i32> = sqlx::query_scalar(
+            "SELECT pid FROM pg_stat_activity \
+              WHERE datname = current_database() AND wait_event_type = 'Lock' \
+              LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .expect("poll pg_stat_activity");
+        if let Some(pid) = waiter {
+            return pid;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{what}: no backend waited on a lock within 10 seconds"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Send `method path` as `who` while `held` holds the row, assert the request is blocked on a lock
+/// ([`a_backend_waits_on_a_lock`]) and has not answered, then commit `held` and return the
+/// request's answer: the status and the parsed body (`Null` when the body is not JSON).
 async fn raced_by_the_act(
     app: &common::TestApp,
-    act: sqlx::Transaction<'static, sqlx::Postgres>,
+    held: sqlx::Transaction<'static, sqlx::Postgres>,
     who: &Caller,
     method: Method,
     path: String,
     body: Value,
 ) -> (u16, Value) {
-    let client = app.client.clone();
-    let url = app.url(&path);
-    let token = who.token.clone();
-    let mut request = tokio::spawn(async move {
-        let resp = client
-            .request(method, url)
-            .header("Authorization", format!("Bearer {token}"))
-            .json(&body)
-            .send()
-            .await
-            .expect("raced request");
-        let status = resp.status().as_u16();
-        let text = resp.text().await.expect("raced body");
-        (status, serde_json::from_str(&text).unwrap_or(Value::Null))
-    });
-    let finished_within_window =
-        tokio::time::timeout(std::time::Duration::from_secs(2), &mut request).await;
-    assert!(
-        finished_within_window.is_err(),
-        "{path} completed while the act held the row — it did not wait on the act's lock"
-    );
-    act.commit().await.expect("commit the act");
+    let request = spawn_request(app, who, method, &path, Some(body));
+    a_backend_waits_on_a_lock(&app.pool, &request, &path).await;
+    held.commit().await.expect("commit the held transaction");
     request.await.expect("the raced request must not panic")
 }
 
@@ -1594,9 +1638,10 @@ async fn grant_rows(pool: &PgPool, subject: Uuid, principal: Uuid) -> i64 {
 /// sees the husk and classifies it: `410 RESOURCE_ERASED` to its owner. No grant row lands.
 ///
 /// FAILS IF the grant write is not serialized against the act. The bite: delete the
-/// `grant_subject_floor_in_tx(&mut tx, caller, subject).await?;` call in
+/// `grant_subject_floor_in_tx(&mut tx, caller, subject)` check (and its rollback arm) in
 /// `access_service::grant_capability` — nothing in the grant write touches R's row, so the request
-/// answers `200` inside the 2-second window and its row survives the act.
+/// answers `200` without ever waiting on a lock (`a_backend_waits_on_a_lock` panics) and its row
+/// survives the act.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_grant_racing_the_act_answers_its_owner_410_and_lands_no_row(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -2071,10 +2116,14 @@ async fn hold_the_delete(
 /// FAILS IF a write that races a soft delete lands on the tombstone, or answers anything but the
 /// write side's uniform `403` (never `410`: a tombstone is not an erasure). The delete door takes
 /// `FOR UPDATE` on the row first, so the write floor's `FOR KEY SHARE` waits for the delete to
-/// commit and then sees `is_active = false`. The bite: drop the `FOR UPDATE` (here, mirroring
-/// `DbBackend::delete_resource`). The write is then admitted by the floor on the pre-delete
-/// snapshot, blocks only at its own row UPDATE, lands on the tombstone once the delete commits,
-/// and answers `404` from its readback — this test's `403` assertion fails.
+/// commit and then sees `is_active = false`. The delete here is [`hold_the_delete`], this test's
+/// copy of the door's two steps, because a race needs the delete held open and the door commits
+/// its own transaction. The bite: drop the `FOR UPDATE` statement from `hold_the_delete`. The
+/// write is then admitted by the floor on the pre-delete snapshot, blocks only at its own row
+/// UPDATE, lands on the tombstone once the delete commits, and answers `404` from its readback —
+/// this test's `403` assertion fails. Dropping the `FOR UPDATE` from `DbBackend::delete_resource`
+/// does NOT fail this test (the door is not what holds the row here); the door-driven witness
+/// below, `the_delete_door_waits_on_a_writers_floor_then_completes`, is the one that does.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_write_racing_a_soft_delete_waits_for_it_and_answers_403(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -2109,4 +2158,251 @@ async fn a_write_racing_a_soft_delete_waits_for_it_and_answers_403(pool: PgPool)
         title, "raced-onto-a-tombstone",
         "nothing landed on the tombstone"
     );
+}
+
+// ── WITNESS: the real delete door waits on a writer's floor, then completes ──────────────────
+
+/// Hold a writer's floor on `resource`: `FOR KEY SHARE` on its row — the lock
+/// `write_floor::modify_floor_in_tx` takes at the head of every floored write — in a transaction
+/// this test commits when it chooses, as a writer that has passed its floor and not yet committed
+/// holds it.
+async fn hold_a_writers_floor(
+    app: &common::TestApp,
+    resource: Uuid,
+) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let mut tx = app.pool.begin().await.expect("begin the writer");
+    sqlx::query("SELECT id FROM kb_resources WHERE id = $1 FOR KEY SHARE")
+        .bind(resource)
+        .execute(&mut *tx)
+        .await
+        .expect("the writer's floor lock");
+    tx
+}
+
+/// Is `resource` live (`kb_resources.is_active`)?
+async fn is_live(pool: &PgPool, resource: Uuid) -> bool {
+    sqlx::query_scalar("SELECT is_active FROM kb_resources WHERE id = $1")
+        .bind(resource)
+        .fetch_one(pool)
+        .await
+        .expect("liveness probe")
+}
+
+/// FAILS IF `DELETE /api/resources/{id}` does not serialize against a writer that has passed its
+/// floor. The door takes `FOR UPDATE` on the row before its in-transaction floor and its tombstone
+/// flip; `FOR UPDATE` conflicts with the writer's `FOR KEY SHARE`, so the delete waits for the
+/// writer to commit, and then completes.
+///
+/// The bite: delete the `SELECT id FROM kb_resources WHERE id = $1 FOR UPDATE` statement in
+/// `DbBackend::delete_resource`. The floor's own lock is `FOR KEY SHARE` and the tombstone flip's
+/// row update is `FOR NO KEY UPDATE`, neither of which conflicts with the writer's lock, so the
+/// delete completes while the writer still holds its floor: `a_backend_waits_on_a_lock` panics
+/// ("completed while the row was held").
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_delete_door_waits_on_a_writers_floor_then_completes(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+
+    let writer = hold_a_writers_floor(&app, resource).await;
+    let request = spawn_request(
+        &app,
+        &owner,
+        Method::DELETE,
+        &format!("/api/resources/{resource}"),
+        None,
+    );
+    a_backend_waits_on_a_lock(&app.pool, &request, "DELETE /api/resources/{id}").await;
+    assert!(
+        is_live(&app.pool, resource).await,
+        "the delete has not landed while the writer holds its floor"
+    );
+
+    writer.commit().await.expect("commit the writer");
+    let (status, body) = request.await.expect("the delete request must not panic");
+    assert_eq!(
+        status, 200,
+        "the delete completes once the writer commits; body: {body}"
+    );
+    assert!(
+        !is_live(&app.pool, resource).await,
+        "the delete landed: the resource is a tombstone"
+    );
+}
+
+// ── WITNESS: a door with no fast-fail, racing the act, answers 410 and lands nothing ─────────
+
+/// `block_provenance_annotated` events in this test's database.
+async fn annotations(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'block_provenance_annotated'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("annotation count")
+}
+
+/// The owner annotates R (`POST /api/resources/{id}/provenance`) while the act holds R. The door
+/// runs no pool fast-fail: its one check is the modify floor at the head of its transaction
+/// (`DbBackend::begin_floored`), whose `FOR KEY SHARE` waits on the act's `FOR UPDATE`. Once the act
+/// commits, the floor sees the husk and classifies it: `410 RESOURCE_ERASED` to its owner. No
+/// annotation lands.
+///
+/// FAILS IF the annotate's floor is not inside its transaction. The bite: in
+/// `DbBackend::annotate_resource`, open the transaction with `self.pool.begin()` instead of
+/// `self.begin_floored(..)`. Nothing then answers the floor's `410`: the annotate either completes
+/// before the act commits (`a_backend_waits_on_a_lock` panics) or meets the substrate after it
+/// (the erased resource's block lookup or its write guard) and answers a non-`410` error — this
+/// test's `410` assertion fails. Which of the two is unverified; both fail the test.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_annotate_racing_the_act_answers_its_owner_410_and_lands_nothing(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+    assert_eq!(
+        annotations(&app.pool).await,
+        0,
+        "precondition: the ingest annotated nothing"
+    );
+
+    let act = hold_the_act(&app, resource).await;
+    let (status, body) = raced_by_the_act(
+        &app,
+        act,
+        &owner,
+        Method::POST,
+        format!("/api/resources/{resource}/provenance"),
+        json!({
+            "sources": [{ "kind": "remote", "value": "https://example.com/raced-annotate" }],
+        }),
+    )
+    .await;
+
+    assert!(
+        is_erased(&app.pool, resource).await,
+        "precondition: the act committed an erasure"
+    );
+    assert_eq!(
+        status, 410,
+        "the floor, after the act, refuses the husk; body: {body}"
+    );
+    assert_eq!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+    assert_eq!(
+        annotations(&app.pool).await,
+        0,
+        "no annotation landed on the husk"
+    );
+}
+
+// ── WITNESS: a goal-set locks the goal before it writes anything ──────────────────────────────
+
+/// `RowExclusiveLock`s the backend `pid` holds — one per relation its transaction has written.
+async fn row_exclusive_locks(pool: &PgPool, pid: i32) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM pg_locks WHERE pid = $1 AND mode = 'RowExclusiveLock' AND granted",
+    )
+    .bind(pid)
+    .fetch_one(pool)
+    .await
+    .expect("lock count")
+}
+
+/// The owner PATCHes R with a new title AND a goal G while the act holds G. The update floors R,
+/// then locks G's row up front (`DbBackend::update_resource`'s lock-order rule: every
+/// `kb_resources` row the write touches is locked before any other row lock), so it waits on the
+/// act having written nothing. Once the act commits, the goal's target clause reads G erased and
+/// refuses it `404` (the endpoint read floor, never `410` — the caller is not writing G), the whole
+/// update rolls back, and the title does not land. Never a `500`.
+///
+/// The deadlock this order prevents (the act holding G's `FOR UPDATE` and then folding edges the
+/// update had already locked, while the update waits on G) needs the act mid-flight; a held act
+/// has already folded, so the deadlock itself is not deterministically reachable here. What is
+/// pinned is the order that prevents it: while the update waits on G, its backend holds no
+/// `RowExclusiveLock` — it has written no row anywhere.
+///
+/// FAILS IF the update writes before it locks the goal. The bite: delete the up-front
+/// `write_floor::lock_resource_key_share(&mut tx, *goal)` block in `DbBackend::update_resource`.
+/// The update then runs `update_resource_in_tx` (the retitle appends an event and updates R's
+/// row) before the target clause's lock waits on G, so its backend holds `RowExclusiveLock`s
+/// while it waits and the zero assertion fails.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_goal_set_racing_the_acts_erasure_of_the_goal_locks_it_first_and_answers_404(
+    pool: PgPool,
+) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+    let goal = ingest(&app, &owner, own_context).await;
+
+    let act = hold_the_act(&app, goal).await;
+    let request = spawn_request(
+        &app,
+        &owner,
+        Method::PATCH,
+        &format!("/api/resources/{resource}"),
+        Some(json!({ "title": "raced-goal-set", "goal": goal })),
+    );
+    let waiter = a_backend_waits_on_a_lock(&app.pool, &request, "PATCH {goal}").await;
+    assert_eq!(
+        row_exclusive_locks(&app.pool, waiter).await,
+        0,
+        "the update waits on the goal's row having written nothing"
+    );
+    act.commit().await.expect("commit the act");
+    let (status, body) = request.await.expect("the raced update must not panic");
+
+    assert!(
+        is_erased(&app.pool, goal).await,
+        "precondition: the act committed an erasure of the goal"
+    );
+    assert_eq!(
+        status, 404,
+        "the goal's target clause, after the act, refuses the husk; body: {body}"
+    );
+    assert_ne!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+    assert_eq!(
+        title_of(&app, &owner, resource).await,
+        TITLE,
+        "the refused goal-set rolled the whole update back — the title did not land"
+    );
+}
+
+// ── WITNESS: no write door waits on a second pool connection while its transaction is open ─────
+
+/// FAILS IF any write door in the table holds its write transaction open while acquiring a SECOND
+/// connection from the same pool (hold-and-wait). The app here runs on a pool of exactly ONE
+/// connection with a short acquire timeout: a door that resolves its profile or emitter (or runs
+/// any other query) on the pool between `begin()` and `commit()` waits on the connection its own
+/// transaction holds, times out, and answers `500`. Production's serverless pools are five
+/// connections wide, so five concurrent writes stall the same way. Every door here is driven by
+/// the owner against a fresh live resource; any non-`500` answer (a state refusal on the
+/// segmented doors included) proves the door completed on one connection. The bite: in
+/// `DbBackend::resolve_actor_in_tx` (or any converted door), resolve on `&self.pool` instead of
+/// the transaction — that door answers `500` here.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn every_write_door_completes_on_a_single_connection_pool(pool: PgPool) {
+    let one = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(3))
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .expect("a one-connection pool on the test database");
+    let app = common::setup_test_app(one).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+
+    let probe = ingest(&app, &owner, own_context).await;
+    for door in doors(probe) {
+        let resource = ingest(&app, &owner, own_context).await;
+        let door = doors(resource)
+            .into_iter()
+            .find(|d| d.name == door.name)
+            .expect("the same door, addressed at a fresh resource");
+        let (status, body) = send(&app, &owner, &door).await;
+        assert_ne!(
+            status, 500,
+            "{}: a write door must complete on a one-connection pool (hold-and-wait); body: {body}",
+            door.name
+        );
+    }
 }

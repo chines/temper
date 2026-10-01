@@ -39,8 +39,21 @@
 //! The connection is the caller's transaction (`&mut tx`), the shape every `writes::*_in_tx` takes.
 //! Called on a bare pool connection it still answers, but the lock is released at once and the
 //! floor is a pre-check again — the gap this module exists to close.
+//!
+//! **An admission without the lock** — [`modify_admission_unlocked`] — is the same admission and
+//! the same classification on the pool, for a door that must not let a refused caller take a row
+//! lock at all (the delete door's `FOR UPDATE`). It binds nothing; the door still floors inside its
+//! transaction.
+//!
+//! **A transaction that lost a race answers `409`.** A deadlock (`40P01`) or serialization failure
+//! (`40001`) inside a floored write is contention, not a fault: `is_contention` is the one
+//! classifier, and every error this module raises passes through it.
+//!
+//! **A refusal rolls back before it is answered.** `rollback_with` ends the transaction a floor
+//! (or any in-transaction gate) refused, so the row lock is released before the door answers
+//! rather than whenever the dropped connection's queued `ROLLBACK` reaches the server.
 
-use sqlx::PgConnection;
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use temper_core::error::TemperError;
 use temper_core::types::ids::{ProfileId, ResourceId};
 
@@ -56,6 +69,33 @@ pub async fn modify_floor_in_tx(
 ) -> Result<(), TemperError> {
     // The lock is all this step is for; whether a row came back is the admission's question.
     lock_resource_row(conn, resource).await?;
+    modify_admission(conn, profile, resource).await
+}
+
+/// [`modify_floor_in_tx`]'s admission and classification WITHOUT the row lock, on one pool
+/// connection: `Ok(())` admits; a deny is [`TemperError::ResourceErased`] to a holder of the
+/// husk, else [`TemperError::Forbidden`] — the same answer the floor gives, from the same two
+/// calls. For a door that takes a stronger lock than the floor's (the delete door's `FOR UPDATE`):
+/// run this BEFORE the transaction opens, so a caller the floor would refuse never queues for, or
+/// holds, that lock. It binds nothing — between this answer and the write the resource may change
+/// — so the door still runs [`modify_floor_in_tx`] inside its transaction, and that call decides.
+pub async fn modify_admission_unlocked(
+    pool: &PgPool,
+    profile: ProfileId,
+    resource: ResourceId,
+) -> Result<(), TemperError> {
+    let mut conn = pool.acquire().await.map_err(floor_err)?;
+    modify_admission(&mut conn, profile, resource).await
+}
+
+/// The modify admission: `can_modify_resource` (migration `20260804000020`), called, never
+/// restated; on deny, the classification. Locks nothing — the caller decides whether a lock
+/// precedes it.
+async fn modify_admission(
+    conn: &mut PgConnection,
+    profile: ProfileId,
+    resource: ResourceId,
+) -> Result<(), TemperError> {
     let can: Option<bool> = sqlx::query_scalar!(
         "SELECT can_modify_resource($1, $2)",
         *profile,
@@ -130,9 +170,48 @@ async fn erased_or_forbidden(
     }
 }
 
-/// Bridge a database error into `TemperError`, as `db_backend`'s `api_err` does.
+/// Bridge a database error into `TemperError`: contention ([`is_contention`]) is
+/// [`contention_conflict`]'s retryable `409`, anything else the `500` `db_backend`'s `api_err` gives.
 fn floor_err(e: sqlx::Error) -> TemperError {
-    TemperError::Api(e.to_string())
+    if is_contention(&e) {
+        contention_conflict()
+    } else {
+        TemperError::Api(e.to_string())
+    }
+}
+
+/// Did this statement lose a race with a concurrent transaction? SQLSTATE `40001`
+/// (`serialization_failure`) or `40P01` (`deadlock_detected`): Postgres aborted the transaction so
+/// another could proceed, and the same request, retried, can succeed. The one classifier for both
+/// the floored write doors and the SERIALIZABLE reconcile/genesis commits (`db_backend`'s
+/// `map_commit_err`, which mapped `40001` alone before this).
+pub(crate) fn is_contention(e: &sqlx::Error) -> bool {
+    matches!(
+        e,
+        sqlx::Error::Database(db) if matches!(db.code().as_deref(), Some("40001" | "40P01"))
+    )
+}
+
+/// The answer to a write transaction that lost a race ([`is_contention`]): `409 Conflict`,
+/// retryable — never the `500` a fault is.
+pub(crate) fn contention_conflict() -> TemperError {
+    TemperError::Conflict("the write conflicted with a concurrent write; retry".to_string())
+}
+
+/// End `tx` — refused by a floor or another in-transaction gate — with an explicit `ROLLBACK`,
+/// then hand back the refusal. Dropping the transaction would roll it back too, but only when the
+/// returned connection's queued `ROLLBACK` next reaches the server; until then the floor's
+/// `FOR KEY SHARE` (and any lock taken before it) stays held, so a refused caller's transaction
+/// could still delay the erasure act or another writer. A failed rollback does not change the
+/// answer — the refusal is still the door's — and the drop is the fallback, so it is logged only.
+pub(crate) async fn rollback_with<E>(tx: Transaction<'_, Postgres>, refusal: E) -> E {
+    if let Err(e) = tx.rollback().await {
+        tracing::warn!(
+            error = %e,
+            "explicit rollback of a refused write failed; the drop rolls it back"
+        );
+    }
+    refusal
 }
 
 #[cfg(all(test, feature = "test-db"))]
