@@ -26,13 +26,21 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
 - **Resource erasure 2c: write doors refuse an erased resource with `410 RESOURCE_ERASED`, checked inside the write**
   `PATCH /api/resources/{id}`, `PUT /api/resources/{id}/meta`, `PUT /api/ingest/{id}`,
   `DELETE /api/resources/{id}`, `POST /api/resources/{id}/provenance`,
-  `POST /api/resources/{id}/artifacts` and `POST /api/facets` (resource owner) check the caller's
+  `POST /api/resources/{id}/artifacts`, `POST /api/facets` (resource owner),
+  `POST /api/resources/{id}/blocks`, `POST /api/resources/{id}/finalize`, the ingestion-source
+  record of a segmented `POST /api/ingest`, and each candidate of `POST /api/resources/reblock`
+  check the caller's
   right to modify inside the write's own transaction, under a row lock, so a write racing an
   erasure or a soft delete either lands before it or is refused after it. A caller who holds
   standing on an erased resource (`resource_husk_held_by`, the read side's population) now gets
   `410 RESOURCE_ERASED` where it got `403`; every other caller keeps `403`, and a soft-deleted
   resource keeps `403`. A `PATCH` that sets a goal the caller may not link is now refused as a
-  whole: the title and body no longer land without the goal. Who observes: the owner or a grant
+  whole: the title and body no longer land without the goal. Reblock addressed at an erased id
+  answers a holder `410` (everyone else keeps `404`); a candidate erased under a running batch is a
+  `denied` row. A segmented ingest that replays an idempotency key onto a since-deleted resource
+  now gets `403` (the write side's deny) where it got `404`. A principal with no emitter to
+  resolve (a read-only machine client) is refused by the gate (`403`) on create and on these
+  doors, where it got `500`. Who observes: the owner or a grant
   holder of an erased resource; a caller whose goal link is refused. User-visible: yes. Release
   relevance: signal-only.
 pr: self

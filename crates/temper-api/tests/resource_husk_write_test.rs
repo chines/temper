@@ -17,6 +17,10 @@
 //! Plus the goal-set partial write: a PATCH that changes the title AND links a goal the caller
 //! may not link is refused whole — the title does not land.
 //!
+//! Plus the reblock batch (`POST /api/resources/reblock`), which floors per candidate and never
+//! answers an erasure inside its `200`: an addressed erased id answers `404` (the candidate read
+//! filters `is_active`), and a candidate erased between that read and its floor is a `denied` row.
+//!
 //! Every state is made by a real door: the resource by `POST /api/ingest`, the grant by
 //! `POST /api/resources/{id}/grants`, the husk by the operator door
 //! `POST /api/admin/resources/erasure`, the tombstone by `DELETE /api/resources/{id}`. Nothing
@@ -30,10 +34,14 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
+use temper_core::types::ingest::{
+    pack_chunks, AppendBlockPayload, FinalizePayload, IngestPayload, PackedChunk,
+};
 
 const TITLE: &str = "Husk Write Subject Title";
 const BODY: &str = "Prose the write floor must refuse to touch once erased.";
+/// The segment the append door is offered.
+const SEGMENT: &str = "\n## Appended\n\nA segment the write floor must refuse to land.";
 
 /// The code a husk answer travels under — the one constant producer and consumer share.
 const RESOURCE_ERASED: &str = temper_core::error::RESOURCE_ERASED_CODE;
@@ -193,7 +201,10 @@ struct Door {
 
 /// Every resource-row write door that floors on `can_modify_resource` inside its transaction.
 /// Each body is valid for a live resource the caller may modify, so a refusal below is the
-/// floor's, not a shape error's.
+/// floor's, not a shape error's. The two segmented-ingest doors' bodies are well-formed (the
+/// append's `content_hash` is the segment's real sha256 and it carries its own chunks); the
+/// resource here is `complete`, not `in_progress`, but both doors floor before the op is asked
+/// anything about its state.
 fn doors(resource: Uuid) -> Vec<Door> {
     vec![
         Door {
@@ -276,6 +287,34 @@ fn doors(resource: Uuid) -> Vec<Door> {
                 "values": { "summary": "refused" },
                 "weight": 1.0,
             })),
+        },
+        Door {
+            name: "POST /api/resources/{id}/blocks",
+            method: Method::POST,
+            path: format!("/api/resources/{resource}/blocks"),
+            body: Some(
+                serde_json::to_value(AppendBlockPayload {
+                    seq: 1,
+                    content: SEGMENT.to_string(),
+                    content_hash: temper_core::hash::sha256_hex(SEGMENT.as_bytes()),
+                    chunks_packed: Some(pack_chunks(&[chunk(SEGMENT)]).expect("pack")),
+                    sources: Vec::new(),
+                })
+                .expect("append body"),
+            ),
+        },
+        Door {
+            name: "POST /api/resources/{id}/finalize",
+            method: Method::POST,
+            path: format!("/api/resources/{resource}/finalize"),
+            body: Some(
+                serde_json::to_value(FinalizePayload {
+                    expected_blocks: 1,
+                    expected_body_hash: String::new(),
+                    expected_content_hash: None,
+                })
+                .expect("finalize body"),
+            ),
         },
     ]
 }
@@ -479,4 +518,160 @@ async fn a_refused_goal_set_leaves_the_title_unchanged(pool: PgPool) {
         TITLE,
         "the refused goal-set rolled the whole update back — the title did not land"
     );
+}
+
+// ── WITNESS: reblock addressed at an erased id answers 410 to a holder, 404 to everyone else ──
+
+/// FAILS IF `POST /api/resources/reblock` with `scope = resource` addressed at an erased resource
+/// answers its owner (a husk holder) anything but `410 RESOURCE_ERASED`, or answers a caller with
+/// no standing anything but the leak-safe `404` (ruled 2026-09-30: every write door gives a holder
+/// the read side's 410). The resource arm's candidate read filters `is_active`, so the erased id
+/// misses there and the miss is classified through `resource_husk_held_by`. The bites: answer the
+/// miss with `NotFound` unconditionally (the owner assertion fails), or with `ResourceErased`
+/// unconditionally (the stranger assertion fails).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reblock_addressed_at_an_erased_resource_answers_410_to_a_holder_and_404_otherwise(
+    pool: PgPool,
+) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, _) = caller(&app.pool, "owner").await;
+    let (stranger, _) = caller(&app.pool, "stranger").await;
+    let home = team_context(&app.pool, &[owner.profile]).await;
+    let resource = ingest(&app, &owner, home).await;
+
+    erase(&app, resource).await;
+
+    for (who, expected_status, label) in
+        [(&owner, 410u16, "owner"), (&stranger, 404u16, "stranger")]
+    {
+        let resp = app
+            .client
+            .post(app.url("/api/resources/reblock"))
+            .header("Authorization", format!("Bearer {}", who.token))
+            .json(&json!({ "scope": { "resource": resource }, "dry_run": false }))
+            .send()
+            .await
+            .expect("reblock request");
+        let status = resp.status().as_u16();
+        let body: Value =
+            serde_json::from_str(&resp.text().await.expect("reblock body")).unwrap_or(Value::Null);
+        assert_eq!(
+            status, expected_status,
+            "{label}: reblock of an erased id; body: {body}"
+        );
+        if expected_status == 410 {
+            assert_eq!(
+                body["error"]["code"], RESOURCE_ERASED,
+                "{label}; body: {body}"
+            );
+        } else {
+            assert_ne!(
+                body["error"]["code"], RESOURCE_ERASED,
+                "{label}; body: {body}"
+            );
+        }
+    }
+}
+
+// ── WITNESS: a candidate erased under the batch is a denied row, never a 410 ──────────────────
+
+/// FAILS IF a reblock candidate that is erased between the candidate read and its write floor
+/// surfaces as anything but a `denied` row in a `200` receipt. No scope can ENUMERATE an erased
+/// resource (every candidate read filters `is_active`), so the floor's erased classification
+/// reaches the batch only through this race — and it must read `denied`, exactly as a `Forbidden`
+/// does, never a `410` inside a `200` and never an `error` row.
+///
+/// The choreography is `resource_erasure_act.rs`'s: the act runs uncommitted in its own
+/// transaction (holding `FOR UPDATE` on R), the reblock starts, a 2-second timeout that EXPIRES
+/// shows its floor waiting on R's row lock, then the act commits. The act is called as the SQL
+/// function the operator door calls (`resource_erasure_execute`), because the door commits its
+/// own transaction and a race needs one held open; its `SystemAdmin` gate is the door's, not the
+/// function's.
+///
+/// The bite: in `DbBackend::reblock_candidate`, narrow the floor's refusal arm to
+/// `Err(TemperError::Forbidden)` — the `ResourceErased` classification then falls to `row_error`
+/// and the row reads `error`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_candidate_erased_under_the_batch_reads_denied(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, _) = caller(&app.pool, "owner").await;
+    let (operator, _) = caller(&app.pool, "operator").await;
+    let home = team_context(&app.pool, &[owner.profile]).await;
+    let resource = ingest(&app, &owner, home).await;
+    let operator_emitter: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id \
+          WHERE e.profile_id = $1 AND e.name = p.handle || '@web'",
+    )
+    .bind(operator.profile)
+    .fetch_one(&app.pool)
+    .await
+    .expect("the operator's web emitter");
+
+    // The act, executed and NOT committed: it holds FOR UPDATE on R's row.
+    let mut act = app.pool.begin().await.expect("begin the act");
+    sqlx::query("SELECT resource_erasure_execute($1, $2, $3, $4, '{}'::uuid[])")
+        .bind(resource)
+        .bind(operator.profile)
+        .bind(operator_emitter)
+        .bind(Uuid::now_v7())
+        .execute(&mut *act)
+        .await
+        .expect("the act runs inside its open transaction");
+
+    // The reblock: R is still live to its candidate read (the act has not committed), so R is a
+    // candidate; its floor's FOR KEY SHARE then waits on the act's FOR UPDATE.
+    let client = app.client.clone();
+    let url = app.url("/api/resources/reblock");
+    let token = owner.token.clone();
+    let mut reblock = tokio::spawn(async move {
+        let resp = client
+            .post(url)
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&json!({ "scope": { "resource": resource }, "dry_run": false }))
+            .send()
+            .await
+            .expect("reblock request");
+        let status = resp.status().as_u16();
+        let body: Value = resp.json().await.expect("reblock receipt JSON");
+        (status, body)
+    });
+    let finished_within_window =
+        tokio::time::timeout(std::time::Duration::from_secs(2), &mut reblock).await;
+    assert!(
+        finished_within_window.is_err(),
+        "the reblock completed while the act held R's row — its floor did not wait"
+    );
+
+    act.commit().await.expect("commit the act");
+    let (status, receipt) = reblock.await.expect("the reblock task must not panic");
+
+    let erased: bool =
+        sqlx::query_scalar("SELECT erased_at IS NOT NULL FROM kb_resources WHERE id = $1")
+            .bind(resource)
+            .fetch_one(&app.pool)
+            .await
+            .expect("husk probe");
+    assert!(erased, "precondition: the act committed an erasure");
+
+    assert_eq!(
+        status, 200,
+        "the batch answers its receipt; body: {receipt}"
+    );
+    let outcomes = receipt["outcomes"].as_array().expect("outcomes array");
+    assert_eq!(
+        outcomes.len(),
+        1,
+        "R was the one candidate; receipt: {receipt}"
+    );
+    assert_eq!(
+        outcomes[0]["resource"],
+        json!(resource),
+        "the row is R's; receipt: {receipt}"
+    );
+    assert_eq!(
+        outcomes[0]["outcome"], "denied",
+        "an erased candidate is the denied row a forbidden one is; receipt: {receipt}"
+    );
+    assert_eq!(receipt["summary"]["declined"], 1, "receipt: {receipt}");
+    assert_eq!(receipt["summary"]["error"], 0, "receipt: {receipt}");
 }

@@ -873,18 +873,24 @@ impl DbBackend {
     /// `conversion_tool` is fixed to `"passthrough"`: every segmented caller already holds extracted
     /// markdown (the CLI extracts and chunks client-side; MCP sends prose it composed), so there is
     /// no server-side kreuzberg conversion on this path.
+    ///
+    /// Its own transaction, floored at its head (resource erasure spec D13): the record cannot land
+    /// on a resource the caller may no longer modify. The create's transaction cannot be shared —
+    /// `writes::create_resource_with_mode_idempotent` opens and commits its own, around inline
+    /// block preparation, and the backend runs the goal edge and the post-create ticks after that
+    /// commit. On a fresh create the floor admits (the caller owns the home it was just placed in);
+    /// on an idempotent replay the id is a PRIOR create's, which may since have been tombstoned,
+    /// erased or reassigned, and there the floor is the door's answer.
     async fn record_ingestion_source(
         &self,
         resource: ResourceId,
         source_uri: &str,
         source_hash: Option<&str>,
     ) -> Result<(), TemperError> {
-        // Auth before any write (WS2), belt-and-suspenders: the handler only calls this
-        // immediately after its own `create_resource` succeeded for the same caller, so this
-        // trivially passes — but every DbBackend write gates independently, no exceptions.
-        self.check_can_modify_next(resource.uuid()).await?;
-        writes::upsert_ingestion_record(
-            &self.pool,
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await?;
+        writes::upsert_ingestion_record_in_tx(
+            &mut tx,
             writes::IngestionRecord {
                 resource,
                 source_uri,
@@ -895,7 +901,8 @@ impl DbBackend {
             },
         )
         .await
-        .map_err(api_err)
+        .map_err(api_err)?;
+        tx.commit().await.map_err(api_err)
     }
 
     /// Auth-before-writes gate for authoring INTO a cognitive map: the acting profile must hold an
@@ -987,7 +994,7 @@ impl DbBackend {
     /// place content in a container they cannot write** — the same read-wider-than-write axis
     /// migration `20260712000010` closed for the *modify* path, still open on the *placement* path.
     ///
-    /// Two callers, one per verb, because placement has two: `create_resource_inner` (create INTO a
+    /// Two callers, one per verb, because placement has two: `create_resource_unread` (create INTO a
     /// context) and `update_resource`'s `move_to.context_to` (re-home an existing resource into one).
     /// The re-home is the sharper of the pair — create places new content, re-home can drag existing
     /// content into a container the actor has no authority over — and the update's own modify
@@ -2160,26 +2167,39 @@ impl DbBackend {
         Ok(())
     }
 
-    /// The create body, shared by [`Backend::create_resource`] (`segmented = false`) and
-    /// [`Backend::begin_segmented_ingest`] (`segmented = true`) — the only caller that needs a resource
-    /// born `ingest_state = 'in_progress'`, because its body arrives across many acts and only
-    /// `resource_finalize` can say the last one landed.
+    /// [`Backend::create_resource`]'s body: [`Self::create_resource_unread`], then the readback.
     #[act_span]
     async fn create_resource_inner(
         &self,
         cmd: CreateResource,
         segmented: bool,
     ) -> Result<CommandOutput<ResourceView>, TemperError> {
+        let new_id = self.create_resource_unread(cmd, segmented).await?;
+        let view = native_resource_view(&self.pool, self.profile_id, new_id).await?;
+        Ok(CommandOutput::new(view))
+    }
+
+    /// The create, without its readback — shared by [`Backend::create_resource`] (through
+    /// [`Self::create_resource_inner`], `segmented = false`) and [`Backend::begin_segmented_ingest`]
+    /// (`segmented = true`) — the only caller that needs a resource born
+    /// `ingest_state = 'in_progress'`, because its body arrives across many acts and only
+    /// `resource_finalize` can say the last one landed. Returns the created id, or on an idempotent
+    /// replay the prior create's id.
+    ///
+    /// The readback is the caller's: segmented begin writes its ingestion record (floored) BEFORE
+    /// any read of the resource, and reads back only the landed-block set.
+    ///
+    /// Carries no act span of its own: both callers do (`act_context` below records onto the
+    /// current span).
+    async fn create_resource_unread(
+        &self,
+        cmd: CreateResource,
+        segmented: bool,
+    ) -> Result<ResourceId, TemperError> {
         // Resolve the caller's synthesized identity (natural-key).
         // `cmd.home` is a pre-resolved HomeAnchor — surfaces parse+resolve the ref
         // before building the command, so no `writes::resolve_context` call is needed here.
         let prod_profile: uuid::Uuid = *self.profile_id;
-        let owner = writes::resolve_profile(&self.pool, prod_profile)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
         // Correlation-integrity gate for any claimed invocation — additive to the create authz above,
         // before any mutation (auth-before-write). No-op when the act carries no invocation.
         self.check_act_invocation(cmd.act.invocation).await?;
@@ -2196,6 +2216,14 @@ impl DbBackend {
             HomeAnchor::Cogmap(m) => self.check_cogmap_authorable(uuid::Uuid::from(*m)).await?,
             HomeAnchor::Context(c) => self.check_context_authorable(uuid::Uuid::from(*c)).await?,
         }
+        // Resolved only after the gates admit: a principal they refuse (a read-only machine client
+        // has no emitter to resolve) must get the gate's 403, not a 500.
+        let owner = writes::resolve_profile(&self.pool, prod_profile)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
         // Map the command's HomeAnchor to the substrate's AnchorRef so CreateParams.home
         // accepts either a context or a cognitive map without further branching downstream.
         let home = match cmd.home {
@@ -2331,10 +2359,7 @@ impl DbBackend {
         // standing memo, embed enqueue) already ran on the original create. Return it as-is — re-running
         // any of that on a replay is at best wasted work and at worst a double-assert.
         if replayed {
-            let view =
-                native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
-                    .await?;
-            return Ok(CommandOutput::new(view));
+            return Ok(new_id);
         }
 
         // Project the first-class goal link to a live `advances`→goal edge (issue 019f3d55). The
@@ -2389,10 +2414,7 @@ impl DbBackend {
         self.tick_resource_standing(ResourceId::from(new_id.uuid()))
             .await;
 
-        let view =
-            native_resource_view(&self.pool, self.profile_id, ResourceId::from(new_id.uuid()))
-                .await?;
-        Ok(CommandOutput::new(view))
+        Ok(new_id)
     }
 }
 
@@ -4253,9 +4275,11 @@ impl Backend for DbBackend {
     /// (`in_progress`) population in the summary — the receipt names the population, it never
     /// hides behind the gate; the addressed-resource arm needs no count, its own state refusal
     /// reaching the receipt per row. `dry_run` routes every candidate to the read-only survey
-    /// (the same machinery the act runs, minus the write); the act is `reblock_resource_with`
-    /// under the invoking operator's emitter with a batch correlation id in the `EventContext`.
-    /// Per-resource declines are typed per class — the gate's refusal is `denied`; the op's own
+    /// (the same machinery the act runs, minus the write); the act is `reblock_resource_in_tx`
+    /// under the invoking operator's emitter with a batch correlation id in the `EventContext`,
+    /// in the candidate's own transaction behind the write floor (`reblock_candidate`).
+    /// Per-resource declines are typed per class — the gate's refusal is `denied` (an erased
+    /// candidate included: the floor's 410 classification never surfaces in this 200); the op's own
     /// refusals arrive as `in_progress`, `byteless`, or `drift`, each with the human remediation
     /// in the row's detail. An errored row declines-and-continues — a batch never rolls back
     /// over one bad row, in either arm; the row ships one bounded static sentence
@@ -4281,14 +4305,12 @@ impl Backend for DbBackend {
             crate::auth::require_system_admin_by_id(&self.pool, self.profile_id).await?;
         }
 
-        // The invoking operator is the emitter of every act this batch fires. Resolved once —
-        // these describe the CALLER, not any row, so a failure here is a failed invocation.
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
+        // The invoking operator is the emitter of every act this batch fires. Resolved once, and
+        // only when the first candidate's floor admits (`reblock_candidate`): it describes the
+        // CALLER, not any row, so a failure is a failed invocation — but a caller every row's
+        // floor refuses (a read-only machine client has no emitter to resolve) must get its
+        // `denied` rows, not a 500. The survey arm fires nothing and never resolves it.
+        let mut emitter: Option<EntityId> = None;
         // The batch correlation id: minted per invocation, stamped on every fired event, echoed
         // in the receipt. A grouping key, never a capability.
         let correlation = temper_core::types::ids::CorrelationId::from(uuid::Uuid::now_v7());
@@ -4306,7 +4328,7 @@ impl Backend for DbBackend {
                 // An ADDRESSED resource is gated, not enumerated: no ingest_state filter — the
                 // op's own state-column refusal reaches the receipt. Invisible-or-absent is the
                 // leak-safe NotFound (no existence oracle), exactly as `show` reads.
-                sqlx::query!(
+                let row = sqlx::query!(
                     r#"SELECT r.id FROM kb_resources r
                          WHERE r.id = $1 AND r.is_active
                            AND EXISTS (SELECT 1 FROM resources_visible_to($2) v
@@ -4316,9 +4338,31 @@ impl Backend for DbBackend {
                 )
                 .fetch_optional(&self.pool)
                 .await
-                .map_err(api_err)?
-                .map(|row| vec![row.id])
-                .ok_or_else(|| TemperError::NotFound(format!("resource {id} not found")))?
+                .map_err(api_err)?;
+                match row {
+                    Some(row) => vec![row.id],
+                    // A miss is the leak-safe NotFound, except to a caller who holds an erased
+                    // husk: they get the 410 every other door gives them (ruled 2026-09-30), so
+                    // reblock never reads erasure as "never existed" to someone who can read it.
+                    None => {
+                        let resource = ResourceId::from(*id);
+                        return Err(
+                            match crate::backend::substrate_read::husk_held_by(
+                                &self.pool,
+                                self.profile_id,
+                                resource,
+                            )
+                            .await
+                            {
+                                Ok(true) => TemperError::ResourceErased(resource),
+                                Ok(false) => {
+                                    TemperError::NotFound(format!("resource {id} not found"))
+                                }
+                                Err(e) => api_err(e),
+                            },
+                        );
+                    }
+                }
             }
             ReblockScope::Context(context) => sqlx::query!(
                 r#"SELECT r.id FROM kb_resources r
@@ -4396,47 +4440,46 @@ impl Backend for DbBackend {
 
         let mut outcomes: Vec<ReblockCandidate> = Vec::with_capacity(candidates.len());
         for id in candidates {
-            let outcome = match self.check_can_modify_next(id).await {
-                Err(TemperError::Forbidden) => ReblockOutcome::Denied,
-                Err(e) => row_error(correlation, id, e),
-                Ok(()) if cmd.dry_run => {
-                    // The survey arm: the act's machinery, read-only. A per-row error takes the
-                    // SAME bounded row-error path as the act — one poisoned candidate is a
-                    // receipt row, never an aborted invocation, so the declines-and-continues
-                    // sentence above holds for both arms.
-                    match writes::survey_reblock_resource(&self.pool, ResourceId::from(id)).await {
-                        Ok(temper_substrate::writes::ReblockSurvey::NoOp) => ReblockOutcome::NoOp,
-                        Ok(temper_substrate::writes::ReblockSurvey::WouldChange) => {
-                            ReblockOutcome::WouldChange
-                        }
-                        Ok(temper_substrate::writes::ReblockSurvey::Declined { reason }) => {
-                            map_decline(reason)
-                        }
-                        Err(e) => row_error(correlation, id, e),
+            let outcome = if cmd.dry_run {
+                // The survey arm: the act's machinery, read-only. It writes nothing, so the floor
+                // runs on a pool connection (`modify_floor_fast_fail` — the same lock, admission and
+                // classification) with no transaction for it to bind. A per-row error takes the
+                // SAME bounded row-error path as the act — one poisoned candidate is a receipt
+                // row, never an aborted invocation, so the declines-and-continues sentence above
+                // holds for both arms.
+                match self.modify_floor_fast_fail(ResourceId::from(id)).await {
+                    // An erased candidate is the same `denied` row a forbidden one is: a 410
+                    // never rides inside this 200 batch.
+                    Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => {
+                        ReblockOutcome::Denied
                     }
-                }
-                Ok(()) => {
-                    // The act: the shipped op, per resource, in the resource's own transaction.
-                    match writes::reblock_resource_with(
-                        &self.pool,
-                        writes::ReblockParams {
-                            resource: ResourceId::from(id),
-                            emitter,
-                        },
-                        act_ctx.clone(),
-                    )
-                    .await
-                    {
-                        Ok(writes::ReblockOutcome::Reblocked { event }) => {
-                            ReblockOutcome::Reblocked {
-                                event: event.uuid(),
+                    Err(e) => row_error(correlation, id, e),
+                    Ok(()) => {
+                        match writes::survey_reblock_resource(&self.pool, ResourceId::from(id))
+                            .await
+                        {
+                            Ok(temper_substrate::writes::ReblockSurvey::NoOp) => {
+                                ReblockOutcome::NoOp
                             }
+                            Ok(temper_substrate::writes::ReblockSurvey::WouldChange) => {
+                                ReblockOutcome::WouldChange
+                            }
+                            Ok(temper_substrate::writes::ReblockSurvey::Declined { reason }) => {
+                                map_decline(reason)
+                            }
+                            Err(e) => row_error(correlation, id, e),
                         }
-                        Ok(writes::ReblockOutcome::NoOp) => ReblockOutcome::NoOp,
-                        Ok(writes::ReblockOutcome::Declined { reason }) => map_decline(reason),
-                        Err(e) => row_error(correlation, id, e),
                     }
                 }
+            } else {
+                self.reblock_candidate(
+                    ResourceId::from(id),
+                    &mut emitter,
+                    cmd.origin,
+                    act_ctx.clone(),
+                    correlation,
+                )
+                .await?
             };
             outcomes.push(ReblockCandidate {
                 resource: id,
@@ -4486,6 +4529,7 @@ impl Backend for DbBackend {
         }))
     }
 
+    #[act_span]
     async fn begin_segmented_ingest(
         &self,
         cmd: CreateResource,
@@ -4517,10 +4561,14 @@ impl Backend for DbBackend {
         // is born `ingest_state = 'in_progress'`, so if this upload is killed before `finalize` it is
         // excluded from list and search rather than sitting there looking like a whole document. It
         // stays addressable by `show` (and resumable) throughout.
-        let out = self.create_resource_inner(cmd, true).await?;
-        let resource_id = out.value.id;
+        //
+        // `create_resource_unread`, not `create_resource_inner`: nothing reads the resource back
+        // until the ingestion record below has passed its floor and landed (resource erasure spec
+        // D13). The only read this door answers with is the landed-block set.
+        let resource_id = self.create_resource_unread(cmd, true).await?;
 
-        // The per-resource source-provenance row, written at begin (design §4 point 4).
+        // The per-resource source-provenance row, written at begin (design §4 point 4), floored
+        // inside its own transaction — see `record_ingestion_source`.
         self.record_ingestion_source(resource_id, &origin_uri, seg.source_hash.as_deref())
             .await?;
 
@@ -4541,8 +4589,15 @@ impl Backend for DbBackend {
         payload: AppendBlockPayload,
         origin: Surface,
     ) -> Result<CommandOutput<BlocksResponse>, TemperError> {
-        // Auth before any write (WS2): the caller must be able to modify this resource.
-        self.check_can_modify_next(resource.uuid()).await?;
+        // Auth before any write (WS2): the write floor's pool-side fast-fail
+        // (`modify_floor_fast_fail`), kept because this door prepares the block before its write
+        // transaction opens — the prior block's breadcrumb read and, on the chunks-absent arm,
+        // server-side chunking and (unless embedding is deferred) inline embedding. A caller the
+        // floor refuses must get its answer (410 to a husk holder, else 403) before any of that
+        // runs, and before the profile and emitter resolution below, which a refused principal
+        // with no emitter would fail as a 500. The floor that binds the write runs again at the
+        // head of the transaction below.
+        self.modify_floor_fast_fail(resource).await?;
         // Then the payload's own integrity, before anything is prepared or written.
         validate_append(&payload)?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
@@ -4599,8 +4654,13 @@ impl Backend for DbBackend {
         // the same "empty ⇒ no verbatim guarantee" invariant the create/update paths enforce.
         block.raw_text = (!payload.content.is_empty()).then(|| payload.content.clone());
 
-        writes::append_block(
-            &self.pool,
+        // The modify floor at the head of the append's own transaction (resource erasure spec
+        // D13), so the check and the append cannot separate: an erasure or soft delete that landed
+        // while the block was being prepared is answered here, and nothing is appended.
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await?;
+        writes::append_block_in_tx(
+            &mut tx,
             writes::AppendParams {
                 resource,
                 block: &block,
@@ -4610,9 +4670,11 @@ impl Backend for DbBackend {
                 sources: incorporations_from_sources(&payload.sources),
                 emitter,
             },
+            EventContext::default(),
         )
         .await
         .map_err(api_err)?;
+        tx.commit().await.map_err(api_err)?;
 
         let landed = Self::landed_blocks(&self.pool, resource).await?;
         Ok(CommandOutput::new(landed))
@@ -4624,8 +4686,14 @@ impl Backend for DbBackend {
         payload: FinalizePayload,
         origin: Surface,
     ) -> Result<CommandOutput<()>, TemperError> {
-        // Auth before any write (WS2): the caller must be able to modify this resource.
-        self.check_can_modify_next(resource.uuid()).await?;
+        // Auth before any write (WS2): the modify floor, at the head of the finalize's own
+        // transaction (resource erasure spec D13), so the check and the finalize cannot separate.
+        // No pool fast-fail: nothing runs before the transaction opens — the write-path policy
+        // application already runs inside the finalize's transaction.
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await?;
+        // Resolved only after the floor admits: a principal the floor refuses (a read-only
+        // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -4633,8 +4701,8 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
 
-        writes::finalize_ingest(
-            &self.pool,
+        writes::finalize_ingest_in_tx(
+            &mut tx,
             writes::FinalizeParams {
                 resource,
                 expected_blocks: payload.expected_blocks,
@@ -4645,6 +4713,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(finalize_err)?;
+        tx.commit().await.map_err(api_err)?;
 
         Ok(CommandOutput::new(()))
     }
@@ -4662,6 +4731,69 @@ impl Backend for DbBackend {
 }
 
 impl DbBackend {
+    /// One candidate of [`Backend::reblock_resources`]'s act arm: the modify floor at the head of
+    /// the candidate's own transaction (resource erasure spec D13), then the shipped op on that
+    /// transaction, then the commit — so the check and the re-block cannot separate.
+    ///
+    /// Every per-row answer is a receipt row. A floor refusal is `denied` whether the floor
+    /// classified it `Forbidden` or `ResourceErased`: a 410 never rides inside a 200 batch. A
+    /// fault — of the floor, the op or the commit — is the bounded `row_error`, and the
+    /// transaction rolls back on drop. The one `Err` is the caller's emitter failing to resolve,
+    /// which is a failed invocation (it describes the caller, not the row); `emitter` caches the
+    /// resolution across candidates, and nothing resolves it before a floor has admitted.
+    async fn reblock_candidate(
+        &self,
+        resource: ResourceId,
+        emitter: &mut Option<EntityId>,
+        origin: Surface,
+        act_ctx: EventContext,
+        correlation: temper_core::types::ids::CorrelationId,
+    ) -> Result<ReblockOutcome, TemperError> {
+        let id = resource.uuid();
+        let mut tx = match self.pool.begin().await {
+            Ok(tx) => tx,
+            Err(e) => return Ok(row_error(correlation, id, e)),
+        };
+        match write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await {
+            Ok(()) => {}
+            Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => {
+                return Ok(ReblockOutcome::Denied)
+            }
+            Err(e) => return Ok(row_error(correlation, id, e)),
+        }
+        let emitter = match *emitter {
+            Some(resolved) => resolved,
+            None => {
+                let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+                    .await
+                    .map_err(api_err)?;
+                let resolved = writes::resolve_emitter(&self.pool, owner, origin.marker())
+                    .await
+                    .map_err(api_err)?;
+                *emitter = Some(resolved);
+                resolved
+            }
+        };
+        let outcome = match writes::reblock_resource_in_tx(
+            &mut tx,
+            writes::ReblockParams { resource, emitter },
+            act_ctx,
+        )
+        .await
+        {
+            Ok(writes::ReblockOutcome::Reblocked { event }) => ReblockOutcome::Reblocked {
+                event: event.uuid(),
+            },
+            Ok(writes::ReblockOutcome::NoOp) => ReblockOutcome::NoOp,
+            Ok(writes::ReblockOutcome::Declined { reason }) => map_decline(reason),
+            Err(e) => return Ok(row_error(correlation, id, e)),
+        };
+        match tx.commit().await {
+            Ok(()) => Ok(outcome),
+            Err(e) => Ok(row_error(correlation, id, e)),
+        }
+    }
+
     /// Structural validation for a keyed edge-owner write, applied BEFORE any fire so a refusal
     /// appends no ledger event — the error body is the record.
     ///

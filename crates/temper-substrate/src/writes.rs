@@ -3038,12 +3038,24 @@ pub async fn append_block_with(
     p: AppendParams<'_>,
     ctx: EventContext,
 ) -> Result<BlockId> {
+    let mut tx = begin_scoped(pool).await?;
+    let id = append_block_in_tx(&mut tx, p, ctx).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// In-transaction variant of [`append_block_with`] — fires the `BlockAppend` seed action on a
+/// caller-supplied connection (no begin/commit) and returns the block id.
+pub async fn append_block_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: AppendParams<'_>,
+    ctx: EventContext,
+) -> Result<BlockId> {
     // Carry resource-level sources onto the block manifest → kb_block_provenance.
     let mut block = p.block.clone();
     block.incorporated = p.sources;
-    let mut tx = begin_scoped(pool).await?;
     let id = fire_with(
-        &mut tx,
+        conn,
         SeedAction::BlockAppend {
             resource: p.resource,
             block: &block,
@@ -3053,7 +3065,6 @@ pub async fn append_block_with(
     )
     .await?
     .block()?;
-    tx.commit().await?;
     Ok(id)
 }
 
@@ -3075,6 +3086,19 @@ pub struct FinalizeParams {
 /// directly rather than through the `fire`/`SeedAction` surface, since there is no
 /// projection half to keep in step with a typed `Fired` variant.
 pub async fn finalize_ingest(pool: &PgPool, p: FinalizeParams) -> Result<EventId> {
+    let mut tx = begin_scoped(pool).await?;
+    let ev = finalize_ingest_in_tx(&mut tx, p).await?;
+    tx.commit().await?;
+    Ok(ev)
+}
+
+/// In-transaction variant of [`finalize_ingest`] — the finalize and its write-path policy
+/// application on a caller-supplied connection (no begin/commit). The caller's commit is the one
+/// atomic step [`finalize_ingest`] describes.
+pub async fn finalize_ingest_in_tx(
+    conn: &mut sqlx::PgConnection,
+    p: FinalizeParams,
+) -> Result<EventId> {
     let payload = payloads::ResourceFinalized {
         resource_id: p.resource,
         expected_blocks: p.expected_blocks,
@@ -3089,7 +3113,6 @@ pub async fn finalize_ingest(pool: &PgPool, p: FinalizeParams) -> Result<EventId
     // application (see `apply_blocking_policy_in_tx`) run in the same atomic step: the resource
     // becomes complete and policy-partitioned in one commit, with no observer able to read a
     // complete resource whose partition contradicts policy.
-    let mut tx = begin_scoped(pool).await?;
     let ev = sqlx::query_scalar!(
         "SELECT resource_finalize($1,$2,$3,$4)",
         serde_json::to_value(&payload)?,
@@ -3097,7 +3120,7 @@ pub async fn finalize_ingest(pool: &PgPool, p: FinalizeParams) -> Result<EventId
         serde_json::json!({}),
         Option::<Uuid>::None,
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *conn)
     .await?
     .context("resource_finalize returned null")?;
     // Write-path policy application: a segmented upload lands policy-partitioned at the same
@@ -3106,14 +3129,13 @@ pub async fn finalize_ingest(pool: &PgPool, p: FinalizeParams) -> Result<EventId
     // `resource_finalize` call above: `{}` metadata, NULL invocation), so the re-block matches
     // that posture — never less attributed than the finalize it rides.
     apply_blocking_policy_in_tx(
-        &mut tx,
+        conn,
         p.resource,
         p.emitter,
         EventContext::default(),
         Decline::Skip,
     )
     .await?;
-    tx.commit().await?;
     Ok(EventId::from(ev))
 }
 
@@ -3134,6 +3156,16 @@ pub struct IngestionRecord<'a> {
 /// resource_id) — its designed "ingestion idempotency" role, finally written. Holds
 /// the source uri + hash the resume path checks the client's source against.
 pub async fn upsert_ingestion_record(pool: &PgPool, r: IngestionRecord<'_>) -> Result<()> {
+    let mut conn = pool.acquire().await?;
+    upsert_ingestion_record_in_tx(&mut conn, r).await
+}
+
+/// In-transaction variant of [`upsert_ingestion_record`] — the upsert on a caller-supplied
+/// connection, so a caller can run it behind a check in the same transaction.
+pub async fn upsert_ingestion_record_in_tx(
+    conn: &mut sqlx::PgConnection,
+    r: IngestionRecord<'_>,
+) -> Result<()> {
     sqlx::query!(
         "INSERT INTO kb_ingestion_records \
            (resource_id, source_uri, source_mimetype, conversion_tool, conversion_version, fetched_at, converted_at, source_hash) \
@@ -3145,7 +3177,7 @@ pub async fn upsert_ingestion_record(pool: &PgPool, r: IngestionRecord<'_>) -> R
         r.resource.uuid(), r.source_uri, r.source_mimetype, r.conversion_tool,
         r.conversion_version, r.source_hash,
     )
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
