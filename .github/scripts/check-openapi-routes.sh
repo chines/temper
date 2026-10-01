@@ -98,6 +98,8 @@ ALLOWLIST='/api/access/admin/requests
 /api/region/dispatch
 /api/admin/erasure
 /api/admin/erasure/survey
+/api/admin/resources/erasure
+/api/admin/resources/erasure/survey
 /api/erasure/drain
 /api/intake/webhook'
 

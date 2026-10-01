@@ -1583,14 +1583,16 @@ pub struct PrincipalErased {
     pub propagated_to_clients: bool,
 }
 
-/// The closed refusal vocabulary for `principal_erasure_refused` (erasure spec D6). A refused
-/// attempt to erase a person is exactly the event an operator later needs, and the reason code
-/// is the WHY the subject receives.
+/// The closed refusal vocabulary for `principal_erasure_refused` (erasure spec D6). No door
+/// raises any principal refusal today: a non-admin is refused at the wire with no event, and a
+/// re-erase is a no-op completion. The vocabulary stays registered because removing a value from
+/// a closed vocabulary is not additive, and a ledger may already hold one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ErasureRefusalReason {
-    /// The caller lacks erasure standing.
+    /// Retired: no path raises it. A non-admin is refused at the wire with no event. The value
+    /// stays registered because removing one from a closed vocabulary is not additive.
     Unauthorized,
     /// The scope cannot be honoured in full; the unhonourable part is named in `detail`
     /// (accepted-in-part lands here, never silent).
@@ -1599,7 +1601,8 @@ pub enum ErasureRefusalReason {
     IndependentObligation,
 }
 
-/// `principal_erasure_refused` — the negative face of the erasure act (erasure spec D6).
+/// `principal_erasure_refused` — the negative face of the erasure act (erasure spec D6). No door
+/// raises it today; the type stays registered so a ledger that holds one still reads and replays.
 ///
 /// Same subject spelling as [`PrincipalErased`] (`subject_table` / `subject_id`, never the
 /// trail's join-key shapes); the operator is distinguishable from the subject exactly as
@@ -1685,19 +1688,18 @@ pub struct ResourceErased {
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceErasureRefusalReason {
-    /// The caller is not a system admin.
+    /// Retired: no path raises it. A non-admin is refused at the wire with no event. The value
+    /// stays registered because removing one from a closed vocabulary is not additive.
     Unauthorized,
     /// A cogmap's telos/charter resource: map-grain erasure is its own act, named in `detail`.
     CharterResource,
-    /// `ingest_state` is not `complete`: finalize or abandon the ingest first.
-    // Retired: ingest state no longer refuses an erasure (spec D5, ruled 2026-09-29; an in-flight
-    // ingest ends with the erasure). The value stays registered, and no path raises it.
+    /// Retired: no path raises it. Ingest state does not refuse an erasure; an in-flight ingest
+    /// ends with it (spec D5). The value stays registered because removing one from a closed
+    /// vocabulary is not additive.
     IngestInFlight,
-    /// The resource is already erased. Recorded by the block history scrub, which has nothing to
-    /// scrub on an erased resource; the erasure act itself answers an already-erased resource
-    /// idempotently and records nothing.
-    // Present truth: a repeat erasure is a recorded refusal (ruled 2026-09-29), not an idempotent
-    // no-op; the projection is unchanged and no second `resource_erased` is minted.
+    /// The resource is already erased. Recorded by the erasure act on a repeat request and by
+    /// the block history scrub, which has nothing to scrub on an erased resource. Nothing in the
+    /// projection changes and no second `resource_erased` is minted.
     AlreadyErased,
 }
 

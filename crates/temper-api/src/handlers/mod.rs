@@ -30,6 +30,7 @@ pub mod query;
 pub mod reassign;
 pub mod reblock;
 pub mod region;
+pub mod resource_erasure;
 pub mod resources;
 pub mod schema;
 pub mod search;

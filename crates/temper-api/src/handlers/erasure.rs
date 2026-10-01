@@ -2,18 +2,20 @@
 //! task 01a09628 item 2): the operator's execute door, the read-only survey beside it, and the
 //! byte-delete fence's cron tick.
 //!
-//! **The doors are gate-free by ruling.** Authorization lives in the SERVICES
-//! (`erasure_service::execute_erasure` / `erasure_service::survey_erasure` resolve
-//! `is_system_admin` before anything else), and the doors must not pre-empt or duplicate that
-//! gate — a prelude here would decide legality twice and could drift from the refusal the
-//! service records. A door's one job is the POSTURE: a non-operator's attempt is answered
-//! **404, never 403** (the admin-ledger pattern, `handlers/admin_ledger.rs` — a 403 would
-//! confirm an erasure door exists and who it refuses). The two doors' refusal faces differ by
-//! ruling: the EXECUTE door's service records the `unauthorized` refusal before the 404 is
-//! rendered, while the SURVEY door records NOTHING (a survey attempt is not an erasure
-//! request, ruled 2026-09-12 — the service's gate answers with the same silent 404 and no
-//! event). Both mounted plain (`.route()`), out of the OpenAPI contract like
+//! **The doors reject a non-admin at the wire.** Every erasure service function takes the sealed
+//! `&SystemAdmin` proof, so each door mints it with `require_system_admin` before it dispatches
+//! (`require_erasure_operator`, shared with [`crate::handlers::resource_erasure`]), the
+//! `admin_directory` shape. A caller the gate declines is answered **404, never 403**, before any
+//! lookup, so every subject id gets the same body and the refused caller learns nothing about the
+//! SUBJECT (not whether it exists, not whether it was erased). The doors themselves are
+//! discoverable, and the 404 does not claim to hide them. The only record of that attempt is one
+//! `tracing` line: no ledger event of any kind. A survey attempt was never recorded either (ruled 2026-09-12), so both doors now answer a
+//! non-admin alike. Both mounted plain (`.route()`), out of the OpenAPI contract like
 //! `/api/admin/ledger`; allowlisted in `.github/scripts/check-openapi-routes.sh`.
+//!
+//! The 404 covers WELL-FORMED requests: axum's `Json` extractor rejects a malformed body before
+//! the handler runs, the scope `admin_directory` states for its own gate. Such a rejection names
+//! only the caller's own malformed input.
 //!
 //! **The drain is the fence's only driver.** Same internal-cron posture as
 //! `/api/embed/dispatch`: bearer-gated by the shared `EMBED_DISPATCH_SECRET` (no new secret —
@@ -27,14 +29,42 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
+use temper_services::auth::SystemAdmin;
 use temper_services::error::{ApiError, ApiResult};
 use temper_services::services::erasure_fence_service::{self, DrainSummary};
-use temper_services::services::erasure_service::{self, ErasureOutcome};
+use temper_services::services::erasure_service;
 use temper_services::state::AppState;
-use temper_substrate::payloads::{ErasureRefusalReason, ErasureTargetOutcome};
+use temper_substrate::payloads::ErasureTargetOutcome;
 
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
+
+/// The erasure doors' gate: the sealed `&SystemAdmin` proof, or a does-not-exist 404.
+///
+/// `require_system_admin`'s `Forbidden` becomes `NotFound("not found")`, the same body for every
+/// id, because the gate answers before anything is looked up. The attempt is recorded by this one
+/// `warn` line and by nothing else: no ledger event. Warn, the level the API already logs every
+/// `Forbidden` at (`ApiError`'s response logging): the 404 it is rendered as logs at debug, so
+/// without this line a non-admin probing an erasure door would leave no trace an operator sees at
+/// the default filter. Any other gate failure (the governance read itself) propagates unchanged.
+pub(crate) async fn require_erasure_operator(
+    state: &AppState,
+    auth: &AuthUser,
+    door: &'static str,
+) -> ApiResult<SystemAdmin> {
+    match temper_services::auth::require_system_admin(&state.pool, &auth.0).await {
+        Err(ApiError::Forbidden) => {
+            tracing::warn!(
+                profile_id = %auth.0.profile().id,
+                door,
+                "erasure door refused a caller who is not a system admin; answered 404, \
+                 nothing recorded on the ledger"
+            );
+            Err(ApiError::NotFound("not found".to_string()))
+        }
+        gate => gate,
+    }
+}
 
 /// The survey door's request: the subject as the pseudonym UUID, and nothing else. No
 /// request_reference — nothing is requested (ruled 2026-09-12: a survey attempt is not an
@@ -61,13 +91,14 @@ pub struct BlobStrikeView {
     pub released: bool,
 }
 
-/// What the door's act did. A tagged enum, not optional fields: a completion and a refusal are
-/// different answers to different questions, and collapsing them into one shape makes "which
-/// happened?" a matter of which fields are null.
+/// What the door's act did: the completion, in full or as the no-op completion on an
+/// already-erased subject. It is the door's only answer, since no door raises a principal refusal
+/// (a caller who is not a system admin is answered 404 before dispatch). It stays a tagged enum
+/// of one variant so the wire keeps `"status": "completed"`: removing the tag would change the
+/// body's shape for no behavioural reason.
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ErasureExecuteResponse {
-    /// The act completed — in full, or as the no-op completion on an already-erased subject.
     Completed {
         event_id: Uuid,
         already_erased: bool,
@@ -80,20 +111,12 @@ pub enum ErasureExecuteResponse {
         targets: Vec<ErasureTargetOutcome>,
         blob_strikes: Vec<BlobStrikeView>,
     },
-    /// The act was refused and the refusal RECORDED (D6). `unauthorized` never reaches the
-    /// wire — the door answers it with 404 before serializing anything.
-    Refused {
-        event_id: Uuid,
-        reason: ErasureRefusalReason,
-        detail: Option<String>,
-    },
 }
 
 /// `POST /api/admin/erasure` — the operator's execute door.
 ///
-/// Gate-free HERE on purpose: the service's `is_system_admin` gate is the authority (it runs
-/// first, before any mutation, and records the `unauthorized` refusal for a non-operator). This
-/// handler maps that refusal to the 404 posture and never re-asks the question.
+/// The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof
+/// and attributes the act to `admin.actor()`.
 ///
 /// The request reference tolerates retries: a retried POST with the SAME reference re-executes
 /// as a no-op completion (the subject is already tombstoned, so the act completes with
@@ -106,50 +129,33 @@ pub async fn execute(
     RequestSurface(surface): RequestSurface,
     Json(body): Json<ErasureExecuteRequest>,
 ) -> ApiResult<Json<ErasureExecuteResponse>> {
-    let caller = ProfileId::from(auth.0.profile().id);
-    let outcome = erasure_service::execute_erasure(
+    let admin = require_erasure_operator(&state, &auth, "erasure.execute").await?;
+    let c = erasure_service::execute_erasure(
         &state.pool,
-        caller,
+        &admin,
         ProfileId::from(body.subject),
         body.request_reference,
         surface,
     )
     .await?;
 
-    match outcome {
-        // The gate's refusal face: the operator-only door renders ABSENT (404) — a 403 would
-        // disclose that an erasure door exists and that this caller was refused by it. The
-        // refusal event is already on the ledger; nothing is said to the caller.
-        ErasureOutcome::Refused(r) if r.reason == ErasureRefusalReason::Unauthorized => {
-            Err(ApiError::NotFound("not found".to_string()))
-        }
-        // An operator-facing refusal (unhonourable scope, independent obligation) is the
-        // operator's own information: the door answers it plainly. Unreachable through this
-        // door today — the service's only pre-gate refusal is `unauthorized` — but the arm is
-        // the D6 face rendered honestly rather than an internal error.
-        ErasureOutcome::Refused(r) => Ok(Json(ErasureExecuteResponse::Refused {
-            event_id: r.event_id,
-            reason: r.reason,
-            detail: r.detail,
-        })),
-        ErasureOutcome::Completed(c) => Ok(Json(ErasureExecuteResponse::Completed {
-            event_id: c.event_id,
-            already_erased: c.already_erased,
-            redacted_hashes: c.redacted_hashes,
-            targets: c.targets,
-            blob_strikes: c
-                .blob_strikes
-                .into_iter()
-                .map(|s| BlobStrikeView {
-                    blob_id: s.blob_id,
-                    released: s.released,
-                })
-                .collect(),
-        })),
-    }
+    Ok(Json(ErasureExecuteResponse::Completed {
+        event_id: c.event_id,
+        already_erased: c.already_erased,
+        redacted_hashes: c.redacted_hashes,
+        targets: c.targets,
+        blob_strikes: c
+            .blob_strikes
+            .into_iter()
+            .map(|s| BlobStrikeView {
+                blob_id: s.blob_id,
+                released: s.released,
+            })
+            .collect(),
+    }))
 }
 
-/// What the survey predicts the act would do — the Completed shape minus `event_id`: the
+/// What the survey predicts the act would do — the execute response minus `event_id`: the
 /// survey fires no event, so there is no event id to report. The targets are the prose the
 /// act would write; the blob strikes are PREDICTIONS honest about the moment the survey ran
 /// (the act's strike-time verdict is authoritative).
@@ -167,22 +173,17 @@ pub struct ErasureSurveyResponse {
 /// `POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task
 /// 01a09628 item 2).
 ///
-/// Gate-free HERE like execute: the service's `is_system_admin` gate is the authority, and a
-/// non-operator already got the service's silent 404 (NO refusal event — a survey attempt is
-/// not an erasure request, ruled 2026-09-12); the door renders that 404 by error mapping,
-/// never a 403. The survey is witnessed read-only: no events, no projection change — it
-/// previews, it never prepares.
+/// Gated here like execute (`require_erasure_operator`): a caller who is not a system admin
+/// gets the same 404 and no event. The survey is witnessed read-only: no events, no projection
+/// change — it previews, it never prepares.
 pub async fn survey(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(body): Json<ErasureSurveyRequest>,
 ) -> ApiResult<Json<ErasureSurveyResponse>> {
-    let prediction = erasure_service::survey_erasure(
-        &state.pool,
-        ProfileId::from(auth.0.profile().id),
-        ProfileId::from(body.subject),
-    )
-    .await?;
+    let admin = require_erasure_operator(&state, &auth, "erasure.survey").await?;
+    let prediction =
+        erasure_service::survey_erasure(&state.pool, &admin, ProfileId::from(body.subject)).await?;
 
     Ok(Json(ErasureSurveyResponse {
         subject: prediction.subject.uuid(),

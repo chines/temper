@@ -194,6 +194,8 @@ claim crates/temper-api/src/handlers/access.rs 14 is_system_admin
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 require_cogmap_write_admin
 claim crates/temper-api/src/handlers/connections.rs 1 connection
+claim crates/temper-api/src/handlers/erasure.rs 2 is_system_admin
+claim crates/temper-api/src/handlers/resource_erasure.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/slack_disconnect.rs 1 -
 claim crates/temper-api/src/handlers/teams.rs 1 -
 claim crates/temper-cli/src/cli.rs 14 -
@@ -215,7 +217,8 @@ claim crates/temper-services/src/services/cogmap_service.rs 2 require_cogmap_wri
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/connection_service.rs 9 connection
 claim crates/temper-services/src/services/context_service.rs 14 context_admin
-claim crates/temper-services/src/services/erasure_service.rs 2 is_system_admin
+claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
+claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/machine_authz.rs 7 machine
 claim crates/temper-services/src/services/machine_client_service.rs 4 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 5 machine

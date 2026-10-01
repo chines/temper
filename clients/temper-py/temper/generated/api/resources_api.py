@@ -1132,6 +1132,7 @@ class ResourcesApi:
             '200': "ContentResponse",
             '401': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1204,6 +1205,7 @@ class ResourcesApi:
             '200': "ContentResponse",
             '401': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1276,6 +1278,7 @@ class ResourcesApi:
             '200': "ContentResponse",
             '401': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1416,6 +1419,7 @@ class ResourcesApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1493,6 +1497,7 @@ class ResourcesApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1570,6 +1575,7 @@ class ResourcesApi:
             '400': "ErrorBody",
             '401': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

@@ -2,16 +2,17 @@
 //! contract, Beat 4 of task 01a0577c).
 //!
 //! `blob_delete` releases bytes POST-commit ("a provider call cannot join the transaction",
-//! 20260906000010) and names the release in the `principal_erased` payload — so between the
-//! act's commit and the provider delete there is a window no transaction can close. The
-//! substrate contract rules what watches it: *"A byte-deleting build MUST run that fence or its
-//! equivalent — retry plus age alerting."* This module is that fence, in three moves:
+//! 20260906000010) and names the release in the `principal_erased` (or `resource_erased`)
+//! payload — so between the act's commit and the provider delete there is a window no
+//! transaction can close. The substrate contract rules what watches it: *"A byte-deleting build
+//! MUST run that fence or its equivalent — retry plus age alerting."* This module is that fence,
+//! in three moves:
 //!
-//! * **Derivation** — pending deletes are DERIVED from the `principal_erased` payload's
-//!   per-target strike verdicts (specific pathnames, never provider enumeration — BlobStore has
-//!   no `list`), seeded into `kb_erasure_blob_deletes` (20260909000040) with first-due at the
-//!   EVENT's `occurred_at`. Every tick re-derives from the ledger; the seed's
-//!   `(erasure_event_id, pathname)` key makes re-derivation free.
+//! * **Derivation** — pending deletes are DERIVED from the `principal_erased` and
+//!   `resource_erased` payloads' per-target strike verdicts (specific pathnames, never provider
+//!   enumeration — BlobStore has no `list`), seeded into `kb_erasure_blob_deletes`
+//!   (20260909000040) with first-due at the EVENT's `occurred_at`. Every tick re-derives from the
+//!   ledger; the seed's `(erasure_event_id, pathname)` key makes re-derivation free.
 //! * **Drain** — one tick reaps expired leases, claims due deletes in one bounded batch,
 //!   then — inside ONE critical section over the hashes' advisory locks — RE-DERIVES
 //!   released-ness at drain time, issues ONE idempotent `BlobStore::delete(&[&str])` for
@@ -96,7 +97,7 @@ const OBLIGATION_OUTCOME_PREFIX: &str = "independent_obligation: ";
 
 /// The only payload target whose outcome this fence parses — every other target kind's
 /// outcome is other vocabulary entirely.
-const BLOB_TARGET: &str = "kb_blobs";
+pub(crate) const BLOB_TARGET: &str = "kb_blobs";
 
 /// The total classification of a `kb_blobs` outcome string against the pinned v1 vocabulary.
 ///
@@ -106,7 +107,7 @@ const BLOB_TARGET: &str = "kb_blobs";
 /// outcome matching NONE of the known shapes is therefore its own arm, counted in the seed
 /// summary and raised as an alertable cause in [`fence_channel_report`] — never quietly
 /// treated as known.
-fn classify_blob_outcome(outcome: &str) -> BlobOutcomeClass {
+pub(crate) fn classify_blob_outcome(outcome: &str) -> BlobOutcomeClass {
     if let Some(pathname) = outcome.strip_prefix(RELEASED_STRIKE_PREFIX) {
         // The template demands a path; a released verdict with an empty pathname is drift,
         // not a strike.
@@ -124,7 +125,16 @@ fn classify_blob_outcome(outcome: &str) -> BlobOutcomeClass {
     BlobOutcomeClass::Unrecognized
 }
 
-enum BlobOutcomeClass {
+/// The content hash a released strike's pathname names. The pathname IS the derivation
+/// (`blob_pathname()`, blob_store.rs: `{hash[0:2]}/{hash}`), so the hash — the key the
+/// drain-time refcount check and the post-commit release lock on — is its last segment. One
+/// derivation for every reader of a strike verdict, so the hash locked and the pathname deleted
+/// always come from the same string.
+pub(crate) fn content_hash_of_pathname(pathname: &str) -> &str {
+    pathname.rsplit('/').next().unwrap_or(pathname)
+}
+
+pub(crate) enum BlobOutcomeClass {
     /// `erased; released=true; pathname=…` — the bytes were this act's to remove.
     Released(String),
     /// A known, non-seeding shape (held strike, already-erased, independent_obligation).
@@ -142,11 +152,11 @@ struct SeedScan {
     unparseable: usize,
 }
 
-/// Derive pending deletes from every `principal_erased` payload and seed the not-yet-seeded
-/// ones. Store-independent by construction: the work is DERIVED from the ledger, and nothing
-/// here touches a provider (a derivation that needed the store could never run for a
-/// deployment whose provider configuration is gone — exactly the deployment whose stranded
-/// deletes most need the fence to see them).
+/// Derive pending deletes from every `principal_erased` and `resource_erased` payload and seed
+/// the not-yet-seeded ones. Store-independent by construction: the work is DERIVED from the
+/// ledger, and nothing here touches a provider (a derivation that needed the store could never
+/// run for a deployment whose provider configuration is gone — exactly the deployment whose
+/// stranded deletes most need the fence to see them).
 ///
 /// The scan is whole-catalogue on purpose: erasures are rare admin acts, the seed is
 /// `ON CONFLICT DO NOTHING` against the (event, pathname) key, and derive-don't-remember means
@@ -191,11 +201,8 @@ async fn seed_from_ledger(pool: &PgPool) -> ApiResult<SeedScan> {
                     continue;
                 }
             };
-            // The pathname IS the derivation (`blob_pathname()`, blob_store.rs:
-            // `{hash[0:2]}/{hash}`), so the hash — the key the drain-time refcount check
-            // needs — is its last segment. Derived once, at seed, rather than re-parsed on
-            // every claim.
-            let content_hash = pathname.rsplit('/').next().unwrap_or(&pathname).to_owned();
+            // Derived once, at seed, rather than re-parsed on every claim.
+            let content_hash = content_hash_of_pathname(&pathname).to_owned();
             let seeded_id = sqlx::query_scalar!(
                 r#"SELECT erasure_delete_seed($1, $2, $3, $4) AS "id: Uuid""#,
                 row.erasure_event_id,
@@ -216,7 +223,8 @@ async fn seed_from_ledger(pool: &PgPool) -> ApiResult<SeedScan> {
 /// What one drain tick did.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct DrainSummary {
-    /// Deletes newly derived from `principal_erased` payloads this tick.
+    /// Deletes newly derived this tick from `principal_erased` and `resource_erased` payloads
+    /// (the blob delete door seeds the same queue inside its own transaction).
     pub seeded: u64,
     /// `kb_blobs` targets whose outcome matched NO known strike-verdict shape (prose drift).
     /// Never seeded; the report raises `unparseable_verdicts` as an alertable cause — the
@@ -689,7 +697,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::services::erasure_service::{self, ErasureOutcome};
+    use crate::services::erasure_service;
     use crate::test_support;
 
     /// A profile + its `<handle>@web` emitter entity (the erasure_service fixture shape).
@@ -768,25 +776,23 @@ mod tests {
         (blob.uuid(), hash, pathname)
     }
 
-    /// Erase `subject` as `operator` — the real act, real payload, real strikes.
+    /// Erase `subject` as `operator` — the real act, real payload, real strikes. The operator's
+    /// proof is minted through the real gate, so `operator` must already hold governance.
     async fn erase(
         pool: &PgPool,
         operator: Uuid,
         subject: Uuid,
     ) -> erasure_service::ErasureCompletion {
-        let outcome = erasure_service::execute_erasure(
+        let admin = test_support::system_admin_proof_for(pool, operator).await;
+        erasure_service::execute_erasure(
             pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
-        .expect("the act completes");
-        match outcome {
-            ErasureOutcome::Completed(c) => c,
-            ErasureOutcome::Refused(r) => panic!("the operator's act must complete, got {r:?}"),
-        }
+        .expect("the act completes")
     }
 
     /// A store that can fail on demand and RECORDS every delete batch — the witness

@@ -2,16 +2,15 @@
 //! Beat 4 witnesses for the erasure act's operator surfaces:
 //!
 //! * the execute door (`POST /api/admin/erasure`) — an operator completes an erasure through
-//!   HTTP with the payload the spec requires; a non-operator gets the **404 posture** while the
-//!   `unauthorized` refusal is RECORDED and nothing else mutates (ruled constraint 1: the gate
-//!   lives in the service, the door renders the posture, deny is 404 never 403); and the bite
-//!   probe — the same caller, the gate granted, the same request completes, proving the
-//!   refusal was the gate's work and not the router's.
+//!   HTTP with the payload the spec requires; a non-operator is rejected AT THE WIRE: the door
+//!   mints the `&SystemAdmin` proof before dispatch and answers **404, never 403**, with ZERO new
+//!   events and nothing else mutated (ruled 2026-09-30); and the bite probe — the same caller,
+//!   the gate granted, the same request completes, proving the 404 was the gate's work and not
+//!   the router's.
 //! * the survey door (`POST /api/admin/erasure/survey`, task 01a09628 item 2) — a read-only
 //!   preview sharing the act's computation: an operator gets the prediction (no `event_id` —
 //!   nothing fired) and the ledger gained nothing; a non-operator gets the same 404 and ZERO
-//!   new events (a survey attempt is not an erasure request — no refusal is recorded, ruled
-//!   2026-09-12), with the same bite probe; and survey-then-execute parity — the act's
+//!   new events, with the same bite probe; and survey-then-execute parity — the act's
 //!   recorded payload targets equal the survey's predicted targets, exactly.
 //! * the audit read (`GET /api/admin/ledger`) — Beat 3 already admitted both erasure families
 //!   to the admin catalogue (`admin_ledger_service::ADMIN_EVENT_TYPES`), so the Operator row's
@@ -91,8 +90,8 @@ async fn provision_and_make_operator(
     (token, profile)
 }
 
-/// Provision `sub` and grant standing ONLY — reaches the gated router but fails the service's
-/// `is_system_admin` gate: the non-operator the door must render absent.
+/// Provision `sub` and grant standing ONLY — reaches the gated router but fails the door's
+/// `require_system_admin` gate: the non-operator the door must render absent.
 async fn provision_non_operator(app: &common::TestApp, sub: &str, email: &str) -> (String, Uuid) {
     let token = common::generate_test_jwt(sub, email);
     let resp = app
@@ -183,6 +182,10 @@ async fn an_operator_completes_an_erasure_through_the_door(pool: PgPool) {
         .await
         .expect("the response is the tagged outcome");
     assert_eq!(body["status"], "completed", "{body}");
+    assert!(
+        body["event_id"].is_string(),
+        "the door returns the completion's event id: {body}"
+    );
     assert_eq!(body["already_erased"], false);
     assert!(
         body["targets"].is_array(),
@@ -191,51 +194,61 @@ async fn an_operator_completes_an_erasure_through_the_door(pool: PgPool) {
     );
 }
 
-// ── WITNESS: the non-operator's 404 posture, the recorded refusal, and the bite ──────────────
+// ── WITNESS: the non-operator's 404 at the wire, zero events, and the bite ──────────────────
 
-/// FAILS IF a non-operator's attempt mutates anything, leaks anything but 404, or skips the
-/// recorded refusal — and, as the bite probe: FAILS IF the refusal came from anywhere but the
-/// service gate, because the SAME caller with the gate granted completes the SAME request.
+/// FAILS IF a non-operator's attempt mutates anything, leaks anything but 404, or appends ANY
+/// event — the ledger gains nothing from a rejected caller, not even a refusal — and, as the
+/// bite probe: FAILS IF the 404 came from anywhere but the door's gate, because the SAME caller
+/// with the gate granted completes the SAME request. The 404 body is EXACTLY "not found" for a
+/// subject that exists and for one that does not: the gate answers before any lookup.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_non_operator_gets_404_and_a_recorded_refusal_until_the_gate_stands_down(pool: PgPool) {
+async fn a_non_operator_gets_404_and_zero_new_events_until_the_gate_stands_down(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (subject, subject_handle, subject_email) = insert_profile(&app.pool).await;
     let (token, non_admin) =
         provision_non_operator(&app, "erasure-nonadmin", "nonadmin@example.com").await;
     let request_reference = Uuid::now_v7();
 
-    let resp = app
-        .client
-        .post(app.url("/api/admin/erasure"))
-        .header("Authorization", format!("Bearer {token}"))
-        .json(&serde_json::json!({
-            "subject": subject,
-            "request_reference": request_reference,
-        }))
-        .send()
+    let events_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
+        .fetch_one(&app.pool)
         .await
-        .expect("the door answers");
+        .unwrap();
+
+    for target in [subject, Uuid::now_v7()] {
+        let resp = app
+            .client
+            .post(app.url("/api/admin/erasure"))
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&serde_json::json!({
+                "subject": target,
+                "request_reference": request_reference,
+            }))
+            .send()
+            .await
+            .expect("the door answers");
+        assert_eq!(
+            resp.status().as_u16(),
+            404,
+            "the door renders ABSENT to a caller the gate declined"
+        );
+        let body: Value = resp.json().await.expect("the 404 body");
+        assert_eq!(
+            body["error"]["message"], "not found",
+            "the gate's face is EXACTLY \"not found\" for every subject — \"profile not \
+             found\" would betray an existence check running above the gate"
+        );
+    }
 
     assert_eq!(
-        resp.status().as_u16(),
-        404,
-        "the door renders ABSENT to a caller the gate declined, got {}",
-        resp.text().await.unwrap_or_default()
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM kb_events")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap(),
+        events_before,
+        "a rejected caller appends NOTHING — no principal_erasure_refused, no event at all"
     );
 
-    // …and the service recorded the refusal, attributed to the attempter.
-    let (reason, actor): (String, Uuid) = sqlx::query_as(
-        "SELECT e.payload->>'reason', (e.payload->>'actor')::uuid \
-           FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-          WHERE t.name = 'principal_erasure_refused'",
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("the refusal is recorded");
-    assert_eq!(reason, "unauthorized");
-    assert_eq!(actor, non_admin);
-
-    // …and NOTHING else mutated: the subject is exactly as seeded, no completion exists.
+    // …and NOTHING else mutated: the subject is exactly as seeded.
     let (handle, email, tomb): (String, Option<String>, Option<i32>) = sqlx::query_as(
         "SELECT handle, email, (tombstoned_at IS NOT NULL)::int AS tomb \
            FROM kb_profiles WHERE id = $1",
@@ -246,18 +259,10 @@ async fn a_non_operator_gets_404_and_a_recorded_refusal_until_the_gate_stands_do
     .unwrap();
     assert_eq!(handle, subject_handle);
     assert_eq!(email.as_deref(), Some(subject_email.as_str()));
-    assert_eq!(tomb, Some(0), "a refused attempt never tombstones");
-    let completions: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-          WHERE t.name = 'principal_erased'",
-    )
-    .fetch_one(&app.pool)
-    .await
-    .unwrap();
-    assert_eq!(completions, 0, "no completion behind a refusal");
+    assert_eq!(tomb, Some(0), "a rejected attempt never tombstones");
 
     // ── THE BITE: stand the gate down and the SAME request goes through. This is what proves
-    // the 404 above was the SERVICE gate's doing and not the router's: the caller, the route,
+    // the 404 above was the door gate's doing and not the router's: the caller, the route,
     // the standing (approved) and the request are all unchanged — only `is_system_admin`
     // moved.
     temper_services::test_support::grant_governance(&app.pool, non_admin).await;
@@ -280,6 +285,8 @@ async fn a_non_operator_gets_404_and_a_recorded_refusal_until_the_gate_stands_do
     );
     let body: Value = resp.json().await.expect("the tagged outcome");
     assert_eq!(body["status"], "completed", "{body}");
+    assert_eq!(body["already_erased"], false, "{body}");
+    assert!(body["event_id"].is_string(), "{body}");
 }
 
 // ── WITNESS: the survey door — the operator's read-only preview ──────────────────────────────
@@ -343,10 +350,9 @@ async fn an_operator_surveys_through_the_door_and_the_ledger_gains_nothing(pool:
 
 // ── WITNESS: the survey door's SILENT 404 — a refused survey records NOTHING ─────────────────
 
-/// FAILS IF a non-operator's survey mutates the ledger or leaks anything but 404 — and this is
-/// the witness that bites if someone "fixes" the survey to record a refusal: a survey attempt
-/// is NOT an erasure request (ruled 2026-09-12), so there must be ZERO new events of any kind.
-/// The bite probe stands the gate down for the SAME caller: the survey answers.
+/// FAILS IF a non-operator's survey mutates the ledger or leaks anything but 404 — ZERO new
+/// events of any kind (a rejected caller is recorded only in telemetry). The bite probe stands
+/// the gate down for the SAME caller: the survey answers.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_non_operator_survey_gets_404_and_zero_new_events_until_the_gate_stands_down(
     pool: PgPool,
@@ -488,24 +494,12 @@ async fn the_acts_recorded_targets_equal_the_survey_s_prediction(pool: PgPool) {
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_admin_ledger_lists_both_families_with_the_subject_only_as_a_pseudonym(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
-    let (token, _) =
+    let (token, operator) =
         provision_and_make_operator(&app, "erasure-auditor", "auditor@example.com").await;
     let (subject, subject_handle, subject_email) = insert_profile(&app.pool).await;
 
-    // One completion (the operator) and one refusal (a non-operator attempt) — both families.
-    let (subject_token, _) =
-        provision_non_operator(&app, "erasure-subject", "subject-attempter@example.com").await;
-    let refused = app
-        .client
-        .post(app.url("/api/admin/erasure"))
-        .header("Authorization", format!("Bearer {subject_token}"))
-        .json(&serde_json::json!({ "subject": subject, "request_reference": Uuid::now_v7() }))
-        .send()
-        .await
-        .expect("the non-operator attempt lands");
-    assert_eq!(refused.status().as_u16(), 404);
-
-    // (The auditor token is already an operator from `provision_and_make_operator`.)
+    // One completion through the door (the auditor token is already an operator from
+    // `provision_and_make_operator`).
     let completed = app
         .client
         .post(app.url("/api/admin/erasure"))
@@ -515,6 +509,30 @@ async fn the_admin_ledger_lists_both_families_with_the_subject_only_as_a_pseudon
         .await
         .expect("the operator's act lands");
     assert_eq!(completed.status().as_u16(), 200);
+
+    // And one operator-facing refusal, through the act's own refusal function: no door raises a
+    // principal refusal (a re-erase is a no-op completion, spec §5, and a non-admin is rejected
+    // at the wire with no event), but the family stays registered and a ledger may hold one, so
+    // the audit read must list it. Recorded by the operator, from the completion's emitter.
+    let (operator_emitter,): (Uuid,) = sqlx::query_as(
+        "SELECT e.emitter_entity_id FROM kb_events e \
+           JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'principal_erased'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("the completion's emitter");
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT principal_erasure_refuse($1, $2, $3, $4, 'independent_obligation', $5)",
+    )
+    .bind(subject)
+    .bind(operator)
+    .bind(operator_emitter)
+    .bind(Uuid::now_v7())
+    .bind("legal hold")
+    .fetch_one(&app.pool)
+    .await
+    .expect("the refusal records");
 
     // THE AUDIT READ — the existing surface, no second door. The subject axis answers "what was
     // done TO this subject"; both erasure families carry the subject reference, so both arrive.

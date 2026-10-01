@@ -1726,6 +1726,79 @@ async fn i6_cogmap_intersection(pool: &PgPool, w: &World) -> sqlx::Result<Vec<Vi
 }
 
 // =================================================================================================
+// Invariant family 7 — for an erased resource, `resource_husk_held_by` EQUALS the reach of three
+// of `resources_visible_to`'s arms (owner-home, direct-profile-grant, team-grant) with the
+// `is_active` floor ignored (spec D6): a dropped arm and an added one both go red. Against the
+// full `resources_visible_to` it is only a subset, because the context-homed and both cogmap
+// arms are excluded BY DESIGN. For a resource that is not erased the answer is false.
+//
+// The expected three-arm reach is derived in Rust from the world plan (owner index, the grant
+// matrix, `profile_reachable_teams` for the team closure), never by calling the function under
+// test. VACUITY: the main generated world erases nothing, so this invariant is driven by
+// [`the_husk_predicate_equals_the_three_arm_reach_over_erased_resources`], which erases
+// resources through the REAL act first.
+// =================================================================================================
+
+async fn i7_husk_held_by_equals_the_three_arm_reach(
+    pool: &PgPool,
+    w: &World,
+) -> sqlx::Result<Vec<Violation>> {
+    let mut violations = Vec::new();
+
+    for (r_idx, &resource) in w.resources.iter().enumerate() {
+        let erased: bool =
+            sqlx::query_scalar("SELECT erased_at IS NOT NULL FROM kb_resources WHERE id = $1")
+                .bind(resource)
+                .fetch_one(pool)
+                .await?;
+        let name = RESOURCE_SPECS[r_idx].0;
+
+        for (p_idx, &profile) in w.profiles.iter().enumerate() {
+            let who = PROFILE_HANDLES[p_idx];
+            let held: bool = sqlx::query_scalar("SELECT resource_husk_held_by($1, $2)")
+                .bind(profile)
+                .bind(resource)
+                .fetch_one(pool)
+                .await?;
+
+            if !erased {
+                if held {
+                    violations.push(format!(
+                        "I7: resource_husk_held_by is true for {who} on {name}, which is not erased"
+                    ));
+                }
+                continue;
+            }
+
+            let reachable: Vec<Uuid> =
+                sqlx::query_scalar("SELECT team_id FROM profile_reachable_teams($1)")
+                    .bind(profile)
+                    .fetch_all(pool)
+                    .await?;
+            let owner_arm = RESOURCE_SPECS[r_idx].2 == p_idx;
+            let grant_arm = w.plan.grants.iter().any(|g| {
+                g.can_read
+                    && g.subject == Subject::Resource(r_idx)
+                    && match g.principal {
+                        Principal::Profile(p) => p == p_idx,
+                        Principal::Team(t) => reachable.contains(&w.teams[t]),
+                    }
+            });
+            let expected = owner_arm || grant_arm;
+            if held != expected {
+                violations.push(format!(
+                    "I7: resource_husk_held_by({who}, {name}) = {held}, but the owner / \
+                     profile-grant / team-grant arms say {expected} (owner {owner_arm}, grant \
+                     {grant_arm})"
+                ));
+            }
+        }
+    }
+
+    Ok(violations)
+}
+
+// =================================================================================================
 // The enrollment gate — a pg_proc scan, not a fixed list, so a new visibility-answer cannot
 // silently skip the harness (precedent: reachable_teams_one_definition_test.rs).
 // =================================================================================================
@@ -1742,6 +1815,9 @@ const ENROLLED: &[&str] = &[
     "resources_accessible_to_cogmap",
     "profile_reachable_teams",
     // gates
+    // resource_husk_held_by: equal to 3 of resources_visible_to's arms (minus the is_active
+    // floor, erased resources only), a strict subset of its full reach — driven by I7.
+    "resource_husk_held_by",
     "can",
     "can_modify_resource",
     "cogmap_readable_by_profile",
@@ -2058,6 +2134,79 @@ async fn invariants_hold_over_a_generated_world(pool: PgPool) -> sqlx::Result<()
     assert!(
         violations.is_empty(),
         "{} visibility invariant violation(s) over seed {}:\n  - {}\n\n{}",
+        violations.len(),
+        seed,
+        violations.join("\n  - "),
+        w.render()
+    );
+
+    Ok(())
+}
+
+/// Invariant 7's driver. The generated world contains no erased resource, so I7 over it alone
+/// would pass vacuously (every answer would be the `false` of the not-erased branch). Five
+/// edge-free resources are therefore erased through the REAL act (`resource_erasure_execute`,
+/// never an UPDATE): one per distinguishing arm, including a cogmap-grant admission and a
+/// context-homed resource whose context readers must NOT hold the husk. The anti-vacuity asserts
+/// pin that the act took and that at least one profile holds a husk.
+///
+/// Bite: dropping an arm from `resource_husk_held_by`, adding the context arm, or dropping the
+/// `erased_at` test (every live resource would answer true for its owner) makes I7 report.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_husk_predicate_equals_the_three_arm_reach_over_erased_resources(
+    pool: PgPool,
+) -> sqlx::Result<()> {
+    let seed = harness_seed();
+    let w = insert_world(&pool, &Plan::generate(seed)).await?;
+
+    let operator: Uuid = sqlx::query_scalar(
+        "SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id \
+          WHERE p.handle = 'system' AND e.name = 'system'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    for r in [
+        R_SHARED,
+        R_PERSONAL,
+        R_OWNED_ANYWHERE,
+        R_ANCESTOR_GRANT,
+        R_MAP_GRANT,
+    ] {
+        sqlx::query("SELECT resource_erasure_execute($1, $2, $3, $4)")
+            .bind(w.resources[r])
+            .bind(operator)
+            .bind(operator)
+            .bind(Uuid::now_v7())
+            .execute(&pool)
+            .await?;
+    }
+
+    let erased: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_resources WHERE erased_at IS NOT NULL")
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(erased, 5, "the act erased the five chosen resources");
+
+    let mut held_pairs = 0;
+    for &resource in &w.resources {
+        for &profile in &w.profiles {
+            let held: bool = sqlx::query_scalar("SELECT resource_husk_held_by($1, $2)")
+                .bind(profile)
+                .bind(resource)
+                .fetch_one(&pool)
+                .await?;
+            held_pairs += i64::from(held);
+        }
+    }
+    assert!(
+        held_pairs > 0,
+        "no profile holds any husk: I7 would only be exercising the `false` branch"
+    );
+
+    let violations = i7_husk_held_by_equals_the_three_arm_reach(&pool, &w).await?;
+    assert!(
+        violations.is_empty(),
+        "{} husk-predicate violation(s) over seed {}:\n  - {}\n\n{}",
         violations.len(),
         seed,
         violations.join("\n  - "),

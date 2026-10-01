@@ -24,6 +24,7 @@ use temper_workflow::types::managed_meta::MetaUpdatePayload;
         (status = 200, description = "The resource with both metadata tiers filled", body = ResourceView),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404", body = ErrorBody),
     )
 )]
 pub async fn get_meta(

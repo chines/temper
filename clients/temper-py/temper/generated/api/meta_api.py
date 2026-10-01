@@ -100,6 +100,7 @@ class MetaApi:
             '200': "ResourceView",
             '401': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -172,6 +173,7 @@ class MetaApi:
             '200': "ResourceView",
             '401': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -244,6 +246,7 @@ class MetaApi:
             '200': "ResourceView",
             '401': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

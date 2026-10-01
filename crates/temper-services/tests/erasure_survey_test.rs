@@ -1,19 +1,19 @@
 #![cfg(feature = "test-db")]
 //! Witnesses for the read-only erasure survey (task 01a09628 item 2, ruled 2026-09-12).
 //! The survey shares the act's ONE computation (`principal_erasure_survey_plan`,
-//! migration 20260913000010 — the act consumes the same plan), so three behaviors:
+//! migration 20260913000010 — the act consumes the same plan), so two behaviors:
 //! the survey's prediction IS the subsequent act's record, per target, for every blob
 //! classification (the differential — including the verdict bite: a hash with a second
-//! live row in another home must predict released=false); a survey writes NOTHING (the
-//! whole ledger and the touched projections stay byte-identical); and a non-operator's
-//! survey is a silent 404 — a survey attempt is not an erasure request, so no
-//! `principal_erasure_refused` event is ever recorded.
+//! live row in another home must predict released=false); and a survey writes NOTHING (the
+//! whole ledger and the touched projections stay byte-identical). The gate is the
+//! `&SystemAdmin` proof the survey takes; a caller who is not a system admin is answered 404
+//! with no event at the door (`temper-api`'s `admin_erasure_surface_test`).
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
-use temper_services::services::erasure_service::{execute_erasure, survey_erasure, ErasureOutcome};
+use temper_services::services::erasure_service::{execute_erasure, survey_erasure};
 use temper_services::test_support;
 use temper_workflow::operations::Surface;
 
@@ -364,6 +364,7 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
     let (guest, _) = insert_profile(&pool).await;
     let (other, _) = insert_profile(&pool).await;
     test_support::grant_governance(&pool, operator).await;
+    let admin = test_support::system_admin_proof_for(&pool, operator).await;
 
     // Governed text content (the email/preferences arms come from insert_profile).
     let world = seed_content(&pool, subject).await;
@@ -448,21 +449,19 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
         seed_blob(&pool, guest, "kb_contexts", world.context, "ee").await;
 
     // ── The survey, then the act: the prediction is the record. ───────────────────────────
-    let survey = survey_erasure(&pool, ProfileId::from(operator), ProfileId::from(subject))
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(subject))
         .await
         .expect("the operator surveys");
     let outcome = execute_erasure(
         &pool,
-        ProfileId::from(operator),
+        &admin,
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
     )
     .await
     .expect("the act completes");
-    let ErasureOutcome::Completed(completion) = outcome else {
-        panic!("the operator's act must complete");
-    };
+    let completion = outcome;
 
     // Exact equality: prose, order, hashes, verdicts, tombstone state.
     assert_eq!(
@@ -598,21 +597,19 @@ async fn the_survey_matches_the_subsequent_act_over_every_classification(pool: P
 
     // ── The second round: survey the erased subject, execute again — the survey predicts
     // the no-op completion's already-erased shape the same way. ────────────────────────────
-    let survey2 = survey_erasure(&pool, ProfileId::from(operator), ProfileId::from(subject))
+    let survey2 = survey_erasure(&pool, &admin, ProfileId::from(subject))
         .await
         .expect("the second survey");
     let outcome2 = execute_erasure(
         &pool,
-        ProfileId::from(operator),
+        &admin,
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
     )
     .await
     .expect("the re-erase completes");
-    let ErasureOutcome::Completed(completion2) = outcome2 else {
-        panic!("a re-erase is a completion, never a refusal");
-    };
+    let completion2 = outcome2;
     assert!(
         survey2.already_erased,
         "the second survey predicts the tombstone"
@@ -641,6 +638,7 @@ async fn the_survey_pass_leaves_no_trace(pool: PgPool) {
     let (subject, handle) = insert_profile(&pool).await;
     let (operator, _) = insert_profile(&pool).await;
     test_support::grant_governance(&pool, operator).await;
+    let admin = test_support::system_admin_proof_for(&pool, operator).await;
     let world = seed_content(&pool, subject).await;
     let (blob, hash, _) = seed_blob(&pool, subject, "kb_contexts", world.context, "aa").await;
     let team_context = seed_team_context(&pool, &handle).await;
@@ -693,7 +691,7 @@ async fn the_survey_pass_leaves_no_trace(pool: PgPool) {
     .await
     .unwrap();
 
-    survey_erasure(&pool, ProfileId::from(operator), ProfileId::from(subject))
+    survey_erasure(&pool, &admin, ProfileId::from(subject))
         .await
         .expect("the survey answers");
 
@@ -777,54 +775,4 @@ async fn the_survey_pass_leaves_no_trace(pool: PgPool) {
         "no context is retired by a survey"
     );
     let _ = (blob, hash);
-}
-
-/// THE GATE: FAILS IF a non-operator's survey mutates or discloses — the answer is the same
-/// NotFound the execute door renders, and ZERO new events of any kind (the ruled
-/// no-event face: this is the witness that bites if someone "fixes" the survey to record a
-/// refusal — a survey attempt is not an erasure request, ruled 2026-09-12). The bite probe:
-/// the SAME caller with the gate granted gets the survey.
-#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-async fn a_non_operator_survey_records_nothing_until_the_gate_stands_down(pool: PgPool) {
-    let (subject, _) = insert_profile(&pool).await;
-    let (caller, _) = insert_profile(&pool).await;
-    let world = seed_content(&pool, subject).await;
-    let _ = seed_blob(&pool, subject, "kb_contexts", world.context, "aa").await;
-
-    let events_before = event_count(&pool).await;
-
-    let answer = survey_erasure(&pool, ProfileId::from(caller), ProfileId::from(subject)).await;
-    assert!(
-        matches!(answer, Err(temper_services::error::ApiError::NotFound(_))),
-        "a non-operator gets the silent 404 face, got {answer:?}"
-    );
-
-    // THE GATE-BEFORE-EXISTENCE ORDER, witnessed by the MESSAGE: a non-operator surveying a
-    // subject that does NOT exist still gets the gate's face — EXACTLY "not found", never
-    // "profile not found". `matches!` above cannot see the message; this can, and it bites
-    // if anyone moves the existence check above the gate, which would leak that semantics to
-    // a caller the gate has already declined.
-    let ghost = Uuid::now_v7();
-    let ghost_answer = survey_erasure(&pool, ProfileId::from(caller), ProfileId::from(ghost)).await;
-    match ghost_answer {
-        Err(temper_services::error::ApiError::NotFound(message)) => assert_eq!(
-            message, "not found",
-            "the gate's silent face is EXACTLY \"not found\" — \"profile not found\" would \
-             betray an existence check running above the gate"
-        ),
-        other => panic!("a non-operator gets the silent 404 face, got {other:?}"),
-    }
-
-    assert_eq!(
-        event_count(&pool).await,
-        events_before,
-        "a refused survey records NOTHING — no principal_erasure_refused, no event of any kind"
-    );
-
-    // THE BITE: the same caller, the gate granted, the same call — the survey answers.
-    test_support::grant_governance(&pool, caller).await;
-    let survey = survey_erasure(&pool, ProfileId::from(caller), ProfileId::from(subject))
-        .await
-        .expect("with the gate stood down the same call surveys");
-    assert_eq!(survey.subject, ProfileId::from(subject));
 }

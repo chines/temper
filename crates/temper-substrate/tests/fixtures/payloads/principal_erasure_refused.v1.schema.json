@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "PrincipalErasureRefused",
-  "description": "`principal_erasure_refused` — the negative face of the erasure act (erasure spec D6).\n\nSame subject spelling as [`PrincipalErased`] (`subject_table` / `subject_id`, never the\ntrail's join-key shapes); the operator is distinguishable from the subject exactly as\nthere. One type with a reason code — three outcomes, not three types.",
+  "description": "`principal_erasure_refused` — the negative face of the erasure act (erasure spec D6). No door\nraises it today; the type stays registered so a ledger that holds one still reads and replays.\n\nSame subject spelling as [`PrincipalErased`] (`subject_table` / `subject_id`, never the\ntrail's join-key shapes); the operator is distinguishable from the subject exactly as\nthere. One type with a reason code — three outcomes, not three types.",
   "type": "object",
   "properties": {
     "actor": {
@@ -57,10 +57,10 @@
       ]
     },
     "ErasureRefusalReason": {
-      "description": "The closed refusal vocabulary for `principal_erasure_refused` (erasure spec D6). A refused\nattempt to erase a person is exactly the event an operator later needs, and the reason code\nis the WHY the subject receives.",
+      "description": "The closed refusal vocabulary for `principal_erasure_refused` (erasure spec D6). No door\nraises any principal refusal today: a non-admin is refused at the wire with no event, and a\nre-erase is a no-op completion. The vocabulary stays registered because removing a value from\na closed vocabulary is not additive, and a ledger may already hold one.",
       "oneOf": [
         {
-          "description": "The caller lacks erasure standing.",
+          "description": "Retired: no path raises it. A non-admin is refused at the wire with no event. The value\nstays registered because removing one from a closed vocabulary is not additive.",
           "type": "string",
           "const": "unauthorized"
         },

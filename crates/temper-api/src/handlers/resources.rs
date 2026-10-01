@@ -91,6 +91,7 @@ pub struct ResourceShowQuery {
         (status = 400, description = "Unknown section name", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404", body = ErrorBody),
     )
 )]
 pub async fn get(
@@ -147,6 +148,7 @@ pub async fn get(
         (status = 200, description = "Reconstituted markdown content", body = ContentResponse),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404", body = ErrorBody),
     )
 )]
 pub async fn get_content(

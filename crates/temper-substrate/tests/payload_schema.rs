@@ -73,6 +73,12 @@ fn snapshot_files_cover_exactly_the_typed_names() {
     assert_eq!(on_disk, expected);
 }
 
+/// Stands in a migration's fixture list for a `$JS$` literal a LATER migration re-registered.
+/// An applied migration is immutable, so its superseded literal can never match the live fixture
+/// again; the entry keeps the positional pairing of the literals after it, and the superseding
+/// migration's own entry pins the type.
+const SUPERSEDED: &str = "(superseded by a later migration's entry)";
+
 /// FAILS IF: a migration's embedded `$JS$` payload_schema literal drifts from the committed
 /// fixture (review A-C1: `20260903000020_kb_blobs.sql` was pasted from a pre-`kb_blobs`-enum
 /// render and nothing gated the seam). `payload_schemas_match_snapshots` pins Rust → fixture;
@@ -101,7 +107,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
             "20260909000015_erasure_act_vocabulary.sql",
             &[
                 "principal_erased.v1.schema.json",
-                "principal_erasure_refused.v1.schema.json",
+                SUPERSEDED, // principal_erasure_refused: 20260930000050
                 "blob_erased.v1.schema.json",
             ],
         ),
@@ -109,8 +115,15 @@ fn the_migration_literal_matches_the_committed_fixture() {
             "20260929000010_resource_erasure_vocabulary.sql",
             &[
                 "resource_erased.v1.schema.json",
-                "resource_erasure_refused.v1.schema.json",
+                SUPERSEDED, // resource_erasure_refused: 20260930000050
                 "block_history_scrubbed.v1.schema.json",
+            ],
+        ),
+        (
+            "20260930000050_erasure_present_truth_wording.sql",
+            &[
+                "resource_erasure_refused.v1.schema.json",
+                "principal_erasure_refused.v1.schema.json",
             ],
         ),
     ] {
@@ -127,6 +140,9 @@ fn the_migration_literal_matches_the_committed_fixture() {
                     .find("$JS$")
                     .expect("the $JS$ literal is closed");
             cursor = end + 4;
+            if *fixture_name == SUPERSEDED {
+                continue;
+            }
             let literal: serde_json::Value = serde_json::from_str(&migration[start..end])
                 .expect("the migration's embedded literal parses as JSON");
             let fixture: serde_json::Value = serde_json::from_str(
