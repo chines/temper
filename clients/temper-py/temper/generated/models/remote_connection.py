@@ -25,13 +25,13 @@ from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
 
-class Connection(BaseModel):
+class RemoteConnection(BaseModel):
     """
     A provisioned connection to a remote system (a GitHub App installation, a Linear workspace).  `owner_team_id` is the connection's OWNER, never its reach — owning a connection does not confer the right to subscribe to it. Reach is plural and explicitly granted.  The two capability tiers are separately provisioned and both explicit: a connection is **ledger-capable** when `webhook_events` is non-empty (events land) and **reach-capable** when `tool_manifest` is non-empty (agents can read the remote back, so judgment becomes possible). A ledger-only connection is legal and useful, but inert for judgment — and it says so rather than leaving an agent to mysteriously produce nothing.
     """ # noqa: E501
     created: datetime
     credential: Optional[Any] = None
-    emitter_entity_id: UUID = Field(description="The entity remote payloads are attributed to (`<handle>@webhook`).")
+    emitter_entity_id: UUID = Field(description="The entity that payloads from the remote system are attributed to.")
     home_context_id: UUID
     id: UUID
     name: StrictStr
@@ -39,10 +39,10 @@ class Connection(BaseModel):
     owner_team_id: Optional[UUID] = Field(default=None, description="The team that owns the connection. Ownership confers no read-reach. With no owning team, only a system admin can manage the connection.")
     profile_id: UUID = Field(description="The connection's dedicated agent profile. It carries no auth link and no machine-client row — a connection never authenticates *to* temper.")
     provider: StrictStr
-    reach_affirmation: Optional[StrictStr] = Field(default=None, description="The stated rationale — why the coarse reach binding is intentional. `None` = never affirmed.")
-    reach_affirmed_at: Optional[datetime] = Field(default=None, description="When the affirmation was made. `None` = never affirmed. Paired with `reach_affirmed_by` and `reach_affirmation` as one last-writer stamp.")
-    reach_affirmed_by: Optional[UUID] = Field(default=None, description="Who affirmed that binding this connection's coarse remote reach to a team is intentional. `None` = never affirmed (declares no reach, or no grant requiring affirmation yet). A single-valued, last-writer audit stamp — not a per-grant ledger — and NOT a computed `exceeds_temper_reach` bool: it records a declared intent, it does not resolve the (incommensurable) remote-vs-temper scope asymmetry.")
-    reach_covers: Optional[StrictStr] = Field(default=None, description="What the credential can ACTUALLY see, in provider terms (`acme/temper`, `acme/*`).")
+    reach_affirmation: Optional[StrictStr] = Field(default=None, description="The stated reason the reach binding is intended. `null` if never affirmed.")
+    reach_affirmed_at: Optional[datetime] = Field(default=None, description="When the affirmation was made. `null` if never affirmed.")
+    reach_affirmed_by: Optional[UUID] = Field(default=None, description="Who last affirmed that binding this connection's remote reach to a team is intended. `null` if never affirmed. One last-writer stamp, not a record per grant.")
+    reach_covers: Optional[StrictStr] = Field(default=None, description="The declared reach: what the credential is meant to cover, in the provider's terms (`acme/temper`, `acme/*`). `observed_reach` is what it was seen to cover.")
     reach_granularity: Optional[StrictStr] = Field(default=None, description="`org` | `workspace` | `installation` | `repo-set` | `project` — the grain the credential is scoped at, in the provider's terms.")
     registered_by_profile_id: UUID
     revoked_at: Optional[datetime] = None
@@ -70,7 +70,7 @@ class Connection(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of Connection from a JSON string"""
+        """Create an instance of RemoteConnection from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -150,7 +150,7 @@ class Connection(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of Connection from a dict"""
+        """Create an instance of RemoteConnection from a dict"""
         if obj is None:
             return None
 

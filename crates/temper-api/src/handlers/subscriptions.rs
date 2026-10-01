@@ -14,8 +14,8 @@ use axum::Json;
 use serde::Deserialize;
 use uuid::Uuid;
 
-// `Subscription` publishes as `ConnectionSubscription` (`schema(as = …)` on the type): the contract
-// already has a `Subscription`, the vault-config one.
+// `Subscription` publishes as `ConnectionSubscription` (`schema(as = …)` on the type): the
+// contract already has a `Subscription`, the vault-config one.
 use temper_core::types::subscription::{CreateSubscriptionRequest, Subscription};
 use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::subscription_service;
@@ -48,6 +48,7 @@ pub struct ListQuery {
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is neither a system admin nor an owner or maintainer of the authoring team, the authoring team has no read-reach on the connection, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
         (status = 409, description = "A subscription with the same authoring team, connection and selector already exists, live or revoked", body = ErrorBody),
+        (status = 422, description = "The body is JSON but not the expected shape, e.g. an unknown selector `kind` (a plain-text rejection, not an ErrorBody)"),
     )
 )]
 pub async fn create(

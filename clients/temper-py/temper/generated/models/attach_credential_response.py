@@ -19,8 +19,8 @@ import json
 
 from pydantic import BaseModel, ConfigDict
 from typing import Any, ClassVar, Dict, List
-from temper.generated.models.connection import Connection
 from temper.generated.models.credential_verification import CredentialVerification
+from temper.generated.models.remote_connection import RemoteConnection
 from typing import Optional, Set
 from typing_extensions import Self
 from pydantic_core import to_jsonable_python
@@ -29,7 +29,7 @@ class AttachCredentialResponse(BaseModel):
     """
     The result of attaching a credential: the updated connection plus what minting once at attach time observed.
     """ # noqa: E501
-    connection: Connection
+    connection: RemoteConnection
     verification: CredentialVerification
     __properties: ClassVar[List[str]] = ["connection", "verification"]
 
@@ -90,7 +90,7 @@ class AttachCredentialResponse(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "connection": Connection.from_dict(obj["connection"]) if obj.get("connection") is not None else None,
+            "connection": RemoteConnection.from_dict(obj["connection"]) if obj.get("connection") is not None else None,
             "verification": CredentialVerification.from_dict(obj["verification"]) if obj.get("verification") is not None else None
         })
         return _obj

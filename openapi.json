@@ -1975,7 +1975,7 @@
             }
           },
           "400": {
-            "description": "Neither or both of `subject` and `actor` were given, or `subject` is malformed",
+            "description": "Neither or both of `subject` and `actor` were given, or `subject` is malformed. A query value that does not parse (e.g. a non-UUID `actor`) is a plain-text rejection, not an ErrorBody",
             "content": {
               "application/json": {
                 "schema": {
@@ -4710,7 +4710,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Connection"
+                    "$ref": "#/components/schemas/RemoteConnection"
                   }
                 }
               }
@@ -4767,7 +4767,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Connection"
+                  "$ref": "#/components/schemas/RemoteConnection"
                 }
               }
             }
@@ -4862,7 +4862,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Connection"
+                  "$ref": "#/components/schemas/RemoteConnection"
                 }
               }
             }
@@ -4930,7 +4930,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Connection"
+                  "$ref": "#/components/schemas/RemoteConnection"
                 }
               }
             }
@@ -5140,7 +5140,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Connection"
+                  "$ref": "#/components/schemas/RemoteConnection"
                 }
               }
             }
@@ -5176,7 +5176,7 @@
             }
           },
           "404": {
-            "description": "No such connection",
+            "description": "No such connection, or no such receiving team",
             "content": {
               "application/json": {
                 "schema": {
@@ -5238,7 +5238,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Connection"
+                  "$ref": "#/components/schemas/RemoteConnection"
                 }
               }
             }
@@ -5333,7 +5333,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Connection"
+                  "$ref": "#/components/schemas/RemoteConnection"
                 }
               }
             }
@@ -5438,7 +5438,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Connection"
+                  "$ref": "#/components/schemas/RemoteConnection"
                 }
               }
             }
@@ -8273,7 +8273,7 @@
             }
           },
           "403": {
-            "description": "Caller is neither a system admin nor the owner of the owning team, the requested reach exceeds what the caller may confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -8366,7 +8366,7 @@
             }
           },
           "403": {
-            "description": "Caller is neither a system admin nor the owner of the owning team, the requested reach exceeds what the caller may confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "description": "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13044,6 +13044,9 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "The body is JSON but not the expected shape, e.g. an unknown selector `kind` (a plain-text rejection, not an ErrorBody)"
           }
         },
         "security": [
@@ -15224,7 +15227,7 @@
         ],
         "properties": {
           "connection": {
-            "$ref": "#/components/schemas/Connection"
+            "$ref": "#/components/schemas/RemoteConnection"
           },
           "verification": {
             "$ref": "#/components/schemas/CredentialVerification"
@@ -16829,138 +16832,9 @@
           "confident"
         ]
       },
-      "Connection": {
-        "type": "object",
-        "description": "A provisioned connection to a remote system (a GitHub App installation, a Linear workspace).\n\n`owner_team_id` is the connection's OWNER, never its reach — owning a connection does not\nconfer the right to subscribe to it. Reach is plural and explicitly granted.\n\nThe two capability tiers are separately provisioned and both explicit: a connection is\n**ledger-capable** when `webhook_events` is non-empty (events land) and **reach-capable**\nwhen `tool_manifest` is non-empty (agents can read the remote back, so judgment becomes\npossible). A ledger-only connection is legal and useful, but inert for judgment — and it\nsays so rather than leaving an agent to mysteriously produce nothing.",
-        "required": [
-          "id",
-          "provider",
-          "slug",
-          "name",
-          "registered_by_profile_id",
-          "profile_id",
-          "emitter_entity_id",
-          "home_context_id",
-          "webhook_events",
-          "tool_manifest",
-          "created"
-        ],
-        "properties": {
-          "created": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "credential": {
-            "description": "The credential reference, shaped as a `ConnectionCredential`. It holds no secret. `null`\nuntil a credential is attached."
-          },
-          "emitter_entity_id": {
-            "type": "string",
-            "format": "uuid",
-            "description": "The entity remote payloads are attributed to (`<handle>@webhook`)."
-          },
-          "home_context_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "observed_reach": {
-            "description": "What the attach-time mint observed the credential can actually see — the provider's\n`metadata`, provider-shaped. `None` = never minted, or the mint returned no reach\nmetadata. Persisted at `attach_credential` so the grant path can compare it against\nthe *declared* reach (`reach_granularity`/`reach_covers`): a disagreement within the\nremote domain is the commensurable gap the mint can detect. This is NOT a computed\n`exceeds_temper_reach` bool — remote and temper scope remain incommensurable; only the\nremote-domain observed-vs-declared drift is compared, and only to decide whether\naffirmation is required, never to auto-deny."
-          },
-          "owner_team_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "The team that owns the connection. Ownership confers no read-reach. With no owning team,\nonly a system admin can manage the connection."
-          },
-          "profile_id": {
-            "type": "string",
-            "format": "uuid",
-            "description": "The connection's dedicated agent profile. It carries no auth link and no machine-client\nrow — a connection never authenticates *to* temper."
-          },
-          "provider": {
-            "type": "string"
-          },
-          "reach_affirmation": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The stated rationale — why the coarse reach binding is intentional. `None` = never affirmed."
-          },
-          "reach_affirmed_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time",
-            "description": "When the affirmation was made. `None` = never affirmed. Paired with `reach_affirmed_by`\nand `reach_affirmation` as one last-writer stamp."
-          },
-          "reach_affirmed_by": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "Who affirmed that binding this connection's coarse remote reach to a team is intentional.\n`None` = never affirmed (declares no reach, or no grant requiring affirmation yet). A\nsingle-valued, last-writer audit stamp — not a per-grant ledger — and NOT a computed\n`exceeds_temper_reach` bool: it records a declared intent, it does not resolve the\n(incommensurable) remote-vs-temper scope asymmetry."
-          },
-          "reach_covers": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "What the credential can ACTUALLY see, in provider terms (`acme/temper`, `acme/*`)."
-          },
-          "reach_granularity": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "`org` | `workspace` | `installation` | `repo-set` | `project` — the grain the credential\nis scoped at, in the provider's terms."
-          },
-          "registered_by_profile_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "revoked_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "revoked_by_profile_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "slug": {
-            "type": "string"
-          },
-          "tool_manifest": {
-            "description": "Declared read-only remote tools. Non-empty ⇒ reach-capable."
-          },
-          "webhook_events": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Registered remote event types. Non-empty ⇒ ledger-capable."
-          }
-        }
-      },
       "ConnectionCredential": {
         "type": "object",
-        "description": "The abstract credential reference stored in `kb_connections.credential`, and the body of the\nattach-credential request — one type, so the wire shape and the stored shape cannot drift.\n\n**This holds no secret.** `broker` names an implementation and `connector` identifies a\nconnector *the broker* holds the secret for; the secret itself never reaches temper. That is\nwhy this is safe to return on a read path unredacted, unlike `kb_machine_clients.secret_hash`.\n\n**`broker` is never a bare Vercel connector id.** It names the implementation so a platform\nswap costs one adapter — the seam is two operations (`mint`, `verifyInbound`) and nothing above\nit knows which broker is behind it. Keeping the connector id on the *row* rather than in code is\nalso what lets a self-hosted operator provision their own connectors in their own Vercel team.",
+        "description": "A connection's credential reference: a broker, and a connector that broker holds the secret\nfor. It holds no secret; the secret never reaches temper.",
         "required": [
           "broker",
           "connector"
@@ -18510,7 +18384,7 @@
       },
       "GrantConnectionReachRequest": {
         "type": "object",
-        "description": "Grant (or revoke) a TEAM's read-reach on a connection. Owning a connection is not reaching it:\nthis writes a `kb_access_grants` row (`subject_table = 'kb_connections'`) that lets the named\nteam READ what the connection receives. Reach is read-only — a grant confers no write. One\nrequest type carries `team` for both the grant and the revoke, so the two sides cannot drift.\n\nThe CLI resolves the team ref to a UUID before sending, so this is a `Uuid`, not a ref string.",
+        "description": "Grant or revoke a team's read-reach on a connection. Owning a connection is not reaching it:\na grant lets the named team read what the connection receives, and confers no write.",
         "required": [
           "team"
         ],
@@ -19778,7 +19652,7 @@
       },
       "LedgerRefRel": {
         "type": "string",
-        "description": "Why a ledger entry points at a thing: `subject` is what the act was performed on, and\n`principal` whom it was performed for.",
+        "description": "Why a ledger entry points at a thing, e.g. `subject` (what the act was performed on) or\n`principal` (whom it was performed for).",
         "enum": [
           "supersedes",
           "derived_from",
@@ -20776,7 +20650,7 @@
       },
       "ProvisionConnectionRequest": {
         "type": "object",
-        "description": "Provision a connection. It is born `needs_credential` — the credential is attached\nseparately, so a connection never silently pretends to be more than it is.",
+        "description": "Provision a connection. It starts with no credential; the credential is attached separately.",
         "required": [
           "provider",
           "name"
@@ -20802,14 +20676,15 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "The declared reach: what the credential is meant to cover, in the provider's terms\n(`acme/temper`, `acme/*`)."
           },
           "reach_granularity": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The declared reach fidelity, in the provider's terms. Both halves are honest fields\nrather than a computed `exceeds_temper_reach` bool: remote and temper scope are\nincommensurable, and a stored bool would go stale."
+            "description": "The grain the credential is scoped at, in the provider's terms (`org`, `workspace`,\n`installation`, `repo-set`, `project`). Declaring a reach means granting it to a team may\nneed an affirmation."
           }
         }
       },
@@ -22181,6 +22056,135 @@
           "resource",
           "blob"
         ]
+      },
+      "RemoteConnection": {
+        "type": "object",
+        "description": "A provisioned connection to a remote system (a GitHub App installation, a Linear workspace).\n\n`owner_team_id` is the connection's OWNER, never its reach — owning a connection does not\nconfer the right to subscribe to it. Reach is plural and explicitly granted.\n\nThe two capability tiers are separately provisioned and both explicit: a connection is\n**ledger-capable** when `webhook_events` is non-empty (events land) and **reach-capable**\nwhen `tool_manifest` is non-empty (agents can read the remote back, so judgment becomes\npossible). A ledger-only connection is legal and useful, but inert for judgment — and it\nsays so rather than leaving an agent to mysteriously produce nothing.",
+        "required": [
+          "id",
+          "provider",
+          "slug",
+          "name",
+          "registered_by_profile_id",
+          "profile_id",
+          "emitter_entity_id",
+          "home_context_id",
+          "webhook_events",
+          "tool_manifest",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "credential": {
+            "description": "The credential reference, shaped as a `ConnectionCredential`. It holds no secret. `null`\nuntil a credential is attached."
+          },
+          "emitter_entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The entity that payloads from the remote system are attributed to."
+          },
+          "home_context_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "observed_reach": {
+            "description": "What the credential could actually see when it was verified at attach time, as the\nprovider reported it. `null` if never verified, or the provider reported no reach. A\nreach grant compares it with the declared reach to decide whether affirmation is needed."
+          },
+          "owner_team_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The team that owns the connection. Ownership confers no read-reach. With no owning team,\nonly a system admin can manage the connection."
+          },
+          "profile_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The connection's dedicated agent profile. It carries no auth link and no machine-client\nrow — a connection never authenticates *to* temper."
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reach_affirmation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stated reason the reach binding is intended. `null` if never affirmed."
+          },
+          "reach_affirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the affirmation was made. `null` if never affirmed."
+          },
+          "reach_affirmed_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Who last affirmed that binding this connection's remote reach to a team is intended.\n`null` if never affirmed. One last-writer stamp, not a record per grant."
+          },
+          "reach_covers": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The declared reach: what the credential is meant to cover, in the provider's terms\n(`acme/temper`, `acme/*`). `observed_reach` is what it was seen to cover."
+          },
+          "reach_granularity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`org` | `workspace` | `installation` | `repo-set` | `project` — the grain the credential\nis scoped at, in the provider's terms."
+          },
+          "registered_by_profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revoked_by_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "tool_manifest": {
+            "description": "Declared read-only remote tools. Non-empty ⇒ reach-capable."
+          },
+          "webhook_events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Registered remote event types. Non-empty ⇒ ledger-capable."
+          }
+        }
       },
       "RemoveMemberOutcome": {
         "type": "object",
@@ -23914,7 +23918,7 @@
       },
       "SetToolManifestRequest": {
         "type": "object",
-        "description": "Declare the read-only remote tools a connection exposes. Non-empty ⇒ **reach-capable**.\n\nNot decorative: the manifest is the evidence the provider is admissible at all. A provider that\ncannot be reached through an API, an MCP server, or a CLI we can hold credentials for is\nrejected — proxying is out of scope by rule, so an empty manifest means judgment is impossible,\nnot merely unconfigured.\n\nTool *names* only. Anything richer is a per-provider schema, and no provider needs one yet.",
+        "description": "Declare the read-only remote tools a connection exposes, by name. A non-empty manifest makes\nthe connection reach-capable.",
         "required": [
           "tools"
         ],
@@ -25119,7 +25123,7 @@
         "properties": {
           "role": {
             "type": "string",
-            "description": "The team role: `member` or `watcher`. A role above `member` is refused for any caller."
+            "description": "The team role: `member` or `watcher`. A role above `member` is refused for every caller,\na system admin included."
           },
           "team_id": {
             "type": "string",

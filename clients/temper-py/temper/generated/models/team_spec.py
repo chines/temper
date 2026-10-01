@@ -28,7 +28,7 @@ class TeamSpec(BaseModel):
     """
     One team the machine should be enrolled in, with its role.
     """ # noqa: E501
-    role: StrictStr = Field(description="The team role: `member` or `watcher`. A role above `member` is refused for any caller.")
+    role: StrictStr = Field(description="The team role: `member` or `watcher`. A role above `member` is refused for every caller, a system admin included.")
     team_id: UUID
     __properties: ClassVar[List[str]] = ["role", "team_id"]
 

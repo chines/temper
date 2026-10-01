@@ -15,12 +15,12 @@ require 'time'
 
 module Temper::Generated
   # A provisioned connection to a remote system (a GitHub App installation, a Linear workspace).  `owner_team_id` is the connection's OWNER, never its reach — owning a connection does not confer the right to subscribe to it. Reach is plural and explicitly granted.  The two capability tiers are separately provisioned and both explicit: a connection is **ledger-capable** when `webhook_events` is non-empty (events land) and **reach-capable** when `tool_manifest` is non-empty (agents can read the remote back, so judgment becomes possible). A ledger-only connection is legal and useful, but inert for judgment — and it says so rather than leaving an agent to mysteriously produce nothing.
-  class Connection < ApiModelBase
+  class RemoteConnection < ApiModelBase
     attr_accessor :created
 
     attr_accessor :credential
 
-    # The entity remote payloads are attributed to (`<handle>@webhook`).
+    # The entity that payloads from the remote system are attributed to.
     attr_accessor :emitter_entity_id
 
     attr_accessor :home_context_id
@@ -39,16 +39,16 @@ module Temper::Generated
 
     attr_accessor :provider
 
-    # The stated rationale — why the coarse reach binding is intentional. `None` = never affirmed.
+    # The stated reason the reach binding is intended. `null` if never affirmed.
     attr_accessor :reach_affirmation
 
-    # When the affirmation was made. `None` = never affirmed. Paired with `reach_affirmed_by` and `reach_affirmation` as one last-writer stamp.
+    # When the affirmation was made. `null` if never affirmed.
     attr_accessor :reach_affirmed_at
 
-    # Who affirmed that binding this connection's coarse remote reach to a team is intentional. `None` = never affirmed (declares no reach, or no grant requiring affirmation yet). A single-valued, last-writer audit stamp — not a per-grant ledger — and NOT a computed `exceeds_temper_reach` bool: it records a declared intent, it does not resolve the (incommensurable) remote-vs-temper scope asymmetry.
+    # Who last affirmed that binding this connection's remote reach to a team is intended. `null` if never affirmed. One last-writer stamp, not a record per grant.
     attr_accessor :reach_affirmed_by
 
-    # What the credential can ACTUALLY see, in provider terms (`acme/temper`, `acme/*`).
+    # The declared reach: what the credential is meant to cover, in the provider's terms (`acme/temper`, `acme/*`). `observed_reach` is what it was seen to cover.
     attr_accessor :reach_covers
 
     # `org` | `workspace` | `installation` | `repo-set` | `project` — the grain the credential is scoped at, in the provider's terms.
@@ -152,14 +152,14 @@ module Temper::Generated
     # @param [Hash] attributes Model attributes in the form of hash
     def initialize(attributes = {})
       if (!attributes.is_a?(Hash))
-        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::Connection` initialize method"
+        fail ArgumentError, "The input argument (attributes) must be a hash in `Temper::Generated::RemoteConnection` initialize method"
       end
 
       # check to see if the attribute exists and convert string to symbol for hash key
       acceptable_attribute_map = self.class.acceptable_attribute_map
       attributes = attributes.each_with_object({}) { |(k, v), h|
         if (!acceptable_attribute_map.key?(k.to_sym))
-          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::Connection`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
+          fail ArgumentError, "`#{k}` is not a valid attribute in `Temper::Generated::RemoteConnection`. Please check the name to make sure it's valid. List of attributes: " + acceptable_attribute_map.keys.inspect
         end
         h[k.to_sym] = v
       }

@@ -255,7 +255,7 @@ pub async fn set_tool_manifest(
         (status = 400, description = "`affirm_reach` was given but the connection has no reach gap to acknowledge", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
-        (status = 404, description = "No such connection", body = ErrorBody),
+        (status = 404, description = "No such connection, or no such receiving team", body = ErrorBody),
         (status = 409, description = "The connection declares a remote reach that must be affirmed; resend with `affirm_reach`", body = ErrorBody),
     )
 )]

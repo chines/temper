@@ -25,7 +25,7 @@ from pydantic_core import to_jsonable_python
 
 class ConnectionCredential(BaseModel):
     """
-    The abstract credential reference stored in `kb_connections.credential`, and the body of the attach-credential request — one type, so the wire shape and the stored shape cannot drift.  **This holds no secret.** `broker` names an implementation and `connector` identifies a connector *the broker* holds the secret for; the secret itself never reaches temper. That is why this is safe to return on a read path unredacted, unlike `kb_machine_clients.secret_hash`.  **`broker` is never a bare Vercel connector id.** It names the implementation so a platform swap costs one adapter — the seam is two operations (`mint`, `verifyInbound`) and nothing above it knows which broker is behind it. Keeping the connector id on the *row* rather than in code is also what lets a self-hosted operator provision their own connectors in their own Vercel team.
+    A connection's credential reference: a broker, and a connector that broker holds the secret for. It holds no secret; the secret never reaches temper.
     """ # noqa: E501
     broker: StrictStr = Field(description="The credential broker implementation, e.g. `vercel-connect`.")
     connector: StrictStr = Field(description="The broker's identifier for this connector. Per-instance, per-row, never hardcoded.")

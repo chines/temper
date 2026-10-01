@@ -40,8 +40,9 @@ pub struct Subscription {
     /// live subscriptions against it — the row stays honest about what was declared.
     pub connection_id: Uuid,
     /// The selector, in the shape of a `SubscriptionSelector`.
-    // Stored as JSONB. The column is the storage; the wire type ([`SubscriptionSelector`]) is the
-    // shape. The variant IS the capability declaration.
+    // Stored as JSONB. The column is the storage; the wire type (`SubscriptionSelector`) is the
+    // shape. The variant IS the capability declaration. Published untyped for the same reason as
+    // `Connection::credential`: a stored value read back is not re-validated.
     pub selector: serde_json::Value,
     pub created_by_profile_id: Uuid,
     pub created: DateTime<Utc>,
@@ -55,10 +56,10 @@ pub struct Subscription {
 // Deliberately thin: the goal's design says *"per-provider and per-grain, and it must declare its
 // own capability."*
 //
-// **The variant IS the capability declaration.** A [`SubscriptionSelector::GitHubCodeownersPaths`]
+// **The variant IS the capability declaration.** A `SubscriptionSelector::GitHubCodeownersPaths`
 // selector declares "I need enrichment to resolve" by being that variant — no separate
 // `needs_enrichment: bool` that could drift out of sync with the variant. A
-// [`SubscriptionSelector::LinearProject`] selector declares "payload-only, no enrichment
+// `SubscriptionSelector::LinearProject` selector declares "payload-only, no enrichment
 // needed" the same way.
 //
 // Adding a provider = adding a variant = a compile error at every match site, which is the
@@ -76,7 +77,7 @@ pub enum SubscriptionSelector {
     /// GitHub: a repository's pull-request events, matched on the webhook payload alone.
     // Coarse (payload-only) — the webhook payload carries the repo and the event type, so this
     // selector matches at intake without any fetch. The CODEOWNERS-path filter is a separate
-    // variant ([`Self::GitHubCodeownersPaths`]) that declares its need for enrichment.
+    // variant (`Self::GitHubCodeownersPaths`) that declares its need for enrichment.
     GitHubRepository {
         /// `owner/repo` — e.g. `acme/temper`.
         repo: String,
@@ -127,7 +128,7 @@ pub struct CreateSubscriptionRequest {
     pub authoring_team_id: Uuid,
     pub connection_id: Uuid,
     /// The selector. An unknown `kind` or a malformed selector is rejected.
-    // Deserialized into a [`SubscriptionSelector`] before storing, so an unknown `kind` or a
-    // malformed payload is a 400, not a silent untyped JSON write.
+    // Typed on the wire, so an unknown `kind` or a malformed payload is refused by the JSON
+    // extractor (a plain-text 422) before the service runs — never a silent untyped JSON write.
     pub selector: SubscriptionSelector,
 }

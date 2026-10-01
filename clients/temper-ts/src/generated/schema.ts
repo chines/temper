@@ -3970,7 +3970,7 @@ export interface components {
          *     once at attach time observed.
          */
         AttachCredentialResponse: {
-            connection: components["schemas"]["Connection"];
+            connection: components["schemas"]["RemoteConnection"];
             verification: components["schemas"]["CredentialVerification"];
         };
         /**
@@ -5098,107 +5098,8 @@ export interface components {
          */
         ConfidenceBand: "tentative" | "probable" | "confident";
         /**
-         * @description A provisioned connection to a remote system (a GitHub App installation, a Linear workspace).
-         *
-         *     `owner_team_id` is the connection's OWNER, never its reach — owning a connection does not
-         *     confer the right to subscribe to it. Reach is plural and explicitly granted.
-         *
-         *     The two capability tiers are separately provisioned and both explicit: a connection is
-         *     **ledger-capable** when `webhook_events` is non-empty (events land) and **reach-capable**
-         *     when `tool_manifest` is non-empty (agents can read the remote back, so judgment becomes
-         *     possible). A ledger-only connection is legal and useful, but inert for judgment — and it
-         *     says so rather than leaving an agent to mysteriously produce nothing.
-         */
-        Connection: {
-            /** Format: date-time */
-            created: string;
-            /**
-             * @description The credential reference, shaped as a `ConnectionCredential`. It holds no secret. `null`
-             *     until a credential is attached.
-             */
-            credential?: unknown;
-            /**
-             * Format: uuid
-             * @description The entity remote payloads are attributed to (`<handle>@webhook`).
-             */
-            emitter_entity_id: string;
-            /** Format: uuid */
-            home_context_id: string;
-            /** Format: uuid */
-            id: string;
-            name: string;
-            /**
-             * @description What the attach-time mint observed the credential can actually see — the provider's
-             *     `metadata`, provider-shaped. `None` = never minted, or the mint returned no reach
-             *     metadata. Persisted at `attach_credential` so the grant path can compare it against
-             *     the *declared* reach (`reach_granularity`/`reach_covers`): a disagreement within the
-             *     remote domain is the commensurable gap the mint can detect. This is NOT a computed
-             *     `exceeds_temper_reach` bool — remote and temper scope remain incommensurable; only the
-             *     remote-domain observed-vs-declared drift is compared, and only to decide whether
-             *     affirmation is required, never to auto-deny.
-             */
-            observed_reach?: unknown;
-            /**
-             * Format: uuid
-             * @description The team that owns the connection. Ownership confers no read-reach. With no owning team,
-             *     only a system admin can manage the connection.
-             */
-            owner_team_id?: string | null;
-            /**
-             * Format: uuid
-             * @description The connection's dedicated agent profile. It carries no auth link and no machine-client
-             *     row — a connection never authenticates *to* temper.
-             */
-            profile_id: string;
-            provider: string;
-            /** @description The stated rationale — why the coarse reach binding is intentional. `None` = never affirmed. */
-            reach_affirmation?: string | null;
-            /**
-             * Format: date-time
-             * @description When the affirmation was made. `None` = never affirmed. Paired with `reach_affirmed_by`
-             *     and `reach_affirmation` as one last-writer stamp.
-             */
-            reach_affirmed_at?: string | null;
-            /**
-             * Format: uuid
-             * @description Who affirmed that binding this connection's coarse remote reach to a team is intentional.
-             *     `None` = never affirmed (declares no reach, or no grant requiring affirmation yet). A
-             *     single-valued, last-writer audit stamp — not a per-grant ledger — and NOT a computed
-             *     `exceeds_temper_reach` bool: it records a declared intent, it does not resolve the
-             *     (incommensurable) remote-vs-temper scope asymmetry.
-             */
-            reach_affirmed_by?: string | null;
-            /** @description What the credential can ACTUALLY see, in provider terms (`acme/temper`, `acme/*`). */
-            reach_covers?: string | null;
-            /**
-             * @description `org` | `workspace` | `installation` | `repo-set` | `project` — the grain the credential
-             *     is scoped at, in the provider's terms.
-             */
-            reach_granularity?: string | null;
-            /** Format: uuid */
-            registered_by_profile_id: string;
-            /** Format: date-time */
-            revoked_at?: string | null;
-            /** Format: uuid */
-            revoked_by_profile_id?: string | null;
-            slug: string;
-            /** @description Declared read-only remote tools. Non-empty ⇒ reach-capable. */
-            tool_manifest: unknown;
-            /** @description Registered remote event types. Non-empty ⇒ ledger-capable. */
-            webhook_events: string[];
-        };
-        /**
-         * @description The abstract credential reference stored in `kb_connections.credential`, and the body of the
-         *     attach-credential request — one type, so the wire shape and the stored shape cannot drift.
-         *
-         *     **This holds no secret.** `broker` names an implementation and `connector` identifies a
-         *     connector *the broker* holds the secret for; the secret itself never reaches temper. That is
-         *     why this is safe to return on a read path unredacted, unlike `kb_machine_clients.secret_hash`.
-         *
-         *     **`broker` is never a bare Vercel connector id.** It names the implementation so a platform
-         *     swap costs one adapter — the seam is two operations (`mint`, `verifyInbound`) and nothing above
-         *     it knows which broker is behind it. Keeping the connector id on the *row* rather than in code is
-         *     also what lets a self-hosted operator provision their own connectors in their own Vercel team.
+         * @description A connection's credential reference: a broker, and a connector that broker holds the secret
+         *     for. It holds no secret; the secret never reaches temper.
          */
         ConnectionCredential: {
             /** @description The credential broker implementation, e.g. `vercel-connect`. */
@@ -6241,12 +6142,8 @@ export interface components {
             reason?: string | null;
         };
         /**
-         * @description Grant (or revoke) a TEAM's read-reach on a connection. Owning a connection is not reaching it:
-         *     this writes a `kb_access_grants` row (`subject_table = 'kb_connections'`) that lets the named
-         *     team READ what the connection receives. Reach is read-only — a grant confers no write. One
-         *     request type carries `team` for both the grant and the revoke, so the two sides cannot drift.
-         *
-         *     The CLI resolves the team ref to a UUID before sending, so this is a `Uuid`, not a ref string.
+         * @description Grant or revoke a team's read-reach on a connection. Owning a connection is not reaching it:
+         *     a grant lets the named team read what the connection receives, and confers no write.
          */
         GrantConnectionReachRequest: {
             /**
@@ -6992,8 +6889,8 @@ export interface components {
          */
         LedgerRefKind: "kb_contexts" | "kb_cogmaps" | "kb_blobs" | "kb_resources" | "kb_edges" | "kb_content_blocks" | "kb_teams" | "kb_profiles" | "kb_connections" | "kb_machine_clients" | "kb_events";
         /**
-         * @description Why a ledger entry points at a thing: `subject` is what the act was performed on, and
-         *     `principal` whom it was performed for.
+         * @description Why a ledger entry points at a thing, e.g. `subject` (what the act was performed on) or
+         *     `principal` (whom it was performed for).
          * @enum {string}
          */
         LedgerRefRel: "supersedes" | "derived_from" | "touches" | "subject" | "principal" | "request";
@@ -7606,10 +7503,7 @@ export interface components {
              */
             value: string;
         };
-        /**
-         * @description Provision a connection. It is born `needs_credential` — the credential is attached
-         *     separately, so a connection never silently pretends to be more than it is.
-         */
+        /** @description Provision a connection. It starts with no credential; the credential is attached separately. */
         ProvisionConnectionRequest: {
             /** @description Display name. The addressable slug is derived from it. */
             name: string;
@@ -7621,11 +7515,15 @@ export interface components {
             owner_team_id?: string | null;
             /** @description `github` | `linear` | … */
             provider: string;
+            /**
+             * @description The declared reach: what the credential is meant to cover, in the provider's terms
+             *     (`acme/temper`, `acme/*`).
+             */
             reach_covers?: string | null;
             /**
-             * @description The declared reach fidelity, in the provider's terms. Both halves are honest fields
-             *     rather than a computed `exceeds_temper_reach` bool: remote and temper scope are
-             *     incommensurable, and a stored bool would go stale.
+             * @description The grain the credential is scoped at, in the provider's terms (`org`, `workspace`,
+             *     `installation`, `repo-set`, `project`). Declaring a reach means granting it to a team may
+             *     need an affirmation.
              */
             reach_granularity?: string | null;
         };
@@ -8270,6 +8168,90 @@ export interface components {
          * @enum {string}
          */
         RelationshipTarget: "resource" | "blob";
+        /**
+         * @description A provisioned connection to a remote system (a GitHub App installation, a Linear workspace).
+         *
+         *     `owner_team_id` is the connection's OWNER, never its reach — owning a connection does not
+         *     confer the right to subscribe to it. Reach is plural and explicitly granted.
+         *
+         *     The two capability tiers are separately provisioned and both explicit: a connection is
+         *     **ledger-capable** when `webhook_events` is non-empty (events land) and **reach-capable**
+         *     when `tool_manifest` is non-empty (agents can read the remote back, so judgment becomes
+         *     possible). A ledger-only connection is legal and useful, but inert for judgment — and it
+         *     says so rather than leaving an agent to mysteriously produce nothing.
+         */
+        RemoteConnection: {
+            /** Format: date-time */
+            created: string;
+            /**
+             * @description The credential reference, shaped as a `ConnectionCredential`. It holds no secret. `null`
+             *     until a credential is attached.
+             */
+            credential?: unknown;
+            /**
+             * Format: uuid
+             * @description The entity that payloads from the remote system are attributed to.
+             */
+            emitter_entity_id: string;
+            /** Format: uuid */
+            home_context_id: string;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /**
+             * @description What the credential could actually see when it was verified at attach time, as the
+             *     provider reported it. `null` if never verified, or the provider reported no reach. A
+             *     reach grant compares it with the declared reach to decide whether affirmation is needed.
+             */
+            observed_reach?: unknown;
+            /**
+             * Format: uuid
+             * @description The team that owns the connection. Ownership confers no read-reach. With no owning team,
+             *     only a system admin can manage the connection.
+             */
+            owner_team_id?: string | null;
+            /**
+             * Format: uuid
+             * @description The connection's dedicated agent profile. It carries no auth link and no machine-client
+             *     row — a connection never authenticates *to* temper.
+             */
+            profile_id: string;
+            provider: string;
+            /** @description The stated reason the reach binding is intended. `null` if never affirmed. */
+            reach_affirmation?: string | null;
+            /**
+             * Format: date-time
+             * @description When the affirmation was made. `null` if never affirmed.
+             */
+            reach_affirmed_at?: string | null;
+            /**
+             * Format: uuid
+             * @description Who last affirmed that binding this connection's remote reach to a team is intended.
+             *     `null` if never affirmed. One last-writer stamp, not a record per grant.
+             */
+            reach_affirmed_by?: string | null;
+            /**
+             * @description The declared reach: what the credential is meant to cover, in the provider's terms
+             *     (`acme/temper`, `acme/*`). `observed_reach` is what it was seen to cover.
+             */
+            reach_covers?: string | null;
+            /**
+             * @description `org` | `workspace` | `installation` | `repo-set` | `project` — the grain the credential
+             *     is scoped at, in the provider's terms.
+             */
+            reach_granularity?: string | null;
+            /** Format: uuid */
+            registered_by_profile_id: string;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            /** Format: uuid */
+            revoked_by_profile_id?: string | null;
+            slug: string;
+            /** @description Declared read-only remote tools. Non-empty ⇒ reach-capable. */
+            tool_manifest: unknown;
+            /** @description Registered remote event types. Non-empty ⇒ ledger-capable. */
+            webhook_events: string[];
+        };
         /**
          * @description Response to a member removal (or self-leave): the removal happened; this
          *     reports the residual owned-resource reach so the caller can hand it off.
@@ -9469,14 +9451,8 @@ export interface components {
             resource_id: string;
         };
         /**
-         * @description Declare the read-only remote tools a connection exposes. Non-empty ⇒ **reach-capable**.
-         *
-         *     Not decorative: the manifest is the evidence the provider is admissible at all. A provider that
-         *     cannot be reached through an API, an MCP server, or a CLI we can hold credentials for is
-         *     rejected — proxying is out of scope by rule, so an empty manifest means judgment is impossible,
-         *     not merely unconfigured.
-         *
-         *     Tool *names* only. Anything richer is a per-provider schema, and no provider needs one yet.
+         * @description Declare the read-only remote tools a connection exposes, by name. A non-empty manifest makes
+         *     the connection reach-capable.
          */
         SetToolManifestRequest: {
             tools: string[];
@@ -10325,7 +10301,10 @@ export interface components {
         };
         /** @description One team the machine should be enrolled in, with its role. */
         TeamSpec: {
-            /** @description The team role: `member` or `watcher`. A role above `member` is refused for any caller. */
+            /**
+             * @description The team role: `member` or `watcher`. A role above `member` is refused for every caller,
+             *     a system admin included.
+             */
             role: string;
             /** Format: uuid */
             team_id: string;
@@ -11795,7 +11774,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminLedgerResponse"];
                 };
             };
-            /** @description Neither or both of `subject` and `actor` were given, or `subject` is malformed */
+            /** @description Neither or both of `subject` and `actor` were given, or `subject` is malformed. A query value that does not parse (e.g. a non-UUID `actor`) is a plain-text rejection, not an ErrorBody */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -13464,7 +13443,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Connection"][];
+                    "application/json": components["schemas"]["RemoteConnection"][];
                 };
             };
             /** @description Authentication required */
@@ -13509,7 +13488,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Connection"];
+                    "application/json": components["schemas"]["RemoteConnection"];
                 };
             };
             /** @description `provider` or `name` is empty, or `name` has no characters usable in a slug */
@@ -13571,7 +13550,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Connection"];
+                    "application/json": components["schemas"]["RemoteConnection"];
                 };
             };
             /** @description Authentication required */
@@ -13624,7 +13603,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Connection"];
+                    "application/json": components["schemas"]["RemoteConnection"];
                 };
             };
             /** @description Authentication required */
@@ -13756,7 +13735,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Connection"];
+                    "application/json": components["schemas"]["RemoteConnection"];
                 };
             };
             /** @description `affirm_reach` was given but the connection has no reach gap to acknowledge */
@@ -13786,7 +13765,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such connection */
+            /** @description No such connection, or no such receiving team */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13831,7 +13810,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Connection"];
+                    "application/json": components["schemas"]["RemoteConnection"];
                 };
             };
             /** @description Authentication required */
@@ -13888,7 +13867,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Connection"];
+                    "application/json": components["schemas"]["RemoteConnection"];
                 };
             };
             /** @description Authentication required */
@@ -13954,7 +13933,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Connection"];
+                    "application/json": components["schemas"]["RemoteConnection"];
                 };
             };
             /** @description Authentication required */
@@ -15682,7 +15661,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, the requested reach exceeds what the caller may confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15745,7 +15724,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, the requested reach exceeds what the caller may confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18601,6 +18580,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
+            };
+            /** @description The body is JSON but not the expected shape, e.g. an unknown selector `kind` (a plain-text rejection, not an ErrorBody) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

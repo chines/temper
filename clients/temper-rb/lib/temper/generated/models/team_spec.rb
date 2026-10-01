@@ -16,7 +16,7 @@ require 'time'
 module Temper::Generated
   # One team the machine should be enrolled in, with its role.
   class TeamSpec < ApiModelBase
-    # The team role: `member` or `watcher`. A role above `member` is refused for any caller.
+    # The team role: `member` or `watcher`. A role above `member` is refused for every caller, a system admin included.
     attr_accessor :role
 
     attr_accessor :team_id

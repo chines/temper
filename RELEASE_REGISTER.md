@@ -33,7 +33,8 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   actor themself reaches them, so they are not admin-only. Every existing operation and schema is
   byte-identical; the contract only grows (20 new operations, their request/response schemas, four
   new API classes in each generated SDK). The temper-core `Subscription` row publishes as
-  `ConnectionSubscription`, since the contract already carries the vault-config `Subscription`. No
+  `ConnectionSubscription`, since the contract already carries the vault-config `Subscription`, and
+  `Connection` publishes as `RemoteConnection`, apart from the SDKs' own HTTP connection. No
   route's path, method, gate, status codes or wire bytes change. Who observes: OpenAPI/SDK
   consumers, who can now call these families with a bearer that passes their gate. User-visible:
   no. Release relevance: signal-only.

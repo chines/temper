@@ -246,8 +246,8 @@ pub struct ReembedSummary {
 // stops compiling if either side gains one.
 // ---------------------------------------------------------------------------
 
-/// Why a ledger entry points at a thing: `subject` is what the act was performed on, and
-/// `principal` whom it was performed for.
+/// Why a ledger entry points at a thing, e.g. `subject` (what the act was performed on) or
+/// `principal` (whom it was performed for).
 // Mirrors `temper_substrate::payloads::RefRel`.
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Grant (or revoke) a TEAM's read-reach on a connection. Owning a connection is not reaching it: this writes a `kb_access_grants` row (`subject_table = 'kb_connections'`) that lets the named team READ what the connection receives. Reach is read-only — a grant confers no write. One request type carries `team` for both the grant and the revoke, so the two sides cannot drift.  The CLI resolves the team ref to a UUID before sending, so this is a `Uuid`, not a ref string.
+  # Grant or revoke a team's read-reach on a connection. Owning a connection is not reaching it: a grant lets the named team read what the connection receives, and confers no write.
   class GrantConnectionReachRequest < ApiModelBase
     # Why binding this connection's remote reach to the team is intended. Required when the connection declares a remote reach that its credential verification did not confirm, and refused when there is nothing to affirm. It is recorded for review; it does not narrow the remote reach. Ignored when revoking.
     attr_accessor :affirm_reach

@@ -103,6 +103,7 @@ class SubscriptionsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '409': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -178,6 +179,7 @@ class SubscriptionsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '409': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -253,6 +255,7 @@ class SubscriptionsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '409': "ErrorBody",
+            '422': None,
         }
         response_data = self.api_client.call_api(
             *_param,

@@ -20,10 +20,10 @@ from typing import List, Optional
 from typing_extensions import Annotated
 from uuid import UUID
 from temper.generated.models.attach_credential_response import AttachCredentialResponse
-from temper.generated.models.connection import Connection
 from temper.generated.models.connection_credential import ConnectionCredential
 from temper.generated.models.grant_connection_reach_request import GrantConnectionReachRequest
 from temper.generated.models.provision_connection_request import ProvisionConnectionRequest
+from temper.generated.models.remote_connection import RemoteConnection
 from temper.generated.models.set_tool_manifest_request import SetToolManifestRequest
 from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest
 
@@ -381,7 +381,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> Connection:
+    ) -> RemoteConnection:
         """Get a connection
 
         Returns one connection. Requires a system admin or the owner of the connection's owning team.
@@ -422,7 +422,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -455,7 +455,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[Connection]:
+    ) -> ApiResponse[RemoteConnection]:
         """Get a connection
 
         Returns one connection. Requires a system admin or the owner of the connection's owning team.
@@ -496,7 +496,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -570,7 +570,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -667,7 +667,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> Connection:
+    ) -> RemoteConnection:
         """Grant a team read-reach on a connection
 
         Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm.
@@ -711,7 +711,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
@@ -747,7 +747,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[Connection]:
+    ) -> ApiResponse[RemoteConnection]:
         """Grant a team read-reach on a connection
 
         Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm.
@@ -791,7 +791,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
@@ -871,7 +871,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
@@ -985,7 +985,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> List[Connection]:
+    ) -> List[RemoteConnection]:
         """List connections
 
         Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
@@ -1026,7 +1026,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "List[Connection]",
+            '200': "List[RemoteConnection]",
             '401': "ErrorBody",
             '403': "ErrorBody",
         }
@@ -1058,7 +1058,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[List[Connection]]:
+    ) -> ApiResponse[List[RemoteConnection]]:
         """List connections
 
         Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.
@@ -1099,7 +1099,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "List[Connection]",
+            '200': "List[RemoteConnection]",
             '401': "ErrorBody",
             '403': "ErrorBody",
         }
@@ -1172,7 +1172,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "List[Connection]",
+            '200': "List[RemoteConnection]",
             '401': "ErrorBody",
             '403': "ErrorBody",
         }
@@ -1269,7 +1269,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> Connection:
+    ) -> RemoteConnection:
         """Provision a connection
 
         Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
@@ -1310,7 +1310,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
@@ -1344,7 +1344,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[Connection]:
+    ) -> ApiResponse[RemoteConnection]:
         """Provision a connection
 
         Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.
@@ -1385,7 +1385,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
@@ -1460,7 +1460,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '400': "ErrorBody",
             '401': "ErrorBody",
             '403': "ErrorBody",
@@ -1570,7 +1570,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> Connection:
+    ) -> RemoteConnection:
         """Revoke a connection
 
         Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team.
@@ -1611,7 +1611,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -1644,7 +1644,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[Connection]:
+    ) -> ApiResponse[RemoteConnection]:
         """Revoke a connection
 
         Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team.
@@ -1685,7 +1685,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -1759,7 +1759,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -1856,7 +1856,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> Connection:
+    ) -> RemoteConnection:
         """Revoke a team's read-reach on a connection
 
         Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed.
@@ -1900,7 +1900,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -1934,7 +1934,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[Connection]:
+    ) -> ApiResponse[RemoteConnection]:
         """Revoke a team's read-reach on a connection
 
         Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed.
@@ -1978,7 +1978,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -2056,7 +2056,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -2169,7 +2169,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> Connection:
+    ) -> RemoteConnection:
         """Set connection tool manifest
 
         Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team.
@@ -2213,7 +2213,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -2248,7 +2248,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[Connection]:
+    ) -> ApiResponse[RemoteConnection]:
         """Set connection tool manifest
 
         Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team.
@@ -2292,7 +2292,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -2371,7 +2371,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -2485,7 +2485,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> Connection:
+    ) -> RemoteConnection:
         """Set connection webhook events
 
         Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team.
@@ -2529,7 +2529,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -2564,7 +2564,7 @@ class ConnectionsApi:
         _content_type: Optional[StrictStr] = None,
         _headers: Optional[Dict[StrictStr, Any]] = None,
         _host_index: Annotated[StrictInt, Field(ge=0, le=0)] = 0,
-    ) -> ApiResponse[Connection]:
+    ) -> ApiResponse[RemoteConnection]:
         """Set connection webhook events
 
         Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team.
@@ -2608,7 +2608,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
@@ -2687,7 +2687,7 @@ class ConnectionsApi:
         )
 
         _response_types_map: Dict[str, Optional[str]] = {
-            '200': "Connection",
+            '200': "RemoteConnection",
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",

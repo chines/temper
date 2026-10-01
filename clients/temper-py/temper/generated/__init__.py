@@ -160,7 +160,6 @@ __all__ = [
     "Composition",
     "CompositionTrace",
     "ConfidenceBand",
-    "Connection",
     "ConnectionCredential",
     "ConnectionSubscription",
     "ContentResponse",
@@ -357,6 +356,7 @@ __all__ = [
     "RegionHit",
     "RelationshipAck",
     "RelationshipTarget",
+    "RemoteConnection",
     "RemoveMemberOutcome",
     "RenameContextOutcome",
     "RenameContextRequest",
@@ -615,7 +615,6 @@ from temper.generated.models.combine_op import CombineOp as CombineOp
 from temper.generated.models.composition import Composition as Composition
 from temper.generated.models.composition_trace import CompositionTrace as CompositionTrace
 from temper.generated.models.confidence_band import ConfidenceBand as ConfidenceBand
-from temper.generated.models.connection import Connection as Connection
 from temper.generated.models.connection_credential import ConnectionCredential as ConnectionCredential
 from temper.generated.models.connection_subscription import ConnectionSubscription as ConnectionSubscription
 from temper.generated.models.content_response import ContentResponse as ContentResponse
@@ -812,6 +811,7 @@ from temper.generated.models.region_disclosure import RegionDisclosure as Region
 from temper.generated.models.region_hit import RegionHit as RegionHit
 from temper.generated.models.relationship_ack import RelationshipAck as RelationshipAck
 from temper.generated.models.relationship_target import RelationshipTarget as RelationshipTarget
+from temper.generated.models.remote_connection import RemoteConnection as RemoteConnection
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome as RemoveMemberOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome as RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest as RenameContextRequest

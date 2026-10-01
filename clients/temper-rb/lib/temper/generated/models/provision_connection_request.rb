@@ -14,7 +14,7 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  # Provision a connection. It is born `needs_credential` — the credential is attached separately, so a connection never silently pretends to be more than it is.
+  # Provision a connection. It starts with no credential; the credential is attached separately.
   class ProvisionConnectionRequest < ApiModelBase
     # Display name. The addressable slug is derived from it.
     attr_accessor :name
@@ -25,9 +25,10 @@ module Temper::Generated
     # `github` | `linear` | …
     attr_accessor :provider
 
+    # The declared reach: what the credential is meant to cover, in the provider's terms (`acme/temper`, `acme/*`).
     attr_accessor :reach_covers
 
-    # The declared reach fidelity, in the provider's terms. Both halves are honest fields rather than a computed `exceeds_temper_reach` bool: remote and temper scope are incommensurable, and a stored bool would go stale.
+    # The grain the credential is scoped at, in the provider's terms (`org`, `workspace`, `installation`, `repo-set`, `project`). Declaring a reach means granting it to a team may need an affirmation.
     attr_accessor :reach_granularity
 
     # Attribute mapping from ruby-style variable name to JSON key.

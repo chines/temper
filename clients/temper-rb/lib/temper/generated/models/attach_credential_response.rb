@@ -41,7 +41,7 @@ module Temper::Generated
     # Attribute type mapping.
     def self.openapi_types
       {
-        :'connection' => :'Connection',
+        :'connection' => :'RemoteConnection',
         :'verification' => :'CredentialVerification'
       }
     end

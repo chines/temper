@@ -26,13 +26,13 @@ from pydantic_core import to_jsonable_python
 
 class ProvisionConnectionRequest(BaseModel):
     """
-    Provision a connection. It is born `needs_credential` — the credential is attached separately, so a connection never silently pretends to be more than it is.
+    Provision a connection. It starts with no credential; the credential is attached separately.
     """ # noqa: E501
     name: StrictStr = Field(description="Display name. The addressable slug is derived from it.")
     owner_team_id: Optional[UUID] = Field(default=None, description="The team that will own the connection. Ownership confers no read-reach. With no owning team, only a system admin can provision or manage it.")
     provider: StrictStr = Field(description="`github` | `linear` | …")
-    reach_covers: Optional[StrictStr] = None
-    reach_granularity: Optional[StrictStr] = Field(default=None, description="The declared reach fidelity, in the provider's terms. Both halves are honest fields rather than a computed `exceeds_temper_reach` bool: remote and temper scope are incommensurable, and a stored bool would go stale.")
+    reach_covers: Optional[StrictStr] = Field(default=None, description="The declared reach: what the credential is meant to cover, in the provider's terms (`acme/temper`, `acme/*`).")
+    reach_granularity: Optional[StrictStr] = Field(default=None, description="The grain the credential is scoped at, in the provider's terms (`org`, `workspace`, `installation`, `repo-set`, `project`). Declaring a reach means granting it to a team may need an affirmation.")
     __properties: ClassVar[List[str]] = ["name", "owner_team_id", "provider", "reach_covers", "reach_granularity"]
 
     model_config = ConfigDict(

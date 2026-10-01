@@ -48,7 +48,7 @@ pub struct ListQuery {
         (status = 200, description = "The registered machine client", body = MachineClient),
         (status = 400, description = "Unknown team role in `teams`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, the requested reach exceeds what the caller may confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
         (status = 409, description = "The `client_id` is already registered", body = ErrorBody),
     )
 )]
@@ -188,7 +188,7 @@ pub async fn revoke(
         (status = 200, description = "The new machine client and its one-time `client_secret`", body = IssuedMachineCredential),
         (status = 400, description = "Unknown team role in `teams`", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, the requested reach exceeds what the caller may confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 403, description = "Caller is neither a system admin nor the owner of the owning team, a team role above `member` was requested (refused for every caller), a team owner requested reach they may not confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
     )
 )]
 pub async fn issue(

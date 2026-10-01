@@ -105,7 +105,7 @@ module Temper::Generated
     # @param id [String] Connection ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Connection]
+    # @return [RemoteConnection]
     def get_connection(id, opts = {})
       data, _status_code, _headers = get_connection_with_http_info(id, opts)
       data
@@ -116,7 +116,7 @@ module Temper::Generated
     # @param id [String] Connection ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Connection, Integer, Hash)>] Connection data, response status code and response headers
+    # @return [Array<(RemoteConnection, Integer, Hash)>] RemoteConnection data, response status code and response headers
     def get_connection_with_http_info(id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ConnectionsApi.get_connection ...'
@@ -148,7 +148,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Connection'
+      return_type = opts[:debug_return_type] || 'RemoteConnection'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -176,7 +176,7 @@ module Temper::Generated
     # @param grant_connection_reach_request [GrantConnectionReachRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Connection]
+    # @return [RemoteConnection]
     def grant_connection_reach(id, grant_connection_reach_request, opts = {})
       data, _status_code, _headers = grant_connection_reach_with_http_info(id, grant_connection_reach_request, opts)
       data
@@ -188,7 +188,7 @@ module Temper::Generated
     # @param grant_connection_reach_request [GrantConnectionReachRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Connection, Integer, Hash)>] Connection data, response status code and response headers
+    # @return [Array<(RemoteConnection, Integer, Hash)>] RemoteConnection data, response status code and response headers
     def grant_connection_reach_with_http_info(id, grant_connection_reach_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ConnectionsApi.grant_connection_reach ...'
@@ -229,7 +229,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(grant_connection_reach_request)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Connection'
+      return_type = opts[:debug_return_type] || 'RemoteConnection'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -256,7 +256,7 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [Boolean] :include_revoked Include revoked connections. Default &#x60;false&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<Connection>]
+    # @return [Array<RemoteConnection>]
     def list_connections(opts = {})
       data, _status_code, _headers = list_connections_with_http_info(opts)
       data
@@ -267,7 +267,7 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [Boolean] :include_revoked Include revoked connections. Default &#x60;false&#x60;.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Array<Connection>, Integer, Hash)>] Array<Connection> data, response status code and response headers
+    # @return [Array<(Array<RemoteConnection>, Integer, Hash)>] Array<RemoteConnection> data, response status code and response headers
     def list_connections_with_http_info(opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ConnectionsApi.list_connections ...'
@@ -296,7 +296,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Array<Connection>'
+      return_type = opts[:debug_return_type] || 'Array<RemoteConnection>'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -323,7 +323,7 @@ module Temper::Generated
     # @param provision_connection_request [ProvisionConnectionRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Connection]
+    # @return [RemoteConnection]
     def provision_connection(provision_connection_request, opts = {})
       data, _status_code, _headers = provision_connection_with_http_info(provision_connection_request, opts)
       data
@@ -334,7 +334,7 @@ module Temper::Generated
     # @param provision_connection_request [ProvisionConnectionRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Connection, Integer, Hash)>] Connection data, response status code and response headers
+    # @return [Array<(RemoteConnection, Integer, Hash)>] RemoteConnection data, response status code and response headers
     def provision_connection_with_http_info(provision_connection_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ConnectionsApi.provision_connection ...'
@@ -371,7 +371,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(provision_connection_request)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Connection'
+      return_type = opts[:debug_return_type] || 'RemoteConnection'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -398,7 +398,7 @@ module Temper::Generated
     # @param id [String] Connection ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Connection]
+    # @return [RemoteConnection]
     def revoke_connection(id, opts = {})
       data, _status_code, _headers = revoke_connection_with_http_info(id, opts)
       data
@@ -409,7 +409,7 @@ module Temper::Generated
     # @param id [String] Connection ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Connection, Integer, Hash)>] Connection data, response status code and response headers
+    # @return [Array<(RemoteConnection, Integer, Hash)>] RemoteConnection data, response status code and response headers
     def revoke_connection_with_http_info(id, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ConnectionsApi.revoke_connection ...'
@@ -441,7 +441,7 @@ module Temper::Generated
       post_body = opts[:debug_body]
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Connection'
+      return_type = opts[:debug_return_type] || 'RemoteConnection'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -469,7 +469,7 @@ module Temper::Generated
     # @param grant_connection_reach_request [GrantConnectionReachRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Connection]
+    # @return [RemoteConnection]
     def revoke_connection_reach(id, grant_connection_reach_request, opts = {})
       data, _status_code, _headers = revoke_connection_reach_with_http_info(id, grant_connection_reach_request, opts)
       data
@@ -481,7 +481,7 @@ module Temper::Generated
     # @param grant_connection_reach_request [GrantConnectionReachRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Connection, Integer, Hash)>] Connection data, response status code and response headers
+    # @return [Array<(RemoteConnection, Integer, Hash)>] RemoteConnection data, response status code and response headers
     def revoke_connection_reach_with_http_info(id, grant_connection_reach_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ConnectionsApi.revoke_connection_reach ...'
@@ -522,7 +522,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(grant_connection_reach_request)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Connection'
+      return_type = opts[:debug_return_type] || 'RemoteConnection'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -550,7 +550,7 @@ module Temper::Generated
     # @param set_tool_manifest_request [SetToolManifestRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Connection]
+    # @return [RemoteConnection]
     def set_connection_tool_manifest(id, set_tool_manifest_request, opts = {})
       data, _status_code, _headers = set_connection_tool_manifest_with_http_info(id, set_tool_manifest_request, opts)
       data
@@ -562,7 +562,7 @@ module Temper::Generated
     # @param set_tool_manifest_request [SetToolManifestRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Connection, Integer, Hash)>] Connection data, response status code and response headers
+    # @return [Array<(RemoteConnection, Integer, Hash)>] RemoteConnection data, response status code and response headers
     def set_connection_tool_manifest_with_http_info(id, set_tool_manifest_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ConnectionsApi.set_connection_tool_manifest ...'
@@ -603,7 +603,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(set_tool_manifest_request)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Connection'
+      return_type = opts[:debug_return_type] || 'RemoteConnection'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']
@@ -631,7 +631,7 @@ module Temper::Generated
     # @param set_webhook_events_request [SetWebhookEventsRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Connection]
+    # @return [RemoteConnection]
     def set_connection_webhook_events(id, set_webhook_events_request, opts = {})
       data, _status_code, _headers = set_connection_webhook_events_with_http_info(id, set_webhook_events_request, opts)
       data
@@ -643,7 +643,7 @@ module Temper::Generated
     # @param set_webhook_events_request [SetWebhookEventsRequest] 
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
-    # @return [Array<(Connection, Integer, Hash)>] Connection data, response status code and response headers
+    # @return [Array<(RemoteConnection, Integer, Hash)>] RemoteConnection data, response status code and response headers
     def set_connection_webhook_events_with_http_info(id, set_webhook_events_request, opts = {})
       if @api_client.config.debugging
         @api_client.config.logger.debug 'Calling API: ConnectionsApi.set_connection_webhook_events ...'
@@ -684,7 +684,7 @@ module Temper::Generated
       post_body = opts[:debug_body] || @api_client.object_to_http_body(set_webhook_events_request)
 
       # return_type
-      return_type = opts[:debug_return_type] || 'Connection'
+      return_type = opts[:debug_return_type] || 'RemoteConnection'
 
       # auth_names
       auth_names = opts[:debug_auth_names] || ['bearer_auth']

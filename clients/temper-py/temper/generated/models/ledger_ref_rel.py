@@ -20,7 +20,7 @@ from typing_extensions import Self
 
 class LedgerRefRel(str, Enum):
     """
-    Why a ledger entry points at a thing: `subject` is what the act was performed on, and `principal` whom it was performed for.
+    Why a ledger entry points at a thing, e.g. `subject` (what the act was performed on) or `principal` (whom it was performed for).
     """
 
     """

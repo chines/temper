@@ -116,7 +116,6 @@ from temper.generated.models.combine_op import CombineOp
 from temper.generated.models.composition import Composition
 from temper.generated.models.composition_trace import CompositionTrace
 from temper.generated.models.confidence_band import ConfidenceBand
-from temper.generated.models.connection import Connection
 from temper.generated.models.connection_credential import ConnectionCredential
 from temper.generated.models.connection_subscription import ConnectionSubscription
 from temper.generated.models.content_response import ContentResponse
@@ -313,6 +312,7 @@ from temper.generated.models.region_disclosure import RegionDisclosure
 from temper.generated.models.region_hit import RegionHit
 from temper.generated.models.relationship_ack import RelationshipAck
 from temper.generated.models.relationship_target import RelationshipTarget
+from temper.generated.models.remote_connection import RemoteConnection
 from temper.generated.models.remove_member_outcome import RemoveMemberOutcome
 from temper.generated.models.rename_context_outcome import RenameContextOutcome
 from temper.generated.models.rename_context_request import RenameContextRequest

@@ -25,7 +25,7 @@ from pydantic_core import to_jsonable_python
 
 class SetToolManifestRequest(BaseModel):
     """
-    Declare the read-only remote tools a connection exposes. Non-empty ⇒ **reach-capable**.  Not decorative: the manifest is the evidence the provider is admissible at all. A provider that cannot be reached through an API, an MCP server, or a CLI we can hold credentials for is rejected — proxying is out of scope by rule, so an empty manifest means judgment is impossible, not merely unconfigured.  Tool *names* only. Anything richer is a per-provider schema, and no provider needs one yet.
+    Declare the read-only remote tools a connection exposes, by name. A non-empty manifest makes the connection reach-capable.
     """ # noqa: E501
     tools: List[StrictStr]
     __properties: ClassVar[List[str]] = ["tools"]

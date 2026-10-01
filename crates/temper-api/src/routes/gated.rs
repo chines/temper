@@ -256,3 +256,73 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
             handlers::subscriptions::revoke
         ))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::gated_routes;
+
+    /// The scoped operator families' documented surface, pinned by operation id and tag. A dropped
+    /// method (one handler out of a shared-path `routes!` pair), a retag (which renames a generated
+    /// SDK class), or a move back to an undocumented plain mount changes this set and fails.
+    const SCOPED_OPERATOR_OPERATIONS: [(&str, &str); 20] = [
+        ("list_admin_ledger", "Admin Ledger"),
+        ("list_machine_clients", "Machine Clients"),
+        ("provision_machine_client", "Machine Clients"),
+        ("get_machine_client", "Machine Clients"),
+        ("revoke_machine_client", "Machine Clients"),
+        ("issue_machine_credential", "Machine Clients"),
+        ("rotate_machine_client_secret", "Machine Clients"),
+        ("list_connections", "Connections"),
+        ("provision_connection", "Connections"),
+        ("get_connection", "Connections"),
+        ("revoke_connection", "Connections"),
+        ("attach_connection_credential", "Connections"),
+        ("set_connection_webhook_events", "Connections"),
+        ("set_connection_tool_manifest", "Connections"),
+        ("grant_connection_reach", "Connections"),
+        ("revoke_connection_reach", "Connections"),
+        ("list_subscriptions", "Subscriptions"),
+        ("create_subscription", "Subscriptions"),
+        ("get_subscription", "Subscriptions"),
+        ("revoke_subscription", "Subscriptions"),
+    ];
+
+    const SCOPED_OPERATOR_TAGS: [&str; 4] = [
+        "Admin Ledger",
+        "Machine Clients",
+        "Connections",
+        "Subscriptions",
+    ];
+
+    #[test]
+    fn the_scoped_operator_families_document_exactly_the_pinned_operations() {
+        let spec = gated_routes().split_for_parts().1;
+        let mut actual = BTreeSet::new();
+        for (path, item) in spec.paths.paths {
+            for op in [item.get, item.post, item.put, item.patch, item.delete]
+                .into_iter()
+                .flatten()
+            {
+                let tag = op
+                    .tags
+                    .as_ref()
+                    .and_then(|t| t.first())
+                    .cloned()
+                    .unwrap_or_default();
+                if SCOPED_OPERATOR_TAGS.contains(&tag.as_str()) {
+                    let id = op
+                        .operation_id
+                        .unwrap_or_else(|| panic!("{path} has no operation_id"));
+                    actual.insert((id, tag));
+                }
+            }
+        }
+        let expected: BTreeSet<(String, String)> = SCOPED_OPERATOR_OPERATIONS
+            .iter()
+            .map(|(id, tag)| (id.to_string(), tag.to_string()))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}

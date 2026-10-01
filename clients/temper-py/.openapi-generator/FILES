@@ -138,7 +138,6 @@ temper/generated/models/combine_op.py
 temper/generated/models/composition.py
 temper/generated/models/composition_trace.py
 temper/generated/models/confidence_band.py
-temper/generated/models/connection.py
 temper/generated/models/connection_credential.py
 temper/generated/models/connection_subscription.py
 temper/generated/models/content_response.py
@@ -335,6 +334,7 @@ temper/generated/models/region_disclosure.py
 temper/generated/models/region_hit.py
 temper/generated/models/relationship_ack.py
 temper/generated/models/relationship_target.py
+temper/generated/models/remote_connection.py
 temper/generated/models/remove_member_outcome.py
 temper/generated/models/rename_context_outcome.py
 temper/generated/models/rename_context_request.py

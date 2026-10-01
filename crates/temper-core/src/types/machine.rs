@@ -30,7 +30,8 @@ pub struct MachineClient {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamSpec {
     pub team_id: Uuid,
-    /// The team role: `member` or `watcher`. A role above `member` is refused for any caller.
+    /// The team role: `member` or `watcher`. A role above `member` is refused for every caller,
+    /// a system admin included.
     // The CLI defaults to `member`; `MAX_MACHINE_TEAM_ROLE` is the ceiling (D4b).
     pub role: String,
 }

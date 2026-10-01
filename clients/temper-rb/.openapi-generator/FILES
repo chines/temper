@@ -136,7 +136,6 @@ lib/temper/generated/models/combine_op.rb
 lib/temper/generated/models/composition.rb
 lib/temper/generated/models/composition_trace.rb
 lib/temper/generated/models/confidence_band.rb
-lib/temper/generated/models/connection.rb
 lib/temper/generated/models/connection_credential.rb
 lib/temper/generated/models/connection_subscription.rb
 lib/temper/generated/models/content_response.rb
@@ -333,6 +332,7 @@ lib/temper/generated/models/region_disclosure.rb
 lib/temper/generated/models/region_hit.rb
 lib/temper/generated/models/relationship_ack.rb
 lib/temper/generated/models/relationship_target.rb
+lib/temper/generated/models/remote_connection.rb
 lib/temper/generated/models/remove_member_outcome.rb
 lib/temper/generated/models/rename_context_outcome.rb
 lib/temper/generated/models/rename_context_request.rb
