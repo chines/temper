@@ -20,9 +20,11 @@ __version__ = "0.5.4"
 __all__ = [
     "AccessApi",
     "AdminApi",
+    "AdminLedgerApi",
     "AuditorApi",
     "BlobsApi",
     "CognitiveMapsApi",
+    "ConnectionsApi",
     "ContextsApi",
     "DataArtifactShapesApi",
     "DataArtifactsApi",
@@ -33,6 +35,7 @@ __all__ = [
     "IngestApi",
     "InvitationsApi",
     "InvocationsApi",
+    "MachineClientsApi",
     "MetaApi",
     "ProfileApi",
     "QueryApi",
@@ -43,6 +46,7 @@ __all__ = [
     "SearchApi",
     "SlackLinkApi",
     "StewardApi",
+    "SubscriptionsApi",
     "TeamsApi",
     "ApiResponse",
     "ApiClient",
@@ -63,6 +67,8 @@ __all__ = [
     "AddMemberRequest",
     "AdminDirectoryEntry",
     "AdminDirectoryListResponse",
+    "AdminLedgerEntry",
+    "AdminLedgerResponse",
     "AdminOpenJoinRequest",
     "AdminOpenReviewRequest",
     "AdminProfileAuthLink",
@@ -89,6 +95,7 @@ __all__ = [
     "AtlasHome",
     "AtlasNode",
     "AtlasSubgraph",
+    "AttachCredentialResponse",
     "AuditCitation",
     "AuditSweepRow",
     "AuditorDispatchTickRequest",
@@ -153,6 +160,9 @@ __all__ = [
     "Composition",
     "CompositionTrace",
     "ConfidenceBand",
+    "Connection",
+    "ConnectionCredential",
+    "ConnectionSubscription",
     "ContentResponse",
     "ContextCreateRequest",
     "ContextOwnerRef",
@@ -166,6 +176,8 @@ __all__ = [
     "CreateInvitationRequest",
     "CreateRequestBody",
     "CreateReviewBody",
+    "CreateSubscriptionRequest",
+    "CredentialVerification",
     "Deactivated",
     "DeleteResponse",
     "DemoteAdminRequest",
@@ -212,7 +224,9 @@ __all__ = [
     "FacetSetRequest",
     "FinalizePayload",
     "FoldRelationshipRequest",
+    "GrantConnectionReachRequest",
     "GrantOutcome",
+    "GrantSpec",
     "GraphEdgeRow",
     "GroupKeyMeta",
     "HealthResponse",
@@ -245,12 +259,18 @@ __all__ = [
     "InvocationCloseAck",
     "InvocationSummary",
     "InvocationView",
+    "IssueMachineRequest",
+    "IssuedMachineCredential",
     "JoinRequest",
     "JoinRequestStatus",
     "JoinRequestWithProfile",
     "KindOwnerInput",
     "KindOwnerInputOneOf",
     "KindOwnerInputOneOf1",
+    "LedgerRef",
+    "LedgerRefKind",
+    "LedgerRefRel",
+    "LedgerRefTarget",
     "LineageNode",
     "MachineClient",
     "ManagedMeta",
@@ -289,6 +309,8 @@ __all__ = [
     "ProvenanceSourceOneOf",
     "ProvenanceSourceOneOf1",
     "ProvenanceSourceOneOf2",
+    "ProvisionConnectionRequest",
+    "ProvisionMachineRequest",
     "PublicSystemSettings",
     "QuantityScale",
     "QuantityScaleOneOf",
@@ -377,6 +399,7 @@ __all__ = [
     "RevokePrincipalBody",
     "Revoked",
     "ReweightRelationshipRequest",
+    "RotateSecretRequest",
     "ScoreKind",
     "Scoring",
     "SearchParams",
@@ -388,6 +411,8 @@ __all__ = [
     "SegmentInfo",
     "SegmentedBegin",
     "SegmentedBeginResponse",
+    "SetToolManifestRequest",
+    "SetWebhookEventsRequest",
     "ShapeDeclareRequest",
     "ShapeEmptiness",
     "ShapeView",
@@ -414,6 +439,10 @@ __all__ = [
     "StandingShape",
     "Subscription",
     "SubscriptionOverride",
+    "SubscriptionSelector",
+    "SubscriptionSelectorOneOf",
+    "SubscriptionSelectorOneOf1",
+    "SubscriptionSelectorOneOf2",
     "SystemAccessDetails",
     "SystemSettings",
     "TeamCreateRequest",
@@ -424,6 +453,7 @@ __all__ = [
     "TeamMemberSource",
     "TeamRole",
     "TeamRow",
+    "TeamSpec",
     "TeamUpdateRequest",
     "Territory",
     "TerritoryKind",
@@ -441,9 +471,11 @@ __all__ = [
 # import apis into sdk package
 from temper.generated.api.access_api import AccessApi as AccessApi
 from temper.generated.api.admin_api import AdminApi as AdminApi
+from temper.generated.api.admin_ledger_api import AdminLedgerApi as AdminLedgerApi
 from temper.generated.api.auditor_api import AuditorApi as AuditorApi
 from temper.generated.api.blobs_api import BlobsApi as BlobsApi
 from temper.generated.api.cognitive_maps_api import CognitiveMapsApi as CognitiveMapsApi
+from temper.generated.api.connections_api import ConnectionsApi as ConnectionsApi
 from temper.generated.api.contexts_api import ContextsApi as ContextsApi
 from temper.generated.api.data_artifact_shapes_api import DataArtifactShapesApi as DataArtifactShapesApi
 from temper.generated.api.data_artifacts_api import DataArtifactsApi as DataArtifactsApi
@@ -454,6 +486,7 @@ from temper.generated.api.health_api import HealthApi as HealthApi
 from temper.generated.api.ingest_api import IngestApi as IngestApi
 from temper.generated.api.invitations_api import InvitationsApi as InvitationsApi
 from temper.generated.api.invocations_api import InvocationsApi as InvocationsApi
+from temper.generated.api.machine_clients_api import MachineClientsApi as MachineClientsApi
 from temper.generated.api.meta_api import MetaApi as MetaApi
 from temper.generated.api.profile_api import ProfileApi as ProfileApi
 from temper.generated.api.query_api import QueryApi as QueryApi
@@ -464,6 +497,7 @@ from temper.generated.api.schema_api import SchemaApi as SchemaApi
 from temper.generated.api.search_api import SearchApi as SearchApi
 from temper.generated.api.slack_link_api import SlackLinkApi as SlackLinkApi
 from temper.generated.api.steward_api import StewardApi as StewardApi
+from temper.generated.api.subscriptions_api import SubscriptionsApi as SubscriptionsApi
 from temper.generated.api.teams_api import TeamsApi as TeamsApi
 
 # import ApiClient
@@ -488,6 +522,8 @@ from temper.generated.models.actor_authority import ActorAuthority as ActorAutho
 from temper.generated.models.add_member_request import AddMemberRequest as AddMemberRequest
 from temper.generated.models.admin_directory_entry import AdminDirectoryEntry as AdminDirectoryEntry
 from temper.generated.models.admin_directory_list_response import AdminDirectoryListResponse as AdminDirectoryListResponse
+from temper.generated.models.admin_ledger_entry import AdminLedgerEntry as AdminLedgerEntry
+from temper.generated.models.admin_ledger_response import AdminLedgerResponse as AdminLedgerResponse
 from temper.generated.models.admin_open_join_request import AdminOpenJoinRequest as AdminOpenJoinRequest
 from temper.generated.models.admin_open_review_request import AdminOpenReviewRequest as AdminOpenReviewRequest
 from temper.generated.models.admin_profile_auth_link import AdminProfileAuthLink as AdminProfileAuthLink
@@ -514,6 +550,7 @@ from temper.generated.models.atlas_entry import AtlasEntry as AtlasEntry
 from temper.generated.models.atlas_home import AtlasHome as AtlasHome
 from temper.generated.models.atlas_node import AtlasNode as AtlasNode
 from temper.generated.models.atlas_subgraph import AtlasSubgraph as AtlasSubgraph
+from temper.generated.models.attach_credential_response import AttachCredentialResponse as AttachCredentialResponse
 from temper.generated.models.audit_citation import AuditCitation as AuditCitation
 from temper.generated.models.audit_sweep_row import AuditSweepRow as AuditSweepRow
 from temper.generated.models.auditor_dispatch_tick_request import AuditorDispatchTickRequest as AuditorDispatchTickRequest
@@ -578,6 +615,9 @@ from temper.generated.models.combine_op import CombineOp as CombineOp
 from temper.generated.models.composition import Composition as Composition
 from temper.generated.models.composition_trace import CompositionTrace as CompositionTrace
 from temper.generated.models.confidence_band import ConfidenceBand as ConfidenceBand
+from temper.generated.models.connection import Connection as Connection
+from temper.generated.models.connection_credential import ConnectionCredential as ConnectionCredential
+from temper.generated.models.connection_subscription import ConnectionSubscription as ConnectionSubscription
 from temper.generated.models.content_response import ContentResponse as ContentResponse
 from temper.generated.models.context_create_request import ContextCreateRequest as ContextCreateRequest
 from temper.generated.models.context_owner_ref import ContextOwnerRef as ContextOwnerRef
@@ -591,6 +631,8 @@ from temper.generated.models.create_cogmap_request import CreateCogmapRequest as
 from temper.generated.models.create_invitation_request import CreateInvitationRequest as CreateInvitationRequest
 from temper.generated.models.create_request_body import CreateRequestBody as CreateRequestBody
 from temper.generated.models.create_review_body import CreateReviewBody as CreateReviewBody
+from temper.generated.models.create_subscription_request import CreateSubscriptionRequest as CreateSubscriptionRequest
+from temper.generated.models.credential_verification import CredentialVerification as CredentialVerification
 from temper.generated.models.deactivated import Deactivated as Deactivated
 from temper.generated.models.delete_response import DeleteResponse as DeleteResponse
 from temper.generated.models.demote_admin_request import DemoteAdminRequest as DemoteAdminRequest
@@ -637,7 +679,9 @@ from temper.generated.models.facet_retract_ack import FacetRetractAck as FacetRe
 from temper.generated.models.facet_set_request import FacetSetRequest as FacetSetRequest
 from temper.generated.models.finalize_payload import FinalizePayload as FinalizePayload
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest as FoldRelationshipRequest
+from temper.generated.models.grant_connection_reach_request import GrantConnectionReachRequest as GrantConnectionReachRequest
 from temper.generated.models.grant_outcome import GrantOutcome as GrantOutcome
+from temper.generated.models.grant_spec import GrantSpec as GrantSpec
 from temper.generated.models.graph_edge_row import GraphEdgeRow as GraphEdgeRow
 from temper.generated.models.group_key_meta import GroupKeyMeta as GroupKeyMeta
 from temper.generated.models.health_response import HealthResponse as HealthResponse
@@ -670,12 +714,18 @@ from temper.generated.models.invocation_act_row import InvocationActRow as Invoc
 from temper.generated.models.invocation_close_ack import InvocationCloseAck as InvocationCloseAck
 from temper.generated.models.invocation_summary import InvocationSummary as InvocationSummary
 from temper.generated.models.invocation_view import InvocationView as InvocationView
+from temper.generated.models.issue_machine_request import IssueMachineRequest as IssueMachineRequest
+from temper.generated.models.issued_machine_credential import IssuedMachineCredential as IssuedMachineCredential
 from temper.generated.models.join_request import JoinRequest as JoinRequest
 from temper.generated.models.join_request_status import JoinRequestStatus as JoinRequestStatus
 from temper.generated.models.join_request_with_profile import JoinRequestWithProfile as JoinRequestWithProfile
 from temper.generated.models.kind_owner_input import KindOwnerInput as KindOwnerInput
 from temper.generated.models.kind_owner_input_one_of import KindOwnerInputOneOf as KindOwnerInputOneOf
 from temper.generated.models.kind_owner_input_one_of1 import KindOwnerInputOneOf1 as KindOwnerInputOneOf1
+from temper.generated.models.ledger_ref import LedgerRef as LedgerRef
+from temper.generated.models.ledger_ref_kind import LedgerRefKind as LedgerRefKind
+from temper.generated.models.ledger_ref_rel import LedgerRefRel as LedgerRefRel
+from temper.generated.models.ledger_ref_target import LedgerRefTarget as LedgerRefTarget
 from temper.generated.models.lineage_node import LineageNode as LineageNode
 from temper.generated.models.machine_client import MachineClient as MachineClient
 from temper.generated.models.managed_meta import ManagedMeta as ManagedMeta
@@ -714,6 +764,8 @@ from temper.generated.models.provenance_source import ProvenanceSource as Proven
 from temper.generated.models.provenance_source_one_of import ProvenanceSourceOneOf as ProvenanceSourceOneOf
 from temper.generated.models.provenance_source_one_of1 import ProvenanceSourceOneOf1 as ProvenanceSourceOneOf1
 from temper.generated.models.provenance_source_one_of2 import ProvenanceSourceOneOf2 as ProvenanceSourceOneOf2
+from temper.generated.models.provision_connection_request import ProvisionConnectionRequest as ProvisionConnectionRequest
+from temper.generated.models.provision_machine_request import ProvisionMachineRequest as ProvisionMachineRequest
 from temper.generated.models.public_system_settings import PublicSystemSettings as PublicSystemSettings
 from temper.generated.models.quantity_scale import QuantityScale as QuantityScale
 from temper.generated.models.quantity_scale_one_of import QuantityScaleOneOf as QuantityScaleOneOf
@@ -802,6 +854,7 @@ from temper.generated.models.revoke_outcome import RevokeOutcome as RevokeOutcom
 from temper.generated.models.revoke_principal_body import RevokePrincipalBody as RevokePrincipalBody
 from temper.generated.models.revoked import Revoked as Revoked
 from temper.generated.models.reweight_relationship_request import ReweightRelationshipRequest as ReweightRelationshipRequest
+from temper.generated.models.rotate_secret_request import RotateSecretRequest as RotateSecretRequest
 from temper.generated.models.score_kind import ScoreKind as ScoreKind
 from temper.generated.models.scoring import Scoring as Scoring
 from temper.generated.models.search_params import SearchParams as SearchParams
@@ -813,6 +866,8 @@ from temper.generated.models.search_scope_info import SearchScopeInfo as SearchS
 from temper.generated.models.segment_info import SegmentInfo as SegmentInfo
 from temper.generated.models.segmented_begin import SegmentedBegin as SegmentedBegin
 from temper.generated.models.segmented_begin_response import SegmentedBeginResponse as SegmentedBeginResponse
+from temper.generated.models.set_tool_manifest_request import SetToolManifestRequest as SetToolManifestRequest
+from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest as SetWebhookEventsRequest
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest as ShapeDeclareRequest
 from temper.generated.models.shape_emptiness import ShapeEmptiness as ShapeEmptiness
 from temper.generated.models.shape_view import ShapeView as ShapeView
@@ -839,6 +894,10 @@ from temper.generated.models.standing import Standing as Standing
 from temper.generated.models.standing_shape import StandingShape as StandingShape
 from temper.generated.models.subscription import Subscription as Subscription
 from temper.generated.models.subscription_override import SubscriptionOverride as SubscriptionOverride
+from temper.generated.models.subscription_selector import SubscriptionSelector as SubscriptionSelector
+from temper.generated.models.subscription_selector_one_of import SubscriptionSelectorOneOf as SubscriptionSelectorOneOf
+from temper.generated.models.subscription_selector_one_of1 import SubscriptionSelectorOneOf1 as SubscriptionSelectorOneOf1
+from temper.generated.models.subscription_selector_one_of2 import SubscriptionSelectorOneOf2 as SubscriptionSelectorOneOf2
 from temper.generated.models.system_access_details import SystemAccessDetails as SystemAccessDetails
 from temper.generated.models.system_settings import SystemSettings as SystemSettings
 from temper.generated.models.team_create_request import TeamCreateRequest as TeamCreateRequest
@@ -849,6 +908,7 @@ from temper.generated.models.team_member_row import TeamMemberRow as TeamMemberR
 from temper.generated.models.team_member_source import TeamMemberSource as TeamMemberSource
 from temper.generated.models.team_role import TeamRole as TeamRole
 from temper.generated.models.team_row import TeamRow as TeamRow
+from temper.generated.models.team_spec import TeamSpec as TeamSpec
 from temper.generated.models.team_update_request import TeamUpdateRequest as TeamUpdateRequest
 from temper.generated.models.territory import Territory as Territory
 from temper.generated.models.territory_kind import TerritoryKind as TerritoryKind

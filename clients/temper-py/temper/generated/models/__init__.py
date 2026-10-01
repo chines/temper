@@ -23,6 +23,8 @@ from temper.generated.models.actor_authority import ActorAuthority
 from temper.generated.models.add_member_request import AddMemberRequest
 from temper.generated.models.admin_directory_entry import AdminDirectoryEntry
 from temper.generated.models.admin_directory_list_response import AdminDirectoryListResponse
+from temper.generated.models.admin_ledger_entry import AdminLedgerEntry
+from temper.generated.models.admin_ledger_response import AdminLedgerResponse
 from temper.generated.models.admin_open_join_request import AdminOpenJoinRequest
 from temper.generated.models.admin_open_review_request import AdminOpenReviewRequest
 from temper.generated.models.admin_profile_auth_link import AdminProfileAuthLink
@@ -49,6 +51,7 @@ from temper.generated.models.atlas_entry import AtlasEntry
 from temper.generated.models.atlas_home import AtlasHome
 from temper.generated.models.atlas_node import AtlasNode
 from temper.generated.models.atlas_subgraph import AtlasSubgraph
+from temper.generated.models.attach_credential_response import AttachCredentialResponse
 from temper.generated.models.audit_citation import AuditCitation
 from temper.generated.models.audit_sweep_row import AuditSweepRow
 from temper.generated.models.auditor_dispatch_tick_request import AuditorDispatchTickRequest
@@ -113,6 +116,9 @@ from temper.generated.models.combine_op import CombineOp
 from temper.generated.models.composition import Composition
 from temper.generated.models.composition_trace import CompositionTrace
 from temper.generated.models.confidence_band import ConfidenceBand
+from temper.generated.models.connection import Connection
+from temper.generated.models.connection_credential import ConnectionCredential
+from temper.generated.models.connection_subscription import ConnectionSubscription
 from temper.generated.models.content_response import ContentResponse
 from temper.generated.models.context_create_request import ContextCreateRequest
 from temper.generated.models.context_owner_ref import ContextOwnerRef
@@ -126,6 +132,8 @@ from temper.generated.models.create_cogmap_request import CreateCogmapRequest
 from temper.generated.models.create_invitation_request import CreateInvitationRequest
 from temper.generated.models.create_request_body import CreateRequestBody
 from temper.generated.models.create_review_body import CreateReviewBody
+from temper.generated.models.create_subscription_request import CreateSubscriptionRequest
+from temper.generated.models.credential_verification import CredentialVerification
 from temper.generated.models.deactivated import Deactivated
 from temper.generated.models.delete_response import DeleteResponse
 from temper.generated.models.demote_admin_request import DemoteAdminRequest
@@ -172,7 +180,9 @@ from temper.generated.models.facet_retract_ack import FacetRetractAck
 from temper.generated.models.facet_set_request import FacetSetRequest
 from temper.generated.models.finalize_payload import FinalizePayload
 from temper.generated.models.fold_relationship_request import FoldRelationshipRequest
+from temper.generated.models.grant_connection_reach_request import GrantConnectionReachRequest
 from temper.generated.models.grant_outcome import GrantOutcome
+from temper.generated.models.grant_spec import GrantSpec
 from temper.generated.models.graph_edge_row import GraphEdgeRow
 from temper.generated.models.group_key_meta import GroupKeyMeta
 from temper.generated.models.health_response import HealthResponse
@@ -205,12 +215,18 @@ from temper.generated.models.invocation_act_row import InvocationActRow
 from temper.generated.models.invocation_close_ack import InvocationCloseAck
 from temper.generated.models.invocation_summary import InvocationSummary
 from temper.generated.models.invocation_view import InvocationView
+from temper.generated.models.issue_machine_request import IssueMachineRequest
+from temper.generated.models.issued_machine_credential import IssuedMachineCredential
 from temper.generated.models.join_request import JoinRequest
 from temper.generated.models.join_request_status import JoinRequestStatus
 from temper.generated.models.join_request_with_profile import JoinRequestWithProfile
 from temper.generated.models.kind_owner_input import KindOwnerInput
 from temper.generated.models.kind_owner_input_one_of import KindOwnerInputOneOf
 from temper.generated.models.kind_owner_input_one_of1 import KindOwnerInputOneOf1
+from temper.generated.models.ledger_ref import LedgerRef
+from temper.generated.models.ledger_ref_kind import LedgerRefKind
+from temper.generated.models.ledger_ref_rel import LedgerRefRel
+from temper.generated.models.ledger_ref_target import LedgerRefTarget
 from temper.generated.models.lineage_node import LineageNode
 from temper.generated.models.machine_client import MachineClient
 from temper.generated.models.managed_meta import ManagedMeta
@@ -249,6 +265,8 @@ from temper.generated.models.provenance_source import ProvenanceSource
 from temper.generated.models.provenance_source_one_of import ProvenanceSourceOneOf
 from temper.generated.models.provenance_source_one_of1 import ProvenanceSourceOneOf1
 from temper.generated.models.provenance_source_one_of2 import ProvenanceSourceOneOf2
+from temper.generated.models.provision_connection_request import ProvisionConnectionRequest
+from temper.generated.models.provision_machine_request import ProvisionMachineRequest
 from temper.generated.models.public_system_settings import PublicSystemSettings
 from temper.generated.models.quantity_scale import QuantityScale
 from temper.generated.models.quantity_scale_one_of import QuantityScaleOneOf
@@ -337,6 +355,7 @@ from temper.generated.models.revoke_outcome import RevokeOutcome
 from temper.generated.models.revoke_principal_body import RevokePrincipalBody
 from temper.generated.models.revoked import Revoked
 from temper.generated.models.reweight_relationship_request import ReweightRelationshipRequest
+from temper.generated.models.rotate_secret_request import RotateSecretRequest
 from temper.generated.models.score_kind import ScoreKind
 from temper.generated.models.scoring import Scoring
 from temper.generated.models.search_params import SearchParams
@@ -348,6 +367,8 @@ from temper.generated.models.search_scope_info import SearchScopeInfo
 from temper.generated.models.segment_info import SegmentInfo
 from temper.generated.models.segmented_begin import SegmentedBegin
 from temper.generated.models.segmented_begin_response import SegmentedBeginResponse
+from temper.generated.models.set_tool_manifest_request import SetToolManifestRequest
+from temper.generated.models.set_webhook_events_request import SetWebhookEventsRequest
 from temper.generated.models.shape_declare_request import ShapeDeclareRequest
 from temper.generated.models.shape_emptiness import ShapeEmptiness
 from temper.generated.models.shape_view import ShapeView
@@ -374,6 +395,10 @@ from temper.generated.models.standing import Standing
 from temper.generated.models.standing_shape import StandingShape
 from temper.generated.models.subscription import Subscription
 from temper.generated.models.subscription_override import SubscriptionOverride
+from temper.generated.models.subscription_selector import SubscriptionSelector
+from temper.generated.models.subscription_selector_one_of import SubscriptionSelectorOneOf
+from temper.generated.models.subscription_selector_one_of1 import SubscriptionSelectorOneOf1
+from temper.generated.models.subscription_selector_one_of2 import SubscriptionSelectorOneOf2
 from temper.generated.models.system_access_details import SystemAccessDetails
 from temper.generated.models.system_settings import SystemSettings
 from temper.generated.models.team_create_request import TeamCreateRequest
@@ -384,6 +409,7 @@ from temper.generated.models.team_member_row import TeamMemberRow
 from temper.generated.models.team_member_source import TeamMemberSource
 from temper.generated.models.team_role import TeamRole
 from temper.generated.models.team_row import TeamRow
+from temper.generated.models.team_spec import TeamSpec
 from temper.generated.models.team_update_request import TeamUpdateRequest
 from temper.generated.models.territory import Territory
 from temper.generated.models.territory_kind import TerritoryKind

@@ -1887,6 +1887,142 @@
         "x-apidog-folder": "Reference/API Reference/Admin"
       }
     },
+    "/api/admin/ledger": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin Ledger"
+        ],
+        "summary": "Read the admin ledger",
+        "description": "Returns a page of recorded administrative acts, newest first, on exactly one axis. `subject` (`<kind>:<uuid>`, e.g. `kb_resources:<uuid>`) returns the acts performed on that subject, limited to the act families the caller may read about it: a system admin reads all of them, and a caller who may administer grants on the subject reads its grant acts. `actor` returns the acts a profile performed: any caller may read their own, and only a system admin may read another's. A read the caller is not allowed is answered 404, not 403, so a refusal reveals nothing about the subject. `epoch` is when recording began; acts before it were not recorded. `limit` defaults to 50 and is capped at 200.",
+        "operationId": "list_admin_ledger",
+        "parameters": [
+          {
+            "name": "subject",
+            "in": "query",
+            "description": "Subject axis: `<kind>:<uuid>`, e.g. `kb_resources:0199c3f1-...`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "description": "Actor axis: whose acts to read. Reading your own is always allowed; reading another\nprofile's requires a system admin.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size: default 50, clamped to 1–200 rather than rejected.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Page offset. Default 0.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of ledger entries, with the ledger epoch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminLedgerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Neither or both of `subject` and `actor` were given, or `subject` is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The caller may read nothing on this axis: no readable act family for the subject, or another profile's acts without being a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin Ledger"
+      }
+    },
     "/api/admin/resources/erasure": {
       "parameters": [
         {
@@ -4530,6 +4666,830 @@
           }
         ],
         "x-apidog-folder": "Reference/API Reference/Cognitive Maps"
+      }
+    },
+    "/api/connections": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "List connections",
+        "description": "Lists the connections the caller may manage, newest first. A system admin sees every connection; any other caller sees only those owned by a team they own. Revoked connections are omitted unless `include_revoked` is set.",
+        "operationId": "list_connections",
+        "parameters": [
+          {
+            "name": "include_revoked",
+            "in": "query",
+            "description": "Include revoked connections. Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connections visible to the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Connection"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Connections"
+      },
+      "post": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Provision a connection",
+        "description": "Provisions a connection to a remote system, with its own agent profile, emitter and home context. It starts with no credential and with no webhook events or tool manifest; each is attached by its own call. Requires a system admin or the owner of `owner_team_id`; a connection with no owning team can only be provisioned by a system admin. Owning a connection does not grant any team read-reach on it.",
+        "operationId": "provision_connection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisionConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The provisioned connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`provider` or `name` is empty, or `name` has no characters usable in a slug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No free slug could be derived from `name`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Connections"
+      }
+    },
+    "/api/connections/{id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Get a connection",
+        "description": "Returns one connection. Requires a system admin or the owner of the connection's owning team.",
+        "operationId": "get_connection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Connections"
+      },
+      "delete": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Revoke a connection",
+        "description": "Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team.",
+        "operationId": "revoke_connection",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Connections"
+      }
+    },
+    "/api/connections/{id}/credential": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Attach a connection credential",
+        "description": "Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent or an unconfigured broker is reported in `verification.note`. Requires a system admin or the owner of the connection's owning team.",
+        "operationId": "attach_connection_credential",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionCredential"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated connection and the verification result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachCredentialResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`broker` or `connector` is empty, or the broker rejected the connector",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The connection is revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Connections"
+      }
+    },
+    "/api/connections/{id}/reach": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Grant a team read-reach on a connection",
+        "description": "Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm.",
+        "operationId": "grant_connection_reach",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantConnectionReachRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection, with any affirmation recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`affirm_reach` was given but the connection has no reach gap to acknowledge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The connection declares a remote reach that must be affirmed; resend with `affirm_reach`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Connections"
+      },
+      "delete": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Revoke a team's read-reach on a connection",
+        "description": "Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed.",
+        "operationId": "revoke_connection_reach",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantConnectionReachRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Connections"
+      }
+    },
+    "/api/connections/{id}/tool-manifest": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Set connection tool manifest",
+        "description": "Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team.",
+        "operationId": "set_connection_tool_manifest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetToolManifestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The connection is revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Connections"
+      }
+    },
+    "/api/connections/{id}/webhook-events": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Connections"
+        ],
+        "summary": "Set connection webhook events",
+        "description": "Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team.",
+        "operationId": "set_connection_webhook_events",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Connection ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetWebhookEventsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The connection is revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Connections"
       }
     },
     "/api/contexts": {
@@ -7188,6 +8148,395 @@
         "x-apidog-folder": "Reference/API Reference/Invocations"
       }
     },
+    "/api/machine-clients": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Machine Clients"
+        ],
+        "summary": "List machine clients",
+        "description": "Lists the machine clients the caller may manage, newest first. A system admin sees every machine client; any other caller sees only those owned by a team they own. Revoked clients are omitted unless `include_revoked` is set.",
+        "operationId": "list_machine_clients",
+        "parameters": [
+          {
+            "name": "include_revoked",
+            "in": "query",
+            "description": "Include revoked machine clients. Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The machine clients visible to the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MachineClient"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Machine Clients"
+      },
+      "post": {
+        "tags": [
+          "Machine Clients"
+        ],
+        "summary": "Register a machine client",
+        "description": "Registers an externally issued IdP `client_id` as a machine principal and creates its agent profile, enrolling it in the listed teams and cogmap grants. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be registered by a system admin. A team owner can confer only reach they could grant themselves, and no caller can give a machine a team role above `member`.",
+        "operationId": "provision_machine_client",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisionMachineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The registered machine client",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineClient"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown team role in `teams`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, the requested reach exceeds what the caller may confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The `client_id` is already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Machine Clients"
+      }
+    },
+    "/api/machine-clients/issue": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Machine Clients"
+        ],
+        "summary": "Issue a machine credential",
+        "description": "Mints a new machine principal with a temper-issued `client_id` and secret. The `client_secret` in the response is shown once and never stored; only its hash is kept, so it cannot be retrieved later. Requires a system admin or the owner of `owner_team_id`; a machine with no owning team can only be issued by a system admin. Reach rules are those of registration.",
+        "operationId": "issue_machine_credential",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueMachineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The new machine client and its one-time `client_secret`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedMachineCredential"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown team role in `teams`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, the requested reach exceeds what the caller may confer, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Machine Clients"
+      }
+    },
+    "/api/machine-clients/{id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Machine Clients"
+        ],
+        "summary": "Get a machine client",
+        "description": "Returns one machine client. Requires a system admin or the owner of the machine's owning team.",
+        "operationId": "get_machine_client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Machine client ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The machine client",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineClient"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such machine client",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Machine Clients"
+      },
+      "delete": {
+        "tags": [
+          "Machine Clients"
+        ],
+        "summary": "Revoke a machine client",
+        "description": "Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team.",
+        "operationId": "revoke_machine_client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Machine client ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked machine client",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineClient"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such machine client",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Machine Clients"
+      }
+    },
     "/api/machine-clients/{id}/rebind": {
       "parameters": [
         {
@@ -7301,6 +8650,111 @@
           }
         ],
         "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/machine-clients/{id}/rotate-secret": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Machine Clients"
+        ],
+        "summary": "Rotate a machine client secret",
+        "description": "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team.",
+        "operationId": "rotate_machine_client_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Machine client ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The machine client and its new one-time `client_secret`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedMachineCredential"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`grace_seconds` is out of range, the client was not issued by temper, or the client is revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such machine client",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Machine Clients"
       }
     },
     "/api/profile": {
@@ -11434,6 +12888,325 @@
         "x-apidog-folder": "Reference/API Reference/Steward"
       }
     },
+    "/api/subscriptions": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "List subscriptions",
+        "description": "Lists the subscriptions the caller may manage, newest first. A system admin sees every subscription; any other caller sees only those whose authoring team they own or maintain. Revoked subscriptions are omitted unless `include_revoked` is set.",
+        "operationId": "list_subscriptions",
+        "parameters": [
+          {
+            "name": "include_revoked",
+            "in": "query",
+            "description": "Include revoked subscriptions. Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "connection_id",
+            "in": "query",
+            "description": "Optional filter: only subscriptions against this connection.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subscriptions visible to the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionSubscription"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Subscriptions"
+      },
+      "post": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Create a subscription",
+        "description": "Declares that a team, context or cogmap wants the events a connection emits that match `selector`. Requires a system admin or an owner or maintainer of `authoring_team_id`, and, for every caller, that the authoring team holds read-reach on the connection. A context or cogmap subscriber must be linked to the authoring team; a team subscriber must be the authoring team itself. A selector that can never match the connection's registered webhook events is refused.",
+        "operationId": "create_subscription",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSubscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The created subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionSubscription"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown `subscriber_table`, a subscriber not linked to the authoring team, or a selector that can never match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor an owner or maintainer of the authoring team, the authoring team has no read-reach on the connection, or the caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A subscription with the same authoring team, connection and selector already exists, live or revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Subscriptions"
+      }
+    },
+    "/api/subscriptions/{id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Get a subscription",
+        "description": "Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team.",
+        "operationId": "get_subscription",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Subscription ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionSubscription"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor an owner or maintainer of the authoring team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Subscriptions"
+      },
+      "delete": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Revoke a subscription",
+        "description": "Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team.",
+        "operationId": "revoke_subscription",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Subscription ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionSubscription"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is neither a system admin nor an owner or maintainer of the authoring team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such subscription",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Subscriptions"
+      }
+    },
     "/api/teams": {
       "parameters": [
         {
@@ -12539,6 +14312,75 @@
           }
         }
       },
+      "AdminLedgerEntry": {
+        "type": "object",
+        "description": "One act on the admin ledger.",
+        "required": [
+          "event_id",
+          "event_type",
+          "actor_profile_id",
+          "actor_handle",
+          "occurred_at",
+          "payload",
+          "references"
+        ],
+        "properties": {
+          "actor_handle": {
+            "type": "string"
+          },
+          "actor_profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payload": {},
+          "references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerRef"
+            }
+          }
+        }
+      },
+      "AdminLedgerResponse": {
+        "type": "object",
+        "description": "A page of the ledger, always carrying the epoch.\n\nRecording begins at the epoch: acts before it happened but were not recorded, so an empty\npage means \"nothing since the epoch\", never \"nothing ever\".",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminLedgerEntry"
+            }
+          },
+          "epoch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "AdminOpenJoinRequest": {
         "type": "object",
         "description": "The profile's open join request, if any — the direct bridge to\n`admin requests review <id>`. Closed/rejected history is ledger territory and stays off v1.",
@@ -13370,6 +15212,22 @@
             "items": {
               "$ref": "#/components/schemas/AtlasNode"
             }
+          }
+        }
+      },
+      "AttachCredentialResponse": {
+        "type": "object",
+        "description": "The result of attaching a credential: the updated connection plus what minting\nonce at attach time observed.",
+        "required": [
+          "connection",
+          "verification"
+        ],
+        "properties": {
+          "connection": {
+            "$ref": "#/components/schemas/Connection"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/CredentialVerification"
           }
         }
       },
@@ -14971,6 +16829,223 @@
           "confident"
         ]
       },
+      "Connection": {
+        "type": "object",
+        "description": "A provisioned connection to a remote system (a GitHub App installation, a Linear workspace).\n\n`owner_team_id` is the connection's OWNER, never its reach — owning a connection does not\nconfer the right to subscribe to it. Reach is plural and explicitly granted.\n\nThe two capability tiers are separately provisioned and both explicit: a connection is\n**ledger-capable** when `webhook_events` is non-empty (events land) and **reach-capable**\nwhen `tool_manifest` is non-empty (agents can read the remote back, so judgment becomes\npossible). A ledger-only connection is legal and useful, but inert for judgment — and it\nsays so rather than leaving an agent to mysteriously produce nothing.",
+        "required": [
+          "id",
+          "provider",
+          "slug",
+          "name",
+          "registered_by_profile_id",
+          "profile_id",
+          "emitter_entity_id",
+          "home_context_id",
+          "webhook_events",
+          "tool_manifest",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "credential": {
+            "description": "The credential reference, shaped as a `ConnectionCredential`. It holds no secret. `null`\nuntil a credential is attached."
+          },
+          "emitter_entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The entity remote payloads are attributed to (`<handle>@webhook`)."
+          },
+          "home_context_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "observed_reach": {
+            "description": "What the attach-time mint observed the credential can actually see — the provider's\n`metadata`, provider-shaped. `None` = never minted, or the mint returned no reach\nmetadata. Persisted at `attach_credential` so the grant path can compare it against\nthe *declared* reach (`reach_granularity`/`reach_covers`): a disagreement within the\nremote domain is the commensurable gap the mint can detect. This is NOT a computed\n`exceeds_temper_reach` bool — remote and temper scope remain incommensurable; only the\nremote-domain observed-vs-declared drift is compared, and only to decide whether\naffirmation is required, never to auto-deny."
+          },
+          "owner_team_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The team that owns the connection. Ownership confers no read-reach. With no owning team,\nonly a system admin can manage the connection."
+          },
+          "profile_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The connection's dedicated agent profile. It carries no auth link and no machine-client\nrow — a connection never authenticates *to* temper."
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reach_affirmation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stated rationale — why the coarse reach binding is intentional. `None` = never affirmed."
+          },
+          "reach_affirmed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the affirmation was made. `None` = never affirmed. Paired with `reach_affirmed_by`\nand `reach_affirmation` as one last-writer stamp."
+          },
+          "reach_affirmed_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Who affirmed that binding this connection's coarse remote reach to a team is intentional.\n`None` = never affirmed (declares no reach, or no grant requiring affirmation yet). A\nsingle-valued, last-writer audit stamp — not a per-grant ledger — and NOT a computed\n`exceeds_temper_reach` bool: it records a declared intent, it does not resolve the\n(incommensurable) remote-vs-temper scope asymmetry."
+          },
+          "reach_covers": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the credential can ACTUALLY see, in provider terms (`acme/temper`, `acme/*`)."
+          },
+          "reach_granularity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`org` | `workspace` | `installation` | `repo-set` | `project` — the grain the credential\nis scoped at, in the provider's terms."
+          },
+          "registered_by_profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revoked_by_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "tool_manifest": {
+            "description": "Declared read-only remote tools. Non-empty ⇒ reach-capable."
+          },
+          "webhook_events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Registered remote event types. Non-empty ⇒ ledger-capable."
+          }
+        }
+      },
+      "ConnectionCredential": {
+        "type": "object",
+        "description": "The abstract credential reference stored in `kb_connections.credential`, and the body of the\nattach-credential request — one type, so the wire shape and the stored shape cannot drift.\n\n**This holds no secret.** `broker` names an implementation and `connector` identifies a\nconnector *the broker* holds the secret for; the secret itself never reaches temper. That is\nwhy this is safe to return on a read path unredacted, unlike `kb_machine_clients.secret_hash`.\n\n**`broker` is never a bare Vercel connector id.** It names the implementation so a platform\nswap costs one adapter — the seam is two operations (`mint`, `verifyInbound`) and nothing above\nit knows which broker is behind it. Keeping the connector id on the *row* rather than in code is\nalso what lets a self-hosted operator provision their own connectors in their own Vercel team.",
+        "required": [
+          "broker",
+          "connector"
+        ],
+        "properties": {
+          "broker": {
+            "type": "string",
+            "description": "The credential broker implementation, e.g. `vercel-connect`."
+          },
+          "connector": {
+            "type": "string",
+            "description": "The broker's identifier for this connector. Per-instance, per-row, never hardcoded."
+          },
+          "installation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The specific installation, where the provider has that concept (a GitHub App installation)."
+          }
+        }
+      },
+      "ConnectionSubscription": {
+        "type": "object",
+        "description": "A declared subscription: a subscriber (team/context/cogmap) wants to be told when a\nconnection emits events matching a selector.\n\nThe subscriber is a context, a cogmap or a team. A subscription is revoked, never deleted, so\none that matched an event stays resolvable afterwards.",
+        "required": [
+          "id",
+          "subscriber_table",
+          "subscriber_id",
+          "authoring_team_id",
+          "connection_id",
+          "selector",
+          "created_by_profile_id",
+          "created"
+        ],
+        "properties": {
+          "authoring_team_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The team whose owners and maintainers manage this subscription. For a team subscriber it\nis the subscriber itself."
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The connection whose events this subscription wants. A revoked connection may still have\nlive subscriptions against it — the row stays honest about what was declared."
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by_profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revoked_by_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "selector": {
+            "description": "The selector, in the shape of a `SubscriptionSelector`."
+          },
+          "subscriber_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subscriber_table": {
+            "type": "string",
+            "description": "The subscriber's kind: `kb_contexts`, `kb_cogmaps` or `kb_teams`."
+          }
+        }
+      },
       "ContentResponse": {
         "type": "object",
         "description": "Response body for resource content.",
@@ -15322,6 +17397,63 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "CreateSubscriptionRequest": {
+        "type": "object",
+        "description": "Create a subscription.",
+        "required": [
+          "subscriber_table",
+          "subscriber_id",
+          "authoring_team_id",
+          "connection_id",
+          "selector"
+        ],
+        "properties": {
+          "authoring_team_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The team that authorizes this subscription. The caller must own or maintain it (or be a\nsystem admin), and it must hold read-reach on the connection. For a team subscriber, this\nequals `subscriber_id`."
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "selector": {
+            "$ref": "#/components/schemas/SubscriptionSelector",
+            "description": "The selector. An unknown `kind` or a malformed selector is rejected."
+          },
+          "subscriber_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subscriber_table": {
+            "type": "string",
+            "description": "The subscriber's kind: `kb_contexts`, `kb_cogmaps` or `kb_teams`. A context or cogmap\nsubscriber must be linked to `authoring_team_id`; a team subscriber must equal it."
+          }
+        }
+      },
+      "CredentialVerification": {
+        "type": "object",
+        "description": "What minting once at attach time observed about a credential — the\nverification result surfaced back to the operator.\n\n`observed_reach` is what the credential can actually see, as the provider reported it, to be\nread next to the connection's declared reach (`reach_granularity` / `reach_covers`).",
+        "required": [
+          "verified"
+        ],
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why verification did not fully succeed, when it did not — consent pending,\nno broker configured, or a transient failure."
+          },
+          "observed_reach": {
+            "description": "The reach the provider reported at mint (its `metadata`), when verified."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "The connector minted successfully (proved live)."
           }
         }
       },
@@ -16376,6 +18508,27 @@
         ],
         "description": "Request body for `POST /api/relationships/{edge_handle}/fold`."
       },
+      "GrantConnectionReachRequest": {
+        "type": "object",
+        "description": "Grant (or revoke) a TEAM's read-reach on a connection. Owning a connection is not reaching it:\nthis writes a `kb_access_grants` row (`subject_table = 'kb_connections'`) that lets the named\nteam READ what the connection receives. Reach is read-only — a grant confers no write. One\nrequest type carries `team` for both the grant and the revoke, so the two sides cannot drift.\n\nThe CLI resolves the team ref to a UUID before sending, so this is a `Uuid`, not a ref string.",
+        "required": [
+          "team"
+        ],
+        "properties": {
+          "affirm_reach": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why binding this connection's remote reach to the team is intended. Required when the\nconnection declares a remote reach that its credential verification did not confirm, and\nrefused when there is nothing to affirm. It is recorded for review; it does not narrow the\nremote reach. Ignored when revoking."
+          },
+          "team": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The team receiving read-reach. Its members inherit read on what the connection receives."
+          }
+        }
+      },
       "GrantOutcome": {
         "type": "object",
         "description": "The result of a grant. `granted` is `false` when the row already existed and was updated in place\n(idempotent upsert), mirroring bind's `bound` flag.",
@@ -16386,6 +18539,23 @@
           "granted": {
             "type": "boolean",
             "description": "`true` when this call inserted a fresh grant; `false` when it updated an existing one."
+          }
+        }
+      },
+      "GrantSpec": {
+        "type": "object",
+        "description": "One cogmap grant the machine should hold.",
+        "required": [
+          "cogmap_id",
+          "can_write"
+        ],
+        "properties": {
+          "can_write": {
+            "type": "boolean"
+          },
+          "cogmap_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -17314,6 +19484,56 @@
           }
         }
       },
+      "IssueMachineRequest": {
+        "type": "object",
+        "description": "Issue a machine credential: temper mints both the `client_id` and the secret, so there is no\nexternal client id. Team memberships and cogmap grants are listed explicitly.",
+        "required": [
+          "label",
+          "teams",
+          "grants"
+        ],
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrantSpec"
+            }
+          },
+          "label": {
+            "type": "string"
+          },
+          "owner_team_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The team that owns the machine. Ownership confers no reach; `teams` and `grants` do."
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamSpec"
+            }
+          }
+        }
+      },
+      "IssuedMachineCredential": {
+        "type": "object",
+        "description": "A machine client with its plaintext `client_secret`, returned by issue and by secret\nrotation. The secret is shown once and never stored, so it cannot be retrieved again.",
+        "required": [
+          "client",
+          "client_secret"
+        ],
+        "properties": {
+          "client": {
+            "$ref": "#/components/schemas/MachineClient"
+          },
+          "client_secret": {
+            "type": "string"
+          }
+        }
+      },
       "JoinRequest": {
         "type": "object",
         "description": "A user-initiated request to join a team (typically the gating team).",
@@ -17522,6 +19742,68 @@
           }
         ],
         "description": "The namespace half of the family name — mirrors `temper_substrate::payloads::KindOwner`\nin a temper-core-native shape so the wire type does not depend on the substrate crate.\n`None` (the ordinary case) lets the SQL wrapper default the namespace from the owning\nresource's home."
+      },
+      "LedgerRef": {
+        "type": "object",
+        "description": "A reference from a ledger entry to the thing it concerns.",
+        "required": [
+          "rel",
+          "target"
+        ],
+        "properties": {
+          "rel": {
+            "$ref": "#/components/schemas/LedgerRefRel"
+          },
+          "target": {
+            "$ref": "#/components/schemas/LedgerRefTarget"
+          }
+        }
+      },
+      "LedgerRefKind": {
+        "type": "string",
+        "description": "The kind of thing a ledger reference points at.",
+        "enum": [
+          "kb_contexts",
+          "kb_cogmaps",
+          "kb_blobs",
+          "kb_resources",
+          "kb_edges",
+          "kb_content_blocks",
+          "kb_teams",
+          "kb_profiles",
+          "kb_connections",
+          "kb_machine_clients",
+          "kb_events"
+        ]
+      },
+      "LedgerRefRel": {
+        "type": "string",
+        "description": "Why a ledger entry points at a thing: `subject` is what the act was performed on, and\n`principal` whom it was performed for.",
+        "enum": [
+          "supersedes",
+          "derived_from",
+          "touches",
+          "subject",
+          "principal",
+          "request"
+        ]
+      },
+      "LedgerRefTarget": {
+        "type": "object",
+        "description": "One typed pointer out of a ledger entry.",
+        "required": [
+          "kind",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LedgerRefKind"
+          }
+        }
       },
       "LensId": {
         "type": "string",
@@ -18491,6 +20773,83 @@
           }
         ],
         "description": "Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec)."
+      },
+      "ProvisionConnectionRequest": {
+        "type": "object",
+        "description": "Provision a connection. It is born `needs_credential` — the credential is attached\nseparately, so a connection never silently pretends to be more than it is.",
+        "required": [
+          "provider",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Display name. The addressable slug is derived from it."
+          },
+          "owner_team_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The team that will own the connection. Ownership confers no read-reach. With no owning\nteam, only a system admin can provision or manage it."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`github` | `linear` | …"
+          },
+          "reach_covers": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reach_granularity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The declared reach fidelity, in the provider's terms. Both halves are honest fields\nrather than a computed `exceeds_temper_reach` bool: remote and temper scope are\nincommensurable, and a stored bool would go stale."
+          }
+        }
+      },
+      "ProvisionMachineRequest": {
+        "type": "object",
+        "description": "Register a machine principal for an externally issued IdP `client_id`, with its team\nmemberships and cogmap grants listed explicitly.",
+        "required": [
+          "client_id",
+          "label",
+          "teams",
+          "grants"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrantSpec"
+            }
+          },
+          "label": {
+            "type": "string"
+          },
+          "owner_team_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The team that owns the machine. Ownership confers no reach; `teams` and `grants` do."
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamSpec"
+            }
+          }
+        }
       },
       "PublicSystemSettings": {
         "type": "object",
@@ -21198,6 +23557,20 @@
         ],
         "description": "Request body for `POST /api/relationships/{edge_handle}/reweight`."
       },
+      "RotateSecretRequest": {
+        "type": "object",
+        "description": "Rotate a temper-issued secret, leaving the previous secret valid for a grace window.",
+        "required": [
+          "grace_seconds"
+        ],
+        "properties": {
+          "grace_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds the previous secret stays valid after rotation, from 0 to 604800 (7 days)."
+          }
+        }
+      },
       "ScoreKind": {
         "oneOf": [
           {
@@ -21536,6 +23909,36 @@
           "resource_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "SetToolManifestRequest": {
+        "type": "object",
+        "description": "Declare the read-only remote tools a connection exposes. Non-empty ⇒ **reach-capable**.\n\nNot decorative: the manifest is the evidence the provider is admissible at all. A provider that\ncannot be reached through an API, an MCP server, or a CLI we can hold credentials for is\nrejected — proxying is out of scope by rule, so an empty manifest means judgment is impossible,\nnot merely unconfigured.\n\nTool *names* only. Anything richer is a per-provider schema, and no provider needs one yet.",
+        "required": [
+          "tools"
+        ],
+        "properties": {
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SetWebhookEventsRequest": {
+        "type": "object",
+        "description": "Register the remote event types a connection receives. Non-empty ⇒ **ledger-capable**.\n\nReplaces the set wholesale rather than appending: the registered set is a mirror of what the\nremote system is actually configured to send, and a merge would let a stale entry outlive the\nremote webhook it names.",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -22294,6 +24697,85 @@
           }
         }
       },
+      "SubscriptionSelector": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "GitHub: a repository's pull-request events, matched on the webhook payload alone.",
+            "required": [
+              "repo",
+              "kind"
+            ],
+            "properties": {
+              "event_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The event types to match, e.g. `[\"pull_request.merged\"]`. Empty = match all\nregistered event types on the connection."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "git_hub_repository"
+                ]
+              },
+              "repo": {
+                "type": "string",
+                "description": "`owner/repo` — e.g. `acme/temper`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "GitHub: pull requests in a repository that change files under the given paths. The\nwebhook carries no file list, so matching needs the changed files fetched first; until\nthen a match is reported as undetermined, never as out of scope.",
+            "required": [
+              "repo",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "git_hub_codeowners_paths"
+                ]
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The path globs to match against the changed-file list, e.g.\n`[\"src/api/**\", \"internal/**\"]`. Empty = match any file in the repo\n(degenerate but legal — the selector still declares enrichment is needed to get\nthe file list at all)."
+              },
+              "repo": {
+                "type": "string",
+                "description": "`owner/repo` — e.g. `acme/temper`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Linear: issues in a project, matched on the webhook payload alone.",
+            "required": [
+              "project_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "linear_project"
+                ]
+              },
+              "project_id": {
+                "type": "string",
+                "description": "Linear's UUID for the project."
+              }
+            }
+          }
+        ],
+        "description": "Which of a connection's events a subscription matches, per provider. The `kind` field names\nthe variant."
+      },
       "SystemAccessDetails": {
         "type": "object",
         "description": "Details included in the SystemAccessRequired error response.\n\nSECURITY NOTE: The `email` and `display_name` fields are safe to include\nbecause the caller already proved ownership of this identity through OAuth.\nWe are reflecting the caller's own profile back — not disclosing another\nuser's information. Do not add fields that reveal other users' data.",
@@ -22624,6 +25106,24 @@
           },
           "slug": {
             "type": "string"
+          }
+        }
+      },
+      "TeamSpec": {
+        "type": "object",
+        "description": "One team the machine should be enrolled in, with its role.",
+        "required": [
+          "team_id",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "description": "The team role: `member` or `watcher`. A role above `member` is refused for any caller."
+          },
+          "team_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -23034,6 +25534,22 @@
     {
       "name": "Admin",
       "description": "Operator surface — every route here requires the caller to be a system admin (the access-gate queues and standing acts, settings and governance, the profile directory, erasure, re-embed, machine-client rebind)"
+    },
+    {
+      "name": "Admin Ledger",
+      "description": "The record of administrative acts — readable by subject (the act families the caller may read about it) or by actor (a caller's own acts; another's need a system admin)"
+    },
+    {
+      "name": "Machine Clients",
+      "description": "Machine (client-credentials) principals — registration, issued secrets and revocation, managed by a system admin or the owner of the machine's owning team"
+    },
+    {
+      "name": "Connections",
+      "description": "Connections to remote systems — provisioning, credential, webhook events, tool manifest and team read-reach, managed by a system admin or the owner of the connection's owning team"
+    },
+    {
+      "name": "Subscriptions",
+      "description": "Subscriptions to a connection's events — declared and revoked by a system admin or an owner or maintainer of the authoring team"
     }
   ]
 }

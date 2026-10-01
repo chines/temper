@@ -94,10 +94,10 @@ ALL_ALLOWED="${FIXTURE_DIR}/all_allowed.rs"
 cat > "$ALL_ALLOWED" <<'EOF'
 fn gated_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
-        .route("/api/admin/ledger", get(a))
-        .route("/api/machine-clients/{id}", get(b).delete(c))
-        .route("/api/connections/{id}/reach", post(d).delete(e))
-        .route("/internal/saml/reconcile", post(f))
+        .route("/internal/saml/reconcile", post(a))
+        .route("/internal/principal/resolve", post(b))
+        .route("/api/auth/slack/callback", get(c))
+        .route("/api/intake/webhook", post(d))
         .route("/api/embed/dispatch", get(g).post(g))
 }
 EOF
@@ -113,6 +113,29 @@ fn admin_routes() -> OpenApiRouter<AppState> {
 }
 EOF
 run_test "system-admin path mounted plain: fails" "$ADMIN_PLAIN" 1
+
+# --- the scoped operator families are documented too (a team owner or the actor reaches them):
+# a plain mount of any of their paths is a regression to the undocumented posture and MUST fail.
+# Every formerly allowlisted path gets its own fixture, so re-adding any one of them to the
+# allowlist fails here rather than hiding behind its siblings. ---
+for scoped in \
+    "/api/admin/ledger" \
+    "/api/machine-clients" \
+    "/api/machine-clients/{id}" \
+    "/api/machine-clients/issue" \
+    "/api/machine-clients/{id}/rotate-secret" \
+    "/api/connections" \
+    "/api/connections/{id}" \
+    "/api/connections/{id}/credential" \
+    "/api/connections/{id}/webhook-events" \
+    "/api/connections/{id}/tool-manifest" \
+    "/api/connections/{id}/reach" \
+    "/api/subscriptions" \
+    "/api/subscriptions/{id}"; do
+    SCOPED_PLAIN="${FIXTURE_DIR}/scoped_plain.rs"
+    printf 'fn gated_routes() -> OpenApiRouter<AppState> {\n    OpenApiRouter::new()\n        .route("%s", get(handlers::scoped::handler))\n}\n' "$scoped" > "$SCOPED_PLAIN"
+    run_test "scoped operator path ${scoped} mounted plain: fails" "$SCOPED_PLAIN" 1
+done
 
 # --- a fixture with no .route( at all passes (nothing to check) ---
 EMPTY="${FIXTURE_DIR}/empty.rs"

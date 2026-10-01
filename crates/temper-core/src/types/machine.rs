@@ -26,26 +26,32 @@ pub struct MachineClient {
 }
 
 /// One team the machine should be enrolled in, with its role.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamSpec {
     pub team_id: Uuid,
-    /// `owner` | `maintainer` | `member` | `watcher`. Defaults to `member` at the CLI.
+    /// The team role: `member` or `watcher`. A role above `member` is refused for any caller.
+    // The CLI defaults to `member`; `MAX_MACHINE_TEAM_ROLE` is the ceiling (D4b).
     pub role: String,
 }
 
 /// One cogmap grant the machine should hold.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrantSpec {
     pub cogmap_id: Uuid,
     pub can_write: bool,
 }
 
-/// Register a new machine principal. Reach is plural and always explicit (D10).
+/// Register a machine principal for an externally issued IdP `client_id`, with its team
+/// memberships and cogmap grants listed explicitly.
+// Reach is plural and always explicit (D10).
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvisionMachineRequest {
     pub client_id: String,
     pub label: String,
-    /// Recorded as `team_id`. Owner, not reach.
+    /// The team that owns the machine. Ownership confers no reach; `teams` and `grants` do.
     pub owner_team_id: Option<Uuid>,
     pub teams: Vec<TeamSpec>,
     pub grants: Vec<GrantSpec>,
@@ -68,29 +74,35 @@ pub struct RebindMachineRequest {
     pub keep_old_active: bool,
 }
 
-/// Issue a temper-minted machine credential (Phase B1). temper mints the `client_id` AND a
-/// secret (`issuer='temper'`), so — unlike `ProvisionMachineRequest` — there is no external
-/// client id. Reach is plural and always explicit (D10).
+/// Issue a machine credential: temper mints both the `client_id` and the secret, so there is no
+/// external client id. Team memberships and cogmap grants are listed explicitly.
+// Phase B1 (`issuer='temper'`). Reach is plural and always explicit (D10).
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssueMachineRequest {
     pub label: String,
-    /// Recorded as `team_id`. Owner, not reach.
+    /// The team that owns the machine. Ownership confers no reach; `teams` and `grants` do.
     pub owner_team_id: Option<Uuid>,
     pub teams: Vec<TeamSpec>,
     pub grants: Vec<GrantSpec>,
 }
 
-/// A one-time machine credential returned by `issue` and `rotate-secret`. The plaintext
-/// `client_secret` is returned ONCE and never stored; only its SHA-256 hex persists (D1).
+/// A machine client with its plaintext `client_secret`, returned by issue and by secret
+/// rotation. The secret is shown once and never stored, so it cannot be retrieved again.
+// Only its SHA-256 hex persists (D1).
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IssuedMachineCredential {
     pub client: MachineClient,
     pub client_secret: String,
 }
 
-/// Rotate a temper-issued secret, leaving the previous secret valid for a grace window (D6).
+/// Rotate a temper-issued secret, leaving the previous secret valid for a grace window.
+// D6: two live secrets, briefly.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RotateSecretRequest {
-    /// Seconds the previous secret stays valid after rotation. Defaults at the CLI.
+    /// Seconds the previous secret stays valid after rotation, from 0 to 604800 (7 days).
+    // The CLI supplies a default.
     pub grace_seconds: i64,
 }

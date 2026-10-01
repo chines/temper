@@ -15,13 +15,16 @@ use uuid::Uuid;
 /// when `tool_manifest` is non-empty (agents can read the remote back, so judgment becomes
 /// possible). A ledger-only connection is legal and useful, but inert for judgment — and it
 /// says so rather than leaving an agent to mysteriously produce nothing.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Connection {
     pub id: Uuid,
     pub provider: String,
     pub slug: String,
     pub name: String,
-    /// Owner, not reach. `None` = teamless = admin-only, and fails closed.
+    /// The team that owns the connection. Ownership confers no read-reach. With no owning team,
+    /// only a system admin can manage the connection.
+    // Teamless fails closed.
     pub owner_team_id: Option<Uuid>,
     pub registered_by_profile_id: Uuid,
     /// The connection's dedicated agent profile. It carries no auth link and no machine-client
@@ -30,9 +33,10 @@ pub struct Connection {
     /// The entity remote payloads are attributed to (`<handle>@webhook`).
     pub emitter_entity_id: Uuid,
     pub home_context_id: Uuid,
-    /// The abstract credential reference behind the broker seam —
-    /// `{broker, connector, installation?}`, never a bare connector id. `None` is the
-    /// `needs_credential` birth state; see [`Connection::needs_credential`].
+    /// The credential reference, shaped as a `ConnectionCredential`. It holds no secret. `null`
+    /// until a credential is attached.
+    // The abstract reference behind the broker seam, never a bare connector id. `None` is the
+    // `needs_credential` birth state; see [`Connection::needs_credential`].
     pub credential: Option<serde_json::Value>,
     /// Registered remote event types. Non-empty ⇒ ledger-capable.
     pub webhook_events: Vec<String>,
@@ -110,13 +114,15 @@ impl Connection {
 
 /// Provision a connection. It is born `needs_credential` — the credential is attached
 /// separately, so a connection never silently pretends to be more than it is.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvisionConnectionRequest {
     /// `github` | `linear` | …
     pub provider: String,
     /// Display name. The addressable slug is derived from it.
     pub name: String,
-    /// Recorded as `owner_team_id`. Owner, not reach. `None` is admin-only.
+    /// The team that will own the connection. Ownership confers no read-reach. With no owning
+    /// team, only a system admin can provision or manage it.
     pub owner_team_id: Option<Uuid>,
     /// The declared reach fidelity, in the provider's terms. Both halves are honest fields
     /// rather than a computed `exceeds_temper_reach` bool: remote and temper scope are
@@ -136,10 +142,12 @@ pub struct ProvisionConnectionRequest {
 /// swap costs one adapter — the seam is two operations (`mint`, `verifyInbound`) and nothing above
 /// it knows which broker is behind it. Keeping the connector id on the *row* rather than in code is
 /// also what lets a self-hosted operator provision their own connectors in their own Vercel team.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionCredential {
-    /// Names the implementation behind the broker seam — e.g. `vercel-connect`. Nothing dispatches
-    /// on this yet; the adapter that does is a later chunk.
+    /// The credential broker implementation, e.g. `vercel-connect`.
+    // Names the implementation behind the broker seam. Nothing dispatches on this yet; the
+    // adapter that does is a later chunk.
     pub broker: String,
     /// The broker's identifier for this connector. Per-instance, per-row, never hardcoded.
     pub connector: String,
@@ -153,6 +161,7 @@ pub struct ConnectionCredential {
 /// Replaces the set wholesale rather than appending: the registered set is a mirror of what the
 /// remote system is actually configured to send, and a merge would let a stale entry outlive the
 /// remote webhook it names.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetWebhookEventsRequest {
     pub events: Vec<String>,
@@ -161,12 +170,14 @@ pub struct SetWebhookEventsRequest {
 /// What minting once at attach time observed about a credential — the
 /// verification result surfaced back to the operator.
 ///
-/// This is B4's half of the reach story: `observed_reach` is what the credential
-/// can *actually* see (the provider's mint metadata), placed next to the
-/// connection's *declared* reach (`reach_granularity`/`reach_covers`) so a human
-/// can see the gap. There is deliberately **no computed `exceeds` bool** — remote
-/// and temper scope are incommensurable and a stored bool would go stale. B3 adds
-/// the acknowledgment; B4 only makes the gap visible.
+/// `observed_reach` is what the credential can actually see, as the provider reported it, to be
+/// read next to the connection's declared reach (`reach_granularity` / `reach_covers`).
+//
+// This is B4's half of the reach story: it places observed next to declared so a human can see
+// the gap. There is deliberately **no computed `exceeds` bool** — remote and temper scope are
+// incommensurable and a stored bool would go stale. B3 adds the acknowledgment; B4 only makes the
+// gap visible.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CredentialVerification {
     /// The connector minted successfully (proved live).
@@ -175,14 +186,15 @@ pub struct CredentialVerification {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_reach: Option<serde_json::Value>,
     /// Why verification did not fully succeed, when it did not — consent pending,
-    /// no broker configured, or a transient failure. A capability that is absent
-    /// is stated, never silent (invariant 6).
+    /// no broker configured, or a transient failure.
+    // A capability that is absent is stated, never silent (invariant 6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
 /// The result of attaching a credential: the updated connection plus what minting
 /// once at attach time observed.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachCredentialResponse {
     pub connection: Connection,
@@ -195,16 +207,17 @@ pub struct AttachCredentialResponse {
 /// request type carries `team` for both the grant and the revoke, so the two sides cannot drift.
 ///
 /// The CLI resolves the team ref to a UUID before sending, so this is a `Uuid`, not a ref string.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GrantConnectionReachRequest {
     /// The team receiving read-reach. Its members inherit read on what the connection receives.
     pub team: Uuid,
-    /// An intentional affirmation that binding this connection's coarse remote reach to the team
-    /// is deliberate — the stated reason. REQUIRED when the connection declares a reach
-    /// (`Connection::declares_reach`): granting without it FAILS rather than proceeding silently.
-    /// It records the intent for review; it does not make the coarse remote reach any narrower.
-    /// `revoke_reach` reuses this type and ignores the field — revoking a binding needs no
-    /// affirmation.
+    /// Why binding this connection's remote reach to the team is intended. Required when the
+    /// connection declares a remote reach that its credential verification did not confirm, and
+    /// refused when there is nothing to affirm. It is recorded for review; it does not narrow the
+    /// remote reach. Ignored when revoking.
+    // `Connection::declares_reach` plus the observed-vs-declared gate in
+    // `connection_service::grant_reach`. `revoke_reach` reuses this type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub affirm_reach: Option<String>,
 }
@@ -217,6 +230,7 @@ pub struct GrantConnectionReachRequest {
 /// not merely unconfigured.
 ///
 /// Tool *names* only. Anything richer is a per-provider schema, and no provider needs one yet.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetToolManifestRequest {
     pub tools: Vec<String>,

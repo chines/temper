@@ -230,9 +230,8 @@ pub async fn list_by_actor(
 ) -> ApiResult<Vec<AdminLedgerEntry>> {
     let caller = ProfileId::from(authed.profile().id);
     // THE ONLY GATE — not defense in depth. Both surfaces authenticate and hand `caller`
-    // straight here: `handlers::admin_ledger::list` mounts on a plain `.route()` with no
-    // prelude, and `tools::admin_ledger` receives the caller's gate-resolved profile and
-    // no more. Neither gates upstream. Do not relax this on the theory that a layer above
+    // straight here: `handlers::admin_ledger::list` has no prelude, and `tools::admin_ledger`
+    // receives the caller's gate-resolved profile and no more. Neither gates upstream. Do not relax this on the theory that a layer above
     // repeats it — nothing does.
     //
     // How much this check actually excludes is an OPERATIONAL setting, not a property of this

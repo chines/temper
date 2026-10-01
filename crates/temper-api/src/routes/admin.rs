@@ -17,8 +17,8 @@
 //! omission from the contract protected nothing and left them the least-described routes in the
 //! API. The routes that belong out of the contract are the ones no bearer can reach: the
 //! shared-secret crons and HMAC-signed internal calls (see `embed_internal.rs` / `internal.rs`).
-//! (The scoped operator families still mounted plain in `gated.rs` are a documentation gap, not
-//! that category.)
+//! The scoped operator families in `gated.rs` (the admin ledger, machine clients, connections,
+//! subscriptions) are documented too, under their own tags, since a non-admin reaches them.
 //!
 //! Group isolation is also what keeps this set auditable: `audit-route-auth.sh` pins the row,
 //! and a reviewer can read the whole operator surface in one file.
