@@ -1445,7 +1445,6 @@ mod tests {
                 matches!(
                     key.as_str(),
                     "subject_table" | "subject_id" | "actor" | "redacted_hashes" | "targets"
-                        | "propagated_to_clients"
                 ),
                 "unexpected payload key {key:?} — the payload must never carry a trail join-key shape"
             );
@@ -1453,10 +1452,6 @@ mod tests {
         assert_eq!(obj["subject_table"], "kb_profiles");
         assert_eq!(obj["subject_id"], serde_json::json!(subject.to_string()));
         assert_eq!(obj["actor"], serde_json::json!(operator.to_string()));
-        assert_eq!(
-            obj["propagated_to_clients"], false,
-            "gone from the SERVER only (D3)"
-        );
 
         // redacted_hashes is the only content key-set: hashes, and nothing id-shaped anywhere.
         let hashes = obj["redacted_hashes"].as_array().unwrap();

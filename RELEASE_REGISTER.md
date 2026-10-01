@@ -59,7 +59,9 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   `residual_owned`, where it counted the departing member's deleted and erased ones.
   `PUT /api/cognitive-maps/{id}` (reconcile) requires authorship of the map: an ordinary map is
   refused (`403`) to any caller without a write grant on it, a system admin included, where it was
-  applied; the L0 kernel and maps joined to the gating team keep requiring a system admin. Who observes:
+  applied; the L0 kernel and maps joined to the gating team keep requiring a system admin. The
+  `principal_erased` and `resource_erased` ledger payloads, and their registered payload schemas,
+  no longer carry `propagated_to_clients` (`20261001000020`); no event carrying it exists. Who observes:
   the owner or a grant
   holder of an erased resource; a caller whose goal link is refused; a team admin reassigning or
   removing a departing member; a system admin granting on a deleted resource; a caller reconciling a
@@ -68,7 +70,7 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   Release relevance: signal-only.
 pr: self
 classes: additive,behavioral
-surfaces: http,mcp,clients
+surfaces: http,mcp,clients,schema
 status: signal-only
 - **Resource erasure 2b PR 2: an erased resource reads as `410 RESOURCE_ERASED` to a caller with standing; the operator erasure doors**
   `GET /api/resources/{id}`, `/content` and `/meta` (which composes from the same read) gain a

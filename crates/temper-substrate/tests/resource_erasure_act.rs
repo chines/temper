@@ -4154,8 +4154,8 @@ async fn a_block_citing_its_own_sentinel_literal_still_erases(pool: sqlx::PgPool
 /// `done` and a `dead` workflow job whose payload and `last_error` quote the leak, and an artifact
 /// whose verdict `detail` quotes the value a validator rejected. After the act, every one is
 /// reached (the jobs keep their status), the `resource_erased` payload's `targets` names each
-/// reached table and claims none it did not reach, and the payload text contains none of the
-/// planted strings.
+/// reached table and claims none it did not reach, its top-level keys are exactly the
+/// `ResourceErased` shape, and the payload text contains none of the planted strings.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_record_attests_every_target_and_repeats_nothing(pool: sqlx::PgPool) {
     const INGEST_PATH: &str = "/Users/jane/medical/leak.pdf";
@@ -4314,6 +4314,27 @@ async fn the_record_attests_every_target_and_repeats_nothing(pool: sqlx::PgPool)
             .fetch_one(&pool)
             .await
             .unwrap();
+    // The record's top-level keys are exactly the ResourceErased shape.
+    for key in payload
+        .as_object()
+        .expect("the payload is an object")
+        .keys()
+    {
+        assert!(
+            matches!(
+                key.as_str(),
+                "subject_table"
+                    | "subject_id"
+                    | "actor"
+                    | "redacted_fields"
+                    | "folded_edges"
+                    | "targets"
+                    | "remainder"
+                    | "ledger_remainder"
+            ),
+            "unexpected resource_erased payload key {key:?}"
+        );
+    }
     let named: std::collections::BTreeSet<&str> = payload["targets"]
         .as_array()
         .expect("targets is an array")
@@ -4452,7 +4473,6 @@ async fn replay_completes_when_the_erasure_sorts_before_its_folds(pool: sqlx::Pg
         "targets": [],
         "remainder": [],
         "ledger_remainder": [],
-        "propagated_to_clients": false,
     }))
     .bind(serde_json::json!([
         {"rel": "subject", "target": {"kind": "kb_resources", "id": r.uuid()}},

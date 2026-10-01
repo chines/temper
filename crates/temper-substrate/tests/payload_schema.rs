@@ -106,7 +106,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
         (
             "20260909000015_erasure_act_vocabulary.sql",
             &[
-                "principal_erased.v1.schema.json",
+                SUPERSEDED, // principal_erased: 20261001000020
                 SUPERSEDED, // principal_erasure_refused: 20260930000050
                 "blob_erased.v1.schema.json",
             ],
@@ -114,7 +114,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
         (
             "20260929000010_resource_erasure_vocabulary.sql",
             &[
-                "resource_erased.v1.schema.json",
+                SUPERSEDED, // resource_erased: 20261001000020
                 SUPERSEDED, // resource_erasure_refused: 20260930000050
                 "block_history_scrubbed.v1.schema.json",
             ],
@@ -124,6 +124,13 @@ fn the_migration_literal_matches_the_committed_fixture() {
             &[
                 "resource_erasure_refused.v1.schema.json",
                 "principal_erasure_refused.v1.schema.json",
+            ],
+        ),
+        (
+            "20261001000020_erasure_payload_drops_propagated_to_clients.sql",
+            &[
+                "principal_erased.v1.schema.json",
+                "resource_erased.v1.schema.json",
             ],
         ),
     ] {
