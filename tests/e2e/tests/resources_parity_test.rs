@@ -396,11 +396,12 @@ async fn get_returns_open_meta_and_splits_the_body_into_a_second_part(pool: PgPo
     assert_eq!(asked[1], body, "the second part IS the markdown body");
 }
 
-/// The incumbent refusal kind for an unreadable/absent resource on GET is
-/// `internal_error` naming the read — parity pins what IS, defects and all; improving
-/// the kind is a later, deliberate change.
+/// An unreadable/absent resource on GET is the caller's `invalid_params` — the not-found kind
+/// every sibling read in this file speaks — and never says "erased": a not-found may be a soft
+/// delete, a move, or an unreadable id, and only the erasure's own 410 names an erasure. (This
+/// pinned `internal_error` until resource erasure 2c made the deliberate change.)
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn get_unknown_resource_is_an_internal_error_naming_the_read(pool: PgPool) {
+async fn get_unknown_resource_is_invalid_params_and_never_says_erased(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
     let ghost = temper_core::types::ids::ResourceId(Uuid::now_v7());
 
@@ -411,11 +412,8 @@ async fn get_unknown_resource_is_an_internal_error_naming_the_read(pool: PgPool)
     )
     .await
     .expect_err("an unknown resource does not answer");
-    assert_eq!(code_of(&err), -32603);
-    assert!(
-        err.message.starts_with("Failed to get resource:"),
-        "got: {err}"
-    );
+    assert_eq!(code_of(&err), -32602);
+    assert!(!err.message.contains("erased"), "got: {err}");
 }
 
 /// `fields` filters TOP-LEVEL keys, anchored on `id`.
@@ -683,8 +681,8 @@ async fn update_meta_answers_the_ack_and_lands_the_change(pool: PgPool) {
 
 // ── delete_resource ─────────────────────────────────────────────────
 
-/// Delete answers the ack; the resource then reads as the incumbent get-refusal, and a
-/// second delete is a `Resource not found:` refusal.
+/// Delete answers the ack; the resource then reads as not-found (`invalid_params`, never
+/// erased), and a second delete is a `Resource not found:` refusal.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn delete_answers_the_ack_and_the_resource_stops_answering(pool: PgPool) {
     let (_app, svc, parts) = harness(pool).await;
@@ -701,7 +699,14 @@ async fn delete_answers_the_ack_and_the_resource_stops_answering(pool: PgPool) {
     let gone = temper_mcp::tools::resources::get_resource(&svc, &parts, input(json!({ "id": id })))
         .await
         .expect_err("a deleted resource stops answering");
-    assert_eq!(code_of(&gone), -32603);
+    // A soft-deleted resource reads as not-found: the caller's state (`invalid_params`), and
+    // never as an erasure (resource erasure §8: a tombstone is never mistaken for an erasure).
+    assert_eq!(code_of(&gone), -32602);
+    assert!(
+        !gone.message.contains("erased"),
+        "a tombstone never reads as erased: {}",
+        gone.message
+    );
 
     // The incumbent second delete renders the FORBIDDEN arm's sentence, not the NotFound
     // one — a tombstoned row is not-modifiable, not missing.

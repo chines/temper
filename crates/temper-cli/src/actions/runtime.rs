@@ -44,6 +44,10 @@ pub fn client_err_to_temper(e: ClientError) -> TemperError {
         ClientError::SystemAccessRequired(details) => TemperError::SystemAccessRequired(details),
         e if e.is_network() => TemperError::Network(e.to_string()),
         ClientError::Gone { message } => TemperError::Gone(message),
+        // Core's own variant, not a CLI one: it already renders the server's sentence and
+        // carries the `RESOURCE_ERASED` code a JSON caller branches on. `Gone` would hand that
+        // caller `gone` — the folded-block code — and `Api` would hand it `api`.
+        ClientError::ResourceErased { id } => TemperError::ResourceErased(id),
         e => TemperError::Api(e.to_string()),
     }
 }
@@ -236,6 +240,20 @@ mod tests {
                 "expected Config error for malformed TEMPER_TOKEN: {err}"
             );
         });
+    }
+
+    /// The erasure survives the lift as core's own variant, so the JSON payload's code is
+    /// `RESOURCE_ERASED` — not `gone` (the folded block) or `api`. FAILS IF the arm is removed
+    /// (the catch-all would lift it to `Api`).
+    #[test]
+    fn an_erased_client_error_lifts_to_cores_erased_variant() {
+        let id = temper_core::types::ids::ResourceId::from(uuid::Uuid::now_v7());
+        let lifted = client_err_to_temper(ClientError::ResourceErased { id });
+        assert!(
+            matches!(lifted, TemperError::ResourceErased(got) if got == id),
+            "got {lifted:?}"
+        );
+        assert_eq!(lifted.code(), temper_core::error::RESOURCE_ERASED_CODE);
     }
 }
 

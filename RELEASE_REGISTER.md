@@ -61,7 +61,14 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   refused (`403`) to any caller without a write grant on it, a system admin included, where it was
   applied; the L0 kernel and maps joined to the gating team keep requiring a system admin. The
   `principal_erased` and `resource_erased` ledger payloads, and their registered payload schemas,
-  no longer carry `propagated_to_clients` (`20261001000020`); no event carrying it exists. Who observes:
+  no longer carry `propagated_to_clients` (`20261001000020`); no event carrying it exists. Every write door that can answer `410 RESOURCE_ERASED` now declares it in the contract, and
+  `POST /api/resources/{id}/finalize` declares the `409` and `422` it answers; the SDKs regenerate.
+  temper-client reads a `410` carrying `RESOURCE_ERASED` as a typed erasure (every other `410`
+  stays gone), including on a block read, which no longer fails to parse it. The CLI reports the
+  erasure under code `RESOURCE_ERASED`, and `resource delete`, `update` and `annotate` remove the
+  local projected copy when they meet it; `resource show` reports it and leaves the vault alone.
+  MCP tools report an erased resource as `invalid_params` naming the erasure, and a resource read
+  of an unknown id as `invalid_params` (`-32602`) where it was `internal_error` (`-32603`). Who observes:
   the owner or a grant
   holder of an erased resource; a caller whose goal link is refused; a team admin reassigning or
   removing a departing member; a system admin granting on a deleted resource; a caller reconciling a
@@ -70,7 +77,7 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   Release relevance: signal-only.
 pr: self
 classes: additive,behavioral
-surfaces: http,mcp,clients,schema
+surfaces: http,mcp,clients,cli-stdout,schema
 status: signal-only
 - **Resource erasure 2b PR 2: an erased resource reads as `410 RESOURCE_ERASED` to a caller with standing; the operator erasure doors**
   `GET /api/resources/{id}`, `/content` and `/meta` (which composes from the same read) gain a

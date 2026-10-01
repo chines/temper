@@ -123,6 +123,7 @@ async fn context_anchor(
 fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
         ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::ResourceErased { id } => crate::tools::resources::erased_error(id),
         ClientError::Server {
             status: 400,
             message,

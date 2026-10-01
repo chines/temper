@@ -65,6 +65,7 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
 /// declared deltas).
 fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
+        ClientError::ResourceErased { id } => crate::tools::resources::erased_error(id),
         ClientError::NotFound { message } => {
             rmcp::ErrorData::invalid_params(format!("{action}: {message}"), None)
         }

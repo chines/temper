@@ -222,7 +222,18 @@ impl<'a> ResourceClient<'a> {
             .await
         {
             Ok(resp) => {
+                let status = resp.status();
                 let bytes = resp.bytes().await?;
+                // The admitted 410 is not always a `BlockRead`: an erased HOME resource answers
+                // 410 too, under `RESOURCE_ERASED` and the error envelope. The code is checked
+                // BEFORE the parse — otherwise the erasure surfaces as a JSON error about a
+                // missing `state` tag, and the one answer that names the erasure is lost.
+                if status == StatusCode::GONE {
+                    let body = String::from_utf8_lossy(&bytes);
+                    if crate::http::is_resource_erased_body(&body) {
+                        return Err(crate::http::map_status_to_error(status, &body));
+                    }
+                }
                 Ok(serde_json::from_slice(&bytes)?)
             }
             // The route's OWN 404 names the block ("content block {id} not found") — that is

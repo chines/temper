@@ -1651,7 +1651,8 @@ pub fn delete(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?;
+    })
+    .map_err(|e| drop_projection_if_erased(&config.vault_root, e))?;
 
     let cmd = DeleteResource {
         resource: id,
@@ -1688,6 +1689,28 @@ pub fn delete(
     println!("{rendered}");
 
     Ok(())
+}
+
+/// The pre-write GET's error tail for `delete`, `update` and `annotate`: an ERASED answer
+/// removes the resource's local projection (as `show_cache` does), and the error passes
+/// through unchanged either way, so the user still sees the erasure.
+///
+/// Only the erasure licenses this. A not-found may be a soft delete, a move, or a resource the
+/// caller can no longer read (spec §8), so every other error leaves the file alone. The 410
+/// carries the id alone — no row — so the file is found by the uuid its stem carries
+/// ([`crate::projection::remove_resource_files_by_id`]); a removal failure is a warning beside
+/// the erasure, never a replacement for it.
+fn drop_projection_if_erased(vault_root: &std::path::Path, e: TemperError) -> TemperError {
+    if let TemperError::ResourceErased(id) = &e {
+        match crate::projection::remove_resource_files_by_id(vault_root, *id) {
+            Ok(0) => {}
+            Ok(_) => output::warning("resource was erased: removed its local copy"),
+            Err(err) => output::warning(format!(
+                "resource was erased, but its local copy could not be removed: {err}"
+            )),
+        }
+    }
+    e
 }
 
 /// Fold a resource's metadata, body, and its optional edge/provenance sections into
@@ -2451,6 +2474,7 @@ fn build_move_spec_from_args(
 /// `--type-to` keeps its gate: choosing a conversion TARGET is a caller's assertion about
 /// what the resource should become, not an existing fact to be re-litigated.
 fn resolve_update_target(
+    config: &Config,
     params: &UpdateParams<'_>,
 ) -> Result<(
     temper_core::types::ids::ResourceId,
@@ -2467,7 +2491,8 @@ fn resolve_update_target(
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?;
+    })
+    .map_err(|e| drop_projection_if_erased(&config.vault_root, e))?;
     if let Some(tt) = params.type_to {
         let _ = temper_workflow::frontmatter::DocType::from_str(tt)?;
     }
@@ -2494,7 +2519,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
 
     // 1. Resolve the ref to an id + the current server row (for its doctype
     //    and home context), validating any `--type-to` target.
-    let (id, row) = resolve_update_target(params)?;
+    let (id, row) = resolve_update_target(config, params)?;
     let current_type = row.doc_type_name.clone();
 
     // 2. Per-flag schema validation, keyed by the resolved doctype.
@@ -2758,7 +2783,8 @@ pub fn annotate(config: &Config, params: AnnotateParams<'_>) -> Result<()> {
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
-    })?;
+    })
+    .map_err(|e| drop_projection_if_erased(&config.vault_root, e))?;
 
     // Resolve --sources refs → provenance records. A ref that fails to parse is a hard error
     // (escalate, never a silent drop). clap guarantees the list is non-empty (`required = true`).

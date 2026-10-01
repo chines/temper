@@ -441,24 +441,44 @@ async fn enriched_view(
         .resources()
         .get(id, Some(&enriched_sections()))
         .await
-        .across_auth(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-        })?;
+        .across_auth(map_read_err)?;
     let body_markdown = if include_content {
         Some(
             client
                 .resources()
                 .content(id)
                 .await
-                .across_auth(|e| {
-                    rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-                })?
+                .across_auth(map_read_err)?
                 .markdown,
         )
     } else {
         None
     };
     Ok((view, body_markdown))
+}
+
+/// The resource read's refusals. A not-found is the caller's (an unknown, unreadable, or
+/// soft-deleted id — the server does not say which, and neither does this) and an erasure is
+/// named by its own arm; only what is left is a fault. Before this, every one of them — a
+/// typo'd id included — reported `internal_error`.
+fn map_read_err(e: ClientError) -> rmcp::ErrorData {
+    match e {
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::ResourceErased { id } => erased_error(id),
+        other => rmcp::ErrorData::internal_error(format!("Failed to get resource: {other}"), None),
+    }
+}
+
+/// An erased resource, on every resource tool. `invalid_params` is the kind the two other
+/// "this address will not answer" states already take in this file — the not-found and the
+/// folded block (`Gone`) — a caller-addressable state, never a server fault. The sentence is
+/// core's own, so the tool says "erased" in the words every other surface uses, and an agent
+/// can tell it from a not-found: the one answer that means the resource is gone for good.
+pub(crate) fn erased_error(id: ResourceId) -> rmcp::ErrorData {
+    rmcp::ErrorData::invalid_params(
+        temper_core::error::TemperError::ResourceErased(id).to_string(),
+        None,
+    )
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -778,6 +798,9 @@ pub async fn get_block(
         .await
         .across_auth(|e| match e {
             ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+            // The block's HOME resource was erased (the client reads the code before the
+            // `BlockRead` parse, so it arrives typed, not as a JSON fault).
+            ClientError::ResourceErased { id } => erased_error(id),
             other => rmcp::ErrorData::internal_error(format!("block read failed: {other}"), None),
         })?;
 
@@ -1024,6 +1047,7 @@ pub async fn update_resource(
             // A folded content block under write addressing: the defined gone state, not a
             // server fault — the row persists as history, the address is not writable.
             ClientError::Gone { message } => rmcp::ErrorData::invalid_params(message, None),
+            ClientError::ResourceErased { id } => erased_error(id),
             ClientError::Server {
                 status: 400,
                 message,
@@ -1074,6 +1098,7 @@ pub async fn annotate_resource(
             // A folded content block under write addressing: the defined gone state, not a
             // server fault — the row persists as history, the address is not writable.
             ClientError::Gone { message } => rmcp::ErrorData::invalid_params(message, None),
+            ClientError::ResourceErased { id } => erased_error(id),
             ClientError::Server {
                 status: 400,
                 message,
@@ -1135,6 +1160,7 @@ pub async fn update_resource_meta(
             ClientError::NotFound { message } => {
                 rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
             }
+            ClientError::ResourceErased { id } => erased_error(id),
             ClientError::Server {
                 status: 400,
                 message,
@@ -1183,6 +1209,7 @@ pub async fn delete_resource(
             ClientError::NotFound { message } => {
                 rmcp::ErrorData::invalid_params(format!("Resource not found: {message}"), None)
             }
+            ClientError::ResourceErased { id } => erased_error(id),
             // The door runs the act-authorship validation the direct binding ran
             // client-side (e.g. reasoning without a confidence band) and answers 400 —
             // a caller error, never a server fault.
@@ -1355,6 +1382,39 @@ mod grant_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An erased resource is a named caller-addressable state, not a fault: `invalid_params`,
+    /// speaking "erased". FAILS IF the erased arm in `map_read_err` is removed (it falls to the
+    /// catch-all `INTERNAL_ERROR`).
+    #[test]
+    fn the_read_maps_an_erasure_to_a_named_invalid_params() {
+        let id = ResourceId::from(Uuid::now_v7());
+        let err = map_read_err(ClientError::ResourceErased { id });
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(err.message, format!("resource {id} was erased"));
+    }
+
+    /// A not-found stays distinct from the erasure — a soft delete, a move and an unreadable id
+    /// all answer it (spec §8) — and is the caller's, not a fault. FAILS IF the not-found arm is
+    /// removed (`INTERNAL_ERROR`) or merged into the erased one (the message would say "erased").
+    #[test]
+    fn the_read_maps_a_not_found_to_invalid_params_without_saying_erased() {
+        let err = map_read_err(ClientError::NotFound {
+            message: "resource not found".to_owned(),
+        });
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(!err.message.contains("erased"), "{}", err.message);
+    }
+
+    /// Everything else is still a fault, as before.
+    #[test]
+    fn the_read_maps_anything_else_to_internal_error() {
+        let err = map_read_err(ClientError::Server {
+            status: 500,
+            message: "boom".to_owned(),
+        });
+        assert_eq!(err.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+    }
 
     /// Gap 1 regression: `managed_meta` is a typed `ManagedMeta`, so an MCP
     /// client passing a real JSON object (not a string-encoded one)

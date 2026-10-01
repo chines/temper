@@ -593,6 +593,64 @@ pub fn remove_resource_file_for_row(vault_root: &Path, row: &ResourceView) -> Re
     Ok(())
 }
 
+/// Remove every projection file of resource `id`, found by the uuid its stem carries.
+///
+/// For the one caller that has the id but no row: a resource the server reported ERASED
+/// answers no row — its `410` carries the id alone — so the owner, context, doctype and title
+/// [`remove_resource_file_for_row`] builds the path from are not in hand. The stem is, by
+/// construction, the decorated ref ending in the uuid (`projection_stem`), so the file is
+/// found by that and nothing else. Walks the same `<owner>/<context>/<doctype>/*.md` shape
+/// [`prune_context`] walks, skipping hidden directories. Returns how many files were removed;
+/// an absent vault root is zero, not an error.
+pub fn remove_resource_files_by_id(
+    vault_root: &Path,
+    id: temper_core::types::ids::ResourceId,
+) -> Result<usize> {
+    let bare = id.to_string();
+    let decorated_tail = format!("-{bare}");
+    let mut removed = 0usize;
+    let owner_iter = match std::fs::read_dir(vault_root) {
+        Ok(iter) => iter,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e.into()),
+    };
+    for owner_entry in owner_iter.flatten() {
+        if !is_visible_dir(&owner_entry) {
+            continue;
+        }
+        for context_entry in std::fs::read_dir(owner_entry.path())?.flatten() {
+            if !is_visible_dir(&context_entry) {
+                continue;
+            }
+            for doctype_entry in std::fs::read_dir(context_entry.path())?.flatten() {
+                if !is_visible_dir(&doctype_entry) {
+                    continue;
+                }
+                for file_entry in std::fs::read_dir(doctype_entry.path())?.flatten() {
+                    let path = file_entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                        continue;
+                    }
+                    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    if stem == bare || stem.ends_with(&decorated_tail) {
+                        std::fs::remove_file(&path)?;
+                        removed += 1;
+                    }
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// A directory entry that is a directory and not hidden (`.temper` and friends).
+fn is_visible_dir(entry: &std::fs::DirEntry) -> bool {
+    entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+        && !entry.file_name().to_string_lossy().starts_with('.')
+}
+
 /// Remove a resource's projection file at its canonical vault path.
 ///
 /// A best-effort counterpart to [`write_resource_file_from_parts`], used
@@ -1017,6 +1075,29 @@ mod tests {
                 written.display()
             );
         }
+    }
+
+    /// An erased resource answers no row, so the remover finds the file by the uuid its stem
+    /// carries — and touches nothing else. FAILS IF the stem match is dropped (the neighbour is
+    /// removed too) or narrowed to the bare-uuid form (the decorated file survives).
+    #[test]
+    fn the_by_id_remover_finds_the_written_file_and_only_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let erased = row_titled("An Erased Resource", Uuid::now_v7());
+        let neighbour = row_titled("A Neighbour", Uuid::now_v7());
+        let gone = write_resource_file_from_parts(dir.path(), &erased, &body_only("# e\n"), None)
+            .unwrap()
+            .unwrap();
+        let kept =
+            write_resource_file_from_parts(dir.path(), &neighbour, &body_only("# n\n"), None)
+                .unwrap()
+                .unwrap();
+
+        let removed = remove_resource_files_by_id(dir.path(), erased.id).unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!gone.exists(), "the erased resource's file survived");
+        assert!(kept.exists(), "a different resource's file was removed");
     }
 
     /// `@me` is a sigil in the layout AND a possible handle, and the prune must not
