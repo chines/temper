@@ -2747,12 +2747,6 @@ impl Backend for DbBackend {
         // reads the invocation, never the resource, so running it ahead of the floor discloses
         // nothing about the resource.
         self.check_act_invocation(cmd.act.invocation).await?;
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
 
         // Auth before any write (WS2), inside the delete's own transaction (resource erasure spec
@@ -2774,6 +2768,14 @@ impl Backend for DbBackend {
         .await
         .map_err(api_err)?;
         write_floor::modify_floor_in_tx(&mut tx, self.profile_id, resource).await?;
+        // Resolved only after the floor admits: a principal the floor refuses (a read-only
+        // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
         writes::delete_resource_in_tx(&mut tx, resource, emitter, act_ctx)
             .await
             .map_err(api_err)?;
@@ -2817,12 +2819,6 @@ impl Backend for DbBackend {
                 "annotate requires at least one source (--sources)".to_owned(),
             ));
         }
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
         // Reuse the shared sources→Incorporation mapping (position → accretion seq) so annotate and
         // the body-revise `--sources` path derive seq identically.
         let sources: Vec<temper_substrate::payloads::Incorporation> = cmd
@@ -2839,6 +2835,14 @@ impl Backend for DbBackend {
         // transaction (resource erasure spec D13), so the check and the annotate cannot separate.
         let mut tx = self.pool.begin().await.map_err(api_err)?;
         write_floor::modify_floor_in_tx(&mut tx, self.profile_id, ResourceId::from(new_id)).await?;
+        // Resolved only after the floor admits: a principal the floor refuses (a read-only
+        // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+            .await
+            .map_err(api_err)?;
         writes::annotate_block_sources_in_tx(
             &mut tx,
             writes::AnnotateParams {
@@ -2874,17 +2878,19 @@ impl Backend for DbBackend {
             KindOwnerInput::Profile(id) => temper_substrate::payloads::KindOwner::Profile(id),
             KindOwnerInput::Team(id) => temper_substrate::payloads::KindOwner::Team(id),
         });
+        let act_ctx = act_context(&cmd.act);
+        // Auth before any write (WS2): the modify floor, at the head of the write's own
+        // transaction (resource erasure spec D13), so the check and the commit cannot separate.
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, cmd.resource).await?;
+        // Resolved only after the floor admits: a principal the floor refuses (a read-only
+        // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
         let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
-        let act_ctx = act_context(&cmd.act);
-        // Auth before any write (WS2): the modify floor, at the head of the write's own
-        // transaction (resource erasure spec D13), so the check and the commit cannot separate.
-        let mut tx = self.pool.begin().await.map_err(api_err)?;
-        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, cmd.resource).await?;
         let artifact_id = writes::commit_data_artifact_in_tx(
             &mut tx,
             writes::CommitDataArtifactParams {
@@ -3243,18 +3249,20 @@ impl Backend for DbBackend {
         // discloses nothing about the resource.
         self.check_act_invocation(cmd.act.invocation).await?;
 
-        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
-            .await
-            .map_err(api_err)?;
-        let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-            .await
-            .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
         let property_ids = match (cmd.property_key, cmd.owner) {
             // Resource-owned: the modify floor at the head of the write's own transaction.
             (None, PropertyOwner::Resource { id }) => {
                 let mut tx = self.pool.begin().await.map_err(api_err)?;
                 write_floor::modify_floor_in_tx(&mut tx, self.profile_id, id).await?;
+                // Resolved only after the floor admits: a principal the floor refuses (a read-only
+                // machine client has no emitter to resolve) must get the floor's 403/410, not a 500.
+                let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+                    .await
+                    .map_err(api_err)?;
+                let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+                    .await
+                    .map_err(api_err)?;
                 let property_ids = writes::set_facet_in_tx(
                     &mut tx,
                     cmd.owner,
@@ -3269,17 +3277,31 @@ impl Backend for DbBackend {
                 property_ids
             }
             // Edge-owned: gated by `check_edge_mutable` above.
-            (None, PropertyOwner::Edge { .. }) => writes::set_facet_with(
-                &self.pool,
-                cmd.owner,
-                &cmd.values,
-                cmd.weight,
-                emitter,
-                act_ctx,
-            )
-            .await
-            .map_err(map_facet_write_err)?,
+            (None, PropertyOwner::Edge { .. }) => {
+                let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+                    .await
+                    .map_err(api_err)?;
+                let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+                    .await
+                    .map_err(api_err)?;
+                writes::set_facet_with(
+                    &self.pool,
+                    cmd.owner,
+                    &cmd.values,
+                    cmd.weight,
+                    emitter,
+                    act_ctx,
+                )
+                .await
+                .map_err(map_facet_write_err)?
+            }
             (Some(key), _) => {
+                let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+                    .await
+                    .map_err(api_err)?;
+                let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
+                    .await
+                    .map_err(api_err)?;
                 let id = writes::assert_keyed_property_with(
                     &self.pool,
                     cmd.owner,

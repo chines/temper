@@ -23,6 +23,22 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **Resource erasure 2c: write doors refuse an erased resource with `410 RESOURCE_ERASED`, checked inside the write**
+  `PATCH /api/resources/{id}`, `PUT /api/resources/{id}/meta`, `PUT /api/ingest/{id}`,
+  `DELETE /api/resources/{id}`, `POST /api/resources/{id}/provenance`,
+  `POST /api/resources/{id}/artifacts` and `POST /api/facets` (resource owner) check the caller's
+  right to modify inside the write's own transaction, under a row lock, so a write racing an
+  erasure or a soft delete either lands before it or is refused after it. A caller who holds
+  standing on an erased resource (`resource_husk_held_by`, the read side's population) now gets
+  `410 RESOURCE_ERASED` where it got `403`; every other caller keeps `403`, and a soft-deleted
+  resource keeps `403`. A `PATCH` that sets a goal the caller may not link is now refused as a
+  whole: the title and body no longer land without the goal. Who observes: the owner or a grant
+  holder of an erased resource; a caller whose goal link is refused. User-visible: yes. Release
+  relevance: signal-only.
+pr: self
+classes: behavioral
+surfaces: http,mcp
+status: signal-only
 - **Resource erasure 2b PR 2: an erased resource reads as `410 RESOURCE_ERASED` to a caller with standing; the operator erasure doors**
   `GET /api/resources/{id}`, `/content` and `/meta` (which composes from the same read) gain a
   `410` under the new code `RESOURCE_ERASED`, with a fixed message
