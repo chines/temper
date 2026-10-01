@@ -910,8 +910,8 @@ impl DbBackend {
     /// `profile_explicit_grant(...,'write','kb_cogmaps',...)` — cogmaps have no owner, so authority is
     /// wholly explicit). Three callers: the create-into-cogmap gate (F1), `invocation_open` (every
     /// open, delegated or not — see that method's note on why F2's read gate for delegated opens was
-    /// amended), and [`Self::check_container_authorable`]'s `kb_cogmaps` arm, which is how the edge
-    /// verbs reach it.
+    /// amended), and [`Self::check_container_authorable_in_tx`]'s `kb_cogmaps` arm, which is how
+    /// the edge verbs reach it.
     ///
     /// F1 was written as *belt-and-suspenders behind* pre-checks on the MCP create tool and the HTTP
     /// ingest handler. **Those pre-checks are gone** — holding a bare `bool`, neither could carry the
@@ -1074,11 +1074,29 @@ impl DbBackend {
     ///
     /// **Clause ORDER is load-bearing, not cosmetic.** Target-read runs last, exactly as it does in
     /// [`Self::assert_edge_from_source_home`], because it is the only clause that renders
-    /// `NotFound` instead of `Forbidden` (see [`Self::check_endpoint_readable`] — a caller who
+    /// `NotFound` instead of `Forbidden` (see [`Self::check_endpoint_readable_in_tx`] — a caller who
     /// cannot read an endpoint must not learn it exists). Running it first would convert every
     /// container-write refusal into a 404 and destroy the distinction `Forbidden` carries for a
     /// caller who legitimately sees the edge but may not author into its home.
-    async fn check_edge_mutable(&self, edge_id: uuid::Uuid) -> Result<(), TemperError> {
+    ///
+    /// **Runs on the edge write's own transaction** (`conn`; resource erasure spec D13). Clause 1's
+    /// resource-source arm is the write floor ([`write_floor::modify_floor_in_tx`]), whose
+    /// `FOR KEY SHARE` on the source row holds until the caller commits, so the gate and the edge
+    /// write cannot separate. Every caller opens the transaction, calls this first, and writes
+    /// through an `_in_tx` variant on the same transaction.
+    ///
+    /// **The erased classification reaches the SOURCE only** — the resource the caller would
+    /// modify. An erased or tombstoned TARGET stays clause 3's `NotFound`: the caller is not
+    /// writing the target. In practice an erased endpoint on either side is not reached at all:
+    /// the erasure act folds every live edge touching the erased resource
+    /// (`resource_erasure_execute`, latest body `20260930000070`), so such an edge answers this
+    /// gate's `NOT is_folded` lookup `NotFound` before any clause runs. The floor's erased
+    /// answer is reachable here only by a write that raced the act and waited on its lock.
+    async fn check_edge_mutable(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        edge_id: uuid::Uuid,
+    ) -> Result<(), TemperError> {
         let home = sqlx::query!(
             "SELECT source_table, source_id, target_table, target_id, home_anchor_table, \
                     home_anchor_id \
@@ -1086,7 +1104,7 @@ impl DbBackend {
              WHERE id = $1 AND NOT is_folded",
             edge_id,
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *conn)
         .await
         .map_err(api_err)?
         .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))?;
@@ -1117,7 +1135,7 @@ impl DbBackend {
                     *self.profile_id,
                     home.source_id,
                 )
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(api_err)?;
                 if !live_and_readable.unwrap_or(false) {
@@ -1127,7 +1145,16 @@ impl DbBackend {
                     return Err(TemperError::NotFound(format!("edge {edge_id} not found")));
                 }
             }
-            "kb_resources" => self.check_can_modify_next(home.source_id).await?,
+            // The write floor on the source, under its row lock in this transaction: 410 to a
+            // holder of an erased husk, 403 to everyone else (and to a tombstone's owner).
+            "kb_resources" => {
+                write_floor::modify_floor_in_tx(
+                    &mut *conn,
+                    self.profile_id,
+                    ResourceId::from(home.source_id),
+                )
+                .await?
+            }
             "kb_blobs" => {
                 let live_and_readable: Option<bool> = sqlx::query_scalar!(
                     r#"SELECT (NOT b.is_folded AND blob_readable_by_profile($1, b.id)) AS "ok!"
@@ -1136,7 +1163,7 @@ impl DbBackend {
                     *self.profile_id,
                     home.source_id,
                 )
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(api_err)?;
                 if !live_and_readable.unwrap_or(false) {
@@ -1157,7 +1184,7 @@ impl DbBackend {
                     *self.profile_id,
                     home.source_id,
                 )
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *conn)
                 .await
                 .map_err(api_err)?;
                 if !live_and_readable.unwrap_or(false) {
@@ -1169,27 +1196,21 @@ impl DbBackend {
             }
             _ => return Err(TemperError::Forbidden),
         }
-        self.check_container_authorable(&home.home_anchor_table, home.home_anchor_id)
-            .await?;
-        self.check_endpoint_readable(&home.target_table, home.target_id)
+        self.check_container_authorable_in_tx(
+            &mut *conn,
+            &home.home_anchor_table,
+            home.home_anchor_id,
+        )
+        .await?;
+        self.check_endpoint_readable_in_tx(&mut *conn, &home.target_table, home.target_id)
             .await
     }
 
     /// Container-write gate for an **anchor of either kind** — the arm-dispatching wrapper over
-    /// [`Self::check_context_authorable`] / [`Self::check_cogmap_authorable`]. Used where the anchor
-    /// kind is data (an edge's home, read from a row) rather than a static branch in the code.
-    async fn check_container_authorable(
-        &self,
-        anchor_table: &str,
-        anchor_id: uuid::Uuid,
-    ) -> Result<(), TemperError> {
-        let mut conn = self.pool.acquire().await.map_err(api_err)?;
-        self.check_container_authorable_in_tx(&mut conn, anchor_table, anchor_id)
-            .await
-    }
-
-    /// [`Self::check_container_authorable`] on a caller-supplied connection — the one definition;
-    /// the pool form delegates here (see [`Self::check_cogmap_authorable_in_tx`] for why).
+    /// [`Self::check_context_authorable_in_tx`] / [`Self::check_cogmap_authorable_in_tx`]. Used where
+    /// the anchor kind is data (an edge's home, read from a row) rather than a static branch in the
+    /// code. On a caller-supplied connection only: every caller is an edge write gating inside its
+    /// own transaction (see [`Self::check_cogmap_authorable_in_tx`] for why), so no pool form exists.
     async fn check_container_authorable_in_tx(
         &self,
         conn: &mut sqlx::PgConnection,
@@ -1206,16 +1227,9 @@ impl DbBackend {
         }
     }
 
-    /// **F-1, target clause** — the caller must be able to READ an edge's target endpoint.
-    ///
-    /// `endpoint_readable_by_profile` is the incumbent predicate for exactly this question: it is
-    /// what `edges_visible_to` applies to both endpoints, and what the lineage reader and the two
-    /// admin firewalls use. Calling it (rather than restating "is the target visible") keeps edge
-    /// *authorship* and edge *visibility* answering to one definition — otherwise a caller could
-    /// author an edge that the same rules then hide from them.
     /// Is this goal linkable by the caller — i.e. does it exist and can they read it?
     ///
-    /// Same predicate as [`Self::check_endpoint_readable`], run EARLY so a bad `--goal` fails
+    /// Same predicate as [`Self::check_endpoint_readable_in_tx`], run EARLY so a bad `--goal` fails
     /// before any write, and carrying a message that names the goal. The generic form renders
     /// `kb_resources <uuid> not found`, which tells a caller neither which of their two ids was
     /// the problem nor that the failure was about the goal at all — the observed text was a
@@ -1243,18 +1257,20 @@ impl DbBackend {
         }
     }
 
-    async fn check_endpoint_readable(
-        &self,
-        endpoint_table: &str,
-        endpoint_id: uuid::Uuid,
-    ) -> Result<(), TemperError> {
-        let mut conn = self.pool.acquire().await.map_err(api_err)?;
-        self.check_endpoint_readable_in_tx(&mut conn, endpoint_table, endpoint_id)
-            .await
-    }
-
-    /// [`Self::check_endpoint_readable`] on a caller-supplied connection — the one definition; the
-    /// pool form delegates here (see [`Self::check_cogmap_authorable_in_tx`] for why).
+    /// **F-1, target clause** — the caller must be able to READ an edge's target endpoint.
+    ///
+    /// `endpoint_readable_by_profile` is the incumbent predicate for exactly this question: it is
+    /// what `edges_visible_to` applies to both endpoints, and what the lineage reader and the two
+    /// admin firewalls use. Calling it (rather than restating "is the target visible") keeps edge
+    /// *authorship* and edge *visibility* answering to one definition — otherwise a caller could
+    /// author an edge that the same rules then hide from them.
+    ///
+    /// An erased or tombstoned target answers `NotFound` here, never the write floor's `410`: the
+    /// predicate's read floor (`resources_visible_to` joins `kb_resources.is_active`) hides it, and
+    /// the caller is not writing the target, so the erased classification does not apply to it.
+    ///
+    /// On a caller-supplied connection only: every caller is an edge write gating inside its own
+    /// transaction (see [`Self::check_cogmap_authorable_in_tx`] for why), so no pool form exists.
     async fn check_endpoint_readable_in_tx(
         &self,
         conn: &mut sqlx::PgConnection,
@@ -1339,10 +1355,16 @@ impl DbBackend {
         // review's finding, task 01a06f5c). Auth before any write (F-1). See this
         // function's doc for why all three clauses exist and why clause 1 is not redundant
         // despite clause 2 subsuming its non-tombstone arms.
-        self.check_can_modify_next(edge.src).await?;
-
-        // Clauses 2 and 3 and the write, in one transaction of their own.
+        //
+        // Clause 1 is the write floor at the head of the edge write's own transaction (resource
+        // erasure spec D13): its `FOR KEY SHARE` on the source holds to commit, so the source
+        // cannot be erased or tombstoned between the check and the edge. Its deny is classified:
+        // 410 to a holder of an erased source, 403 to everyone else — the same bare refusal for an
+        // absent source and an unauthorized one, so the order's oracle argument is unchanged.
         let mut tx = self.pool.begin().await.map_err(api_err)?;
+        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, ResourceId::from(edge.src))
+            .await?;
+        // Clauses 2 and 3 and the write, on the same transaction.
         let edge_id = self
             .assert_edge_from_source_home_in_tx(&mut tx, edge, act_ctx)
             .await?;
@@ -1354,15 +1376,15 @@ impl DbBackend {
     /// clause 2 (container-write on the source's resolved home), clause 3 (the target is readable)
     /// and the edge write, all on `conn`.
     ///
-    /// **The caller owns clause 1** and must have run it on the same source before calling this.
-    /// Two callers: the pool form above, which runs `check_can_modify_next` on the pool ahead of
-    /// the transaction it opens, and `update_resource`'s goal-set, which floors the resource
-    /// it updates — the same id this edge's source is — through
-    /// [`write_floor::modify_floor_in_tx`] at the head of the transaction. That floor's
-    /// `FOR KEY SHARE` is held until the transaction ends, so the source cannot be erased under
-    /// the edge; running clause 1 a second time inside it would re-ask a question the lock already
-    /// pins. The home is read on `conn`, so a re-home earlier in the same transaction is the home
-    /// this edge is authorized against and written to.
+    /// **The caller owns clause 1** and must have run it on the same source, on the same
+    /// transaction, before calling this. Every caller runs it as [`write_floor::modify_floor_in_tx`]
+    /// at the head of its transaction: the pool form above; `Backend::assert_relationship`, which
+    /// opens its own transaction so the emitter resolves only after the floor admits; and
+    /// `update_resource`'s goal-set, which floors the resource it updates — the same id this
+    /// edge's source is. That floor's `FOR KEY SHARE` is held until the transaction ends, so the
+    /// source cannot be erased under the edge; running clause 1 a second time inside it would
+    /// re-ask a question the lock already pins. The home is read on `conn`, so a re-home earlier in
+    /// the same transaction is the home this edge is authorized against and written to.
     async fn assert_edge_from_source_home_in_tx(
         &self,
         conn: &mut sqlx::PgConnection,
@@ -2953,30 +2975,41 @@ impl Backend for DbBackend {
         // — used directly, no origin_uri remap (the prior bimap collapsed empty-origin_uri resources
         // onto one arbitrary id).
         let src_next = uuid::Uuid::from(cmd.source);
-        // Auth before any write (WS2) lives in `assert_edge_from_source_home` below, which owns all
-        // three edge-creation clauses (source modify + container write + target read, F-1). It is
-        // NOT duplicated here on purpose: the source check alone was this command's entire gate
-        // before F-1, and leaving a copy behind would leave two places to keep in step while only
-        // one of them is reached by the goal-edge projections.
+        // Auth before any write (WS2) is the three edge-creation clauses (source modify + container
+        // write + target read, F-1), below: clause 1 is the write floor this door runs at the head
+        // of its transaction (the same call `assert_edge_from_source_home` makes), clauses 2 and 3
+        // live in `assert_edge_from_source_home_in_tx`, shared with the goal-edge projections. They
+        // are not restated here.
         //
         // Correlation-integrity gate — additive to that authz, never a substitute. It runs first
         // because it validates the act envelope rather than the subject, and it writes nothing.
         self.check_act_invocation(cmd.act.invocation).await?;
 
         let tgt_next = uuid::Uuid::from(cmd.target);
+        let act_ctx = act_context(&cmd.act);
 
+        // Clause 1 — the write floor on the SOURCE — at the head of the edge write's own
+        // transaction (resource erasure spec D13), exactly as `assert_edge_from_source_home` runs
+        // it. This door opens the transaction itself rather than calling that pool form because
+        // the edge carries the caller's emitter, and the emitter is resolved only after the floor
+        // admits: a principal the floor refuses (a read-only machine client has no emitter to
+        // resolve) must get the floor's 403/410, not a 500.
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        write_floor::modify_floor_in_tx(&mut tx, self.profile_id, ResourceId::from(src_next))
+            .await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
         let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
             .await
             .map_err(api_err)?;
-        let act_ctx = act_context(&cmd.act);
         // Home-detect + kernel-vs-context branch is shared with the create/update goal-edge
-        // projection via `assert_edge_from_source_home`, which is also where this command's
-        // authorization now lives (F-1).
+        // projection via `assert_edge_from_source_home_in_tx`, which owns clauses 2 and 3 (F-1):
+        // container-write on the source's home, then the TARGET's read floor — an erased or
+        // tombstoned target stays that clause's 404, never the source floor's 410.
         let edge = self
-            .assert_edge_from_source_home(
+            .assert_edge_from_source_home_in_tx(
+                &mut tx,
                 SourceHomedEdge {
                     src: src_next,
                     tgt: tgt_next,
@@ -2990,6 +3023,7 @@ impl Backend for DbBackend {
                 act_ctx,
             )
             .await?;
+        tx.commit().await.map_err(api_err)?;
         Ok(CommandOutput::new(edge))
     }
 
@@ -3001,10 +3035,15 @@ impl Backend for DbBackend {
         // The edge handle on the substrate backend IS the substrate edge id (returned by assert).
         let handle = uuid::Uuid::from(cmd.edge_handle);
         // Auth before any write (WS2): the edge's source resource AND container-write on the edge's
-        // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`.
-        self.check_edge_mutable(handle).await?;
+        // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`. It
+        // runs at the head of the write's own transaction, so the source's write floor holds its
+        // row lock until the retype commits (resource erasure spec D13).
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        self.check_edge_mutable(&mut tx, handle).await?;
         // Correlation-integrity gate — additive to the modify authz above, before the write.
         self.check_act_invocation(cmd.act.invocation).await?;
+        // Resolved only after the gate admits: a principal it refuses (a read-only machine client
+        // has no emitter to resolve) must get the gate's answer, not a 500.
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -3012,8 +3051,8 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
-        writes::retype_relationship_with(
-            &self.pool,
+        writes::retype_relationship_in_tx(
+            &mut tx,
             EdgeId::from(handle),
             map_edge_kind(cmd.edge_kind),
             map_polarity(cmd.polarity),
@@ -3022,6 +3061,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(api_err)?;
+        tx.commit().await.map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
@@ -3032,10 +3072,13 @@ impl Backend for DbBackend {
     ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
         let handle = uuid::Uuid::from(cmd.edge_handle);
         // Auth before any write (WS2): the edge's source resource AND container-write on the edge's
-        // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`.
-        self.check_edge_mutable(handle).await?;
+        // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`. It
+        // runs at the head of the write's own transaction (resource erasure spec D13).
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        self.check_edge_mutable(&mut tx, handle).await?;
         // Correlation-integrity gate — additive to the modify authz above, before the write.
         self.check_act_invocation(cmd.act.invocation).await?;
+        // Resolved only after the gate admits (see `retype_relationship`).
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -3043,8 +3086,8 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
-        writes::reweight_relationship_with(
-            &self.pool,
+        writes::reweight_relationship_in_tx(
+            &mut tx,
             EdgeId::from(handle),
             cmd.weight,
             emitter,
@@ -3052,6 +3095,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(api_err)?;
+        tx.commit().await.map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
@@ -3062,10 +3106,13 @@ impl Backend for DbBackend {
     ) -> Result<CommandOutput<temper_core::types::ids::EdgeId>, TemperError> {
         let handle = uuid::Uuid::from(cmd.edge_handle);
         // Auth before any write (WS2): the edge's source resource AND container-write on the edge's
-        // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`.
-        self.check_edge_mutable(handle).await?;
+        // home — the same clauses that governed asserting it (F-1). See `check_edge_mutable`. It
+        // runs at the head of the write's own transaction (resource erasure spec D13).
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        self.check_edge_mutable(&mut tx, handle).await?;
         // Correlation-integrity gate — additive to the modify-source authz above.
         self.check_act_invocation(cmd.act.invocation).await?;
+        // Resolved only after the gate admits (see `retype_relationship`).
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -3073,8 +3120,8 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
-        writes::fold_relationship_with(
-            &self.pool,
+        writes::fold_relationship_in_tx(
+            &mut tx,
             EdgeId::from(handle),
             cmd.reason.as_deref(),
             emitter,
@@ -3082,6 +3129,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(api_err)?;
+        tx.commit().await.map_err(api_err)?;
         Ok(CommandOutput::new(cmd.edge_handle))
     }
 
@@ -3243,11 +3291,13 @@ impl Backend for DbBackend {
         // clauses is what keeps facet-writing an edge and re-typing one answering to one
         // definition — otherwise a caller could facet an edge they may not otherwise touch.
         //
-        // The resource arm's modify floor runs INSIDE the write's transaction, below (resource
-        // erasure spec D13), so the check and the facet cannot separate; only the shape refusal
-        // runs here, and it reads nothing.
-        match cmd.owner {
-            PropertyOwner::Resource { .. } => {
+        // Both arms gate INSIDE the write's own transaction (resource erasure spec D13), so the
+        // check and the facet cannot separate: the resource arm through the modify floor, the
+        // edge arm through `check_edge_mutable`, whose resource-source clause is that same floor.
+        // Ahead of either, only the shape refusal runs, and it reads nothing.
+        let act_ctx = act_context(&cmd.act);
+        let property_ids = match cmd.owner {
+            PropertyOwner::Resource { id } => {
                 if cmd.property_key.is_some() {
                     return Err(TemperError::BadRequest(
                         "a keyed property write qualifies a relationship, not a resource; \
@@ -3255,26 +3305,10 @@ impl Backend for DbBackend {
                             .to_string(),
                     ));
                 }
-            }
-            PropertyOwner::Edge { id } => {
-                self.check_edge_mutable(uuid::Uuid::from(id)).await?;
-                self.validate_keyed_edge_write(
-                    uuid::Uuid::from(id),
-                    cmd.property_key.as_deref(),
-                    &cmd.values,
-                )
-                .await?;
-            }
-        }
-        // Correlation-integrity gate — additive to the authz, before the write. It reads the
-        // invocation, never the owner, so on the resource arm running it ahead of the floor
-        // discloses nothing about the resource.
-        self.check_act_invocation(cmd.act.invocation).await?;
-
-        let act_ctx = act_context(&cmd.act);
-        let property_ids = match (cmd.property_key, cmd.owner) {
-            // Resource-owned: the modify floor at the head of the write's own transaction.
-            (None, PropertyOwner::Resource { id }) => {
+                // Correlation-integrity gate — additive to the authz, before the write. It reads
+                // the invocation, never the resource, so running it ahead of the floor discloses
+                // nothing about the resource.
+                self.check_act_invocation(cmd.act.invocation).await?;
                 let mut tx = self.pool.begin().await.map_err(api_err)?;
                 write_floor::modify_floor_in_tx(&mut tx, self.profile_id, id).await?;
                 // Resolved only after the floor admits: a principal the floor refuses (a read-only
@@ -3298,44 +3332,53 @@ impl Backend for DbBackend {
                 tx.commit().await.map_err(api_err)?;
                 property_ids
             }
-            // Edge-owned: gated by `check_edge_mutable` above.
-            (None, PropertyOwner::Edge { .. }) => {
+            PropertyOwner::Edge { id } => {
+                let mut tx = self.pool.begin().await.map_err(api_err)?;
+                self.check_edge_mutable(&mut tx, uuid::Uuid::from(id))
+                    .await?;
+                self.validate_keyed_edge_write(
+                    uuid::Uuid::from(id),
+                    cmd.property_key.as_deref(),
+                    &cmd.values,
+                )
+                .await?;
+                // Correlation-integrity gate — additive to the authz, before the write.
+                self.check_act_invocation(cmd.act.invocation).await?;
+                // Resolved only after the gate admits (see the resource arm).
                 let owner = writes::resolve_profile(&self.pool, *self.profile_id)
                     .await
                     .map_err(api_err)?;
                 let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
                     .await
                     .map_err(api_err)?;
-                writes::set_facet_with(
-                    &self.pool,
-                    cmd.owner,
-                    &cmd.values,
-                    cmd.weight,
-                    emitter,
-                    act_ctx,
-                )
-                .await
-                .map_err(map_facet_write_err)?
-            }
-            (Some(key), _) => {
-                let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+                let property_ids = match cmd.property_key {
+                    None => writes::set_facet_in_tx(
+                        &mut tx,
+                        cmd.owner,
+                        &cmd.values,
+                        cmd.weight,
+                        emitter,
+                        act_ctx,
+                    )
                     .await
-                    .map_err(api_err)?;
-                let emitter = writes::resolve_emitter(&self.pool, owner, cmd.origin.marker())
-                    .await
-                    .map_err(api_err)?;
-                let id = writes::assert_keyed_property_with(
-                    &self.pool,
-                    cmd.owner,
-                    &key,
-                    &cmd.values,
-                    cmd.weight,
-                    emitter,
-                    act_ctx,
-                )
-                .await
-                .map_err(map_keyed_facet_write_err)?;
-                vec![id]
+                    .map_err(map_facet_write_err)?,
+                    Some(key) => {
+                        let id = writes::assert_keyed_property_in_tx(
+                            &mut tx,
+                            cmd.owner,
+                            &key,
+                            &cmd.values,
+                            cmd.weight,
+                            emitter,
+                            act_ctx,
+                        )
+                        .await
+                        .map_err(map_keyed_facet_write_err)?;
+                        vec![id]
+                    }
+                };
+                tx.commit().await.map_err(api_err)?;
+                property_ids
             }
         };
         Ok(CommandOutput::new(property_ids))
@@ -3360,10 +3403,14 @@ impl Backend for DbBackend {
     ) -> Result<CommandOutput<temper_core::types::ids::PropertyId>, TemperError> {
         let handle = uuid::Uuid::from(cmd.edge_handle);
         // Auth before any write (WS2) — the same clauses that governed asserting the row
-        // (F-1). See `check_edge_mutable`.
-        self.check_edge_mutable(handle).await?;
+        // (F-1). See `check_edge_mutable`. It runs at the head of the retract's own transaction
+        // (resource erasure spec D13), so the source's write floor holds to commit.
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        self.check_edge_mutable(&mut tx, handle).await?;
         // Correlation-integrity gate — additive to the modify authz above, before the write.
         self.check_act_invocation(cmd.act.invocation).await?;
+        // Resolved only after the gate admits: a principal it refuses (a read-only machine client
+        // has no emitter to resolve) must get the gate's answer, not a 500.
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -3371,8 +3418,8 @@ impl Backend for DbBackend {
             .await
             .map_err(api_err)?;
         let act_ctx = act_context(&cmd.act);
-        let retracted = writes::retract_property_with(
-            &self.pool,
+        let retracted = writes::retract_property_in_tx(
+            &mut tx,
             temper_core::types::ids::EdgeId::from(handle),
             cmd.property_id,
             emitter,
@@ -3380,6 +3427,7 @@ impl Backend for DbBackend {
         )
         .await
         .map_err(write_err)?;
+        tx.commit().await.map_err(api_err)?;
         Ok(CommandOutput::new(retracted))
     }
 

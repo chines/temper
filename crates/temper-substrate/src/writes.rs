@@ -2490,6 +2490,23 @@ pub async fn assert_keyed_property_with(
     ctx: EventContext,
 ) -> Result<PropertyId> {
     let mut tx = begin_scoped(pool).await?;
+    let id = assert_keyed_property_in_tx(&mut tx, owner, key, value, weight, emitter, ctx).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// In-transaction variant of [`assert_keyed_property_with`] — the liveness pre-check and the fire
+/// on a caller-supplied connection (no begin/commit), so a caller can run it behind a check in the
+/// same transaction. An ack (a live row already holds the exact address) writes nothing.
+pub async fn assert_keyed_property_in_tx(
+    conn: &mut sqlx::PgConnection,
+    owner: PropertyOwner,
+    key: &str,
+    value: &serde_json::Value,
+    weight: f64,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<PropertyId> {
     let acked: Option<Uuid> = sqlx::query_scalar!(
         "SELECT id FROM kb_properties \
           WHERE owner_table = $1 AND owner_id = $2 AND property_key = $3 \
@@ -2499,14 +2516,13 @@ pub async fn assert_keyed_property_with(
         key,
         value,
     )
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut *conn)
     .await?;
     if let Some(existing) = acked {
-        tx.commit().await?;
         return Ok(PropertyId::from(existing));
     }
     let ids = fire_with(
-        &mut tx,
+        conn,
         SeedAction::KeyedPropertyAssert {
             owner,
             key,
@@ -2522,7 +2538,6 @@ pub async fn assert_keyed_property_with(
         .into_iter()
         .next()
         .context("keyed property assert returned no row id")?;
-    tx.commit().await?;
     Ok(id)
 }
 
@@ -2539,8 +2554,23 @@ pub async fn retract_property_with(
     ctx: EventContext,
 ) -> Result<PropertyId> {
     let mut tx = begin_scoped(pool).await?;
-    let retracted = fire_with(
-        &mut tx,
+    let retracted = retract_property_in_tx(&mut tx, edge, property_id, emitter, ctx).await?;
+    tx.commit().await?;
+    Ok(retracted)
+}
+
+/// In-transaction variant of [`retract_property_with`] — fires on a caller-supplied connection (no
+/// begin/commit). A refusal ([`PropertyRetractError`]) appends no ledger event once the caller's
+/// transaction rolls back.
+pub async fn retract_property_in_tx(
+    conn: &mut sqlx::PgConnection,
+    edge: EdgeId,
+    property_id: PropertyId,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<PropertyId> {
+    fire_with(
+        conn,
         SeedAction::PropertyRetract {
             edge,
             property_id,
@@ -2549,9 +2579,7 @@ pub async fn retract_property_with(
         ctx,
     )
     .await?
-    .property_retract()?;
-    tx.commit().await?;
-    Ok(retracted)
+    .property_retract()
 }
 
 /// Set a single-valued **per-key** property — folds prior active `(owner, key)` rows then asserts the
@@ -2820,8 +2848,23 @@ pub async fn retype_relationship_with(
     ctx: EventContext,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    retype_relationship_in_tx(&mut tx, edge, kind, polarity, emitter, ctx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`retype_relationship`] — fires on a caller-supplied connection (no
+/// begin/commit). `ctx` correlates the `relationship_retyped` act.
+pub async fn retype_relationship_in_tx(
+    conn: &mut sqlx::PgConnection,
+    edge: EdgeId,
+    kind: EdgeKind,
+    polarity: EdgePolarity,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     fire_with(
-        &mut tx,
+        conn,
         SeedAction::RelationshipRetype {
             edge,
             kind,
@@ -2831,7 +2874,6 @@ pub async fn retype_relationship_with(
         ctx,
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -2854,8 +2896,22 @@ pub async fn reweight_relationship_with(
     ctx: EventContext,
 ) -> Result<()> {
     let mut tx = begin_scoped(pool).await?;
+    reweight_relationship_in_tx(&mut tx, edge, weight, emitter, ctx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant of [`reweight_relationship`] — fires on a caller-supplied connection (no
+/// begin/commit). `ctx` correlates the `relationship_reweighted` act.
+pub async fn reweight_relationship_in_tx(
+    conn: &mut sqlx::PgConnection,
+    edge: EdgeId,
+    weight: f64,
+    emitter: EntityId,
+    ctx: EventContext,
+) -> Result<()> {
     fire_with(
-        &mut tx,
+        conn,
         SeedAction::RelationshipReweight {
             edge,
             weight,
@@ -2864,7 +2920,6 @@ pub async fn reweight_relationship_with(
         ctx,
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 

@@ -10,10 +10,11 @@
 
 use sqlx::PgPool;
 use temper_substrate::ids::EntityId;
-use temper_substrate::payloads::RefTarget;
+use temper_substrate::payloads::{AnchorTable, RefTarget};
 use uuid::Uuid;
 
 use crate::auth::{AuthenticatedProfile, SystemAdmin};
+use crate::backend::substrate_read::husk_held_by;
 // In scope so `GrantAuthority::resolve` — the grant-administration gate, which lives as this
 // enum's `ScopedAuthority` impl in `authz/grant.rs` — is callable here.
 use crate::authz::{Principal, ScopedAuthority};
@@ -28,7 +29,7 @@ use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
     GrantCapabilityRequest, GrantOutcome, RevokeCapabilityRequest, RevokeOutcome,
 };
-use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
 use temper_core::types::team::{TeamMemberRow, TeamRole};
 
 use crate::error::{ApiError, ApiResult};
@@ -360,6 +361,32 @@ pub(crate) async fn delete_grant(
     .await?)
 }
 
+/// The grant doors' refusal on a `kb_resources` subject, classified as every resource write door's
+/// is (resource erasure plan 2c, ruling 1): [`ApiError::ResourceErased`] (`410 RESOURCE_ERASED`)
+/// when the subject is an erased husk `caller` holds standing on (`resource_husk_held_by`,
+/// migration `20260930000060`, through the one probe `substrate_read::husk_held_by`), else the
+/// refusal unchanged. Only the uniform `Forbidden` is classified — a husk is refused on every
+/// authority arm (the delegated arm by `can()`'s subject-liveness floor, migration
+/// `20260902000010`; the admin arm by `GrantAuthority::resolve`'s), so that is the answer a husk
+/// arrives as. Any other subject kind, and any other refusal, passes through. Runs on the deny path
+/// only, so an admitted grant pays nothing.
+async fn erased_or_refused(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject: RefTarget,
+    refusal: ApiError,
+) -> ApiError {
+    if subject.kind != AnchorTable::Resources || !matches!(refusal, ApiError::Forbidden) {
+        return refusal;
+    }
+    let id = ResourceId::from(subject.id);
+    match husk_held_by(pool, caller, id).await {
+        Ok(true) => ApiError::ResourceErased(id),
+        Ok(false) => refusal,
+        Err(e) => ApiError::from(e),
+    }
+}
+
 /// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
 /// (`write|delete|grant ⇒ read`) is the integrity backstop. Idempotent upsert — `granted=false` when
 /// the row already existed and was updated in place.
@@ -376,7 +403,11 @@ pub async fn grant_capability(
     let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
         .ok_or(ApiError::Forbidden)?;
     let proof =
-        authorize_capability_grant(pool, Principal::Proof(authed), subject, req.into()).await?;
+        match authorize_capability_grant(pool, Principal::Proof(authed), subject, req.into()).await
+        {
+            Ok(proof) => proof,
+            Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
+        };
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
@@ -417,7 +448,12 @@ pub async fn revoke_capability(
     // its warrant. Deliberately NOT `authorize_capability_grant`: that adds attenuation, and
     // attenuating a revocation is what would make a grant unwithdrawable.
     let proof =
-        crate::authz::authorize::<GrantAuthority>(pool, Principal::Proof(authed), subject).await?;
+        match crate::authz::authorize::<GrantAuthority>(pool, Principal::Proof(authed), subject)
+            .await
+        {
+            Ok(proof) => proof,
+            Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
+        };
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;

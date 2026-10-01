@@ -40,9 +40,19 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   `denied` row. A segmented ingest that replays an idempotency key onto a since-deleted resource
   now gets `403` (the write side's deny) where it got `404`. A principal with no emitter to
   resolve (a read-only machine client) is refused by the gate (`403`) on create and on these
-  doors, where it got `500`. Who observes: the owner or a grant
-  holder of an erased resource; a caller whose goal link is refused. User-visible: yes. Release
-  relevance: signal-only.
+  doors, where it got `500`. The relationship doors (`POST /api/relationships`, `.../retype`,
+  `.../reweight`, `.../fold`, `POST` and `DELETE` on `.../facets`) check the SOURCE resource the
+  same way, inside the edge write's transaction; an erased or deleted TARGET keeps its `404`, and an
+  edge that touched a since-erased resource was folded by the erasure and keeps answering `404`.
+  `POST /api/resources/{id}/reassign` refuses a deleted or erased resource (`403`, or `410` to its
+  owner when erased) where it moved it; `POST /api/teams/{id}/reassign` skips such a resource,
+  leaving it with its owner and out of the returned `resource_ids`, where it moved it.
+  `POST`/`DELETE /api/resources/{id}/grants` refuse a system admin on a deleted or erased
+  resource (`403`) where they admitted one, and answer a refused holder of an erased resource
+  `410`. Who observes: the owner or a grant
+  holder of an erased resource; a caller whose goal link is refused; a team admin reassigning a
+  departing member's resources; a system admin granting on a deleted resource. User-visible: yes.
+  Release relevance: signal-only.
 pr: self
 classes: behavioral
 surfaces: http,mcp

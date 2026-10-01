@@ -5,8 +5,9 @@
 //! the read side's — `resource_husk_held_by`, migration `20260930000060` — so a write never answers
 //! an erasure to a caller the read would not.
 //!
-//! Witnessed on every resource-row write door that floors on `can_modify_resource`, driven from
-//! one table ([`doors`]) so a new door is one row:
+//! Witnessed on every resource-row write door that floors on `can_modify_resource` (an edge
+//! assert floors its SOURCE), plus the grant door, whose every authority arm refuses a dead
+//! subject — driven from one table ([`doors`]) so a new door is one row:
 //!
 //! * the owner of a husk gets `410` + `RESOURCE_ERASED`;
 //! * a direct read-grant holder (who could never write it) gets the same `410`;
@@ -20,6 +21,21 @@
 //! Plus the reblock batch (`POST /api/resources/reblock`), which floors per candidate and never
 //! answers an erasure inside its `200`: an addressed erased id answers `404` (the candidate read
 //! filters `is_active`), and a candidate erased between that read and its floor is a `denied` row.
+//!
+//! Plus the doors whose answer on an erased id is not the table's shape, each pinned on its own:
+//!
+//! * the edge-mutate doors (retype, reweight, fold, edge facet set and retract) on an edge that
+//!   touched an erased resource answer `404` to everyone — the erasure act folded the edge, and
+//!   the gate's `NOT is_folded` lookup refuses it before any clause runs; on an edge whose SOURCE
+//!   is merely deleted (a delete folds nothing) they answer its owner the floor's `403`;
+//! * an edge assert whose TARGET is erased answers the source's owner `404`, never `410` — the
+//!   erased classification reaches only the resource the caller would modify;
+//! * blob relate refuses an erased or deleted resource peer `404` (the peer read floor);
+//! * single reassign answers the owner of a husk `410` and a read-grant holder `403` (the
+//!   authority gate — owner or admin reach — runs first); a team reassign skips a husk and a
+//!   tombstone instead of failing the run;
+//! * a system admin is refused a grant on a tombstone (`403`) and answered `410` on a husk they
+//!   hold.
 //!
 //! Every state is made by a real door: the resource by `POST /api/ingest`, the grant by
 //! `POST /api/resources/{id}/grants`, the husk by the operator door
@@ -316,6 +332,39 @@ fn doors(resource: Uuid) -> Vec<Door> {
                 .expect("finalize body"),
             ),
         },
+        // The erased resource as the edge's SOURCE: the floor the door runs at the head of the
+        // edge write's transaction answers before the target is read. A self-edge keeps the body
+        // valid for a live resource (kb_edges carries no self-loop constraint).
+        Door {
+            name: "POST /api/relationships (erased source)",
+            method: Method::POST,
+            path: "/api/relationships".to_string(),
+            body: Some(json!({
+                "source": resource,
+                "target": resource,
+                "edge_kind": "leads_to",
+                "polarity": "forward",
+                "label": "husk-write-probe",
+                "weight": 1.0,
+            })),
+        },
+        // The resource as a grant SUBJECT. Every arm refuses a dead subject (`can()`'s
+        // subject-liveness floor, `20260902000010`; for the owner, attenuation — the read it would
+        // confer is one it no longer holds); the door classifies the refusal. `kb_access_grants`
+        // carries no FK on `principal_id`, and the refusal precedes the insert.
+        Door {
+            name: "POST /api/resources/{id}/grants",
+            method: Method::POST,
+            path: format!("/api/resources/{resource}/grants"),
+            body: Some(json!({
+                "principal_table": "kb_profiles",
+                "principal_id": Uuid::now_v7(),
+                "can_read": true,
+                "can_write": false,
+                "can_delete": false,
+                "can_grant": false,
+            })),
+        },
     ]
 }
 
@@ -394,7 +443,10 @@ async fn title_of(app: &common::TestApp, who: &Caller, resource: Uuid) -> String
 /// `RESOURCE_ERASED`. The bite, per door: restore that door's `self.check_can_modify_next(..)`
 /// pre-check (a bare `can_modify_resource` that renders every deny `Forbidden`) ahead of its
 /// floor — or, for the update doors, delete the `modify_floor_fast_fail` call, whose absence lets
-/// the visibility-gated `native_resource_identity` / readback answer the husk `404` first.
+/// the visibility-gated `native_resource_identity` / readback answer the husk `404` first. For
+/// `POST /api/relationships`, restore `self.check_can_modify_next(src_next)` ahead of the
+/// transaction in `assert_relationship`. For the grant door, return the refusal unclassified in
+/// `access_service::grant_capability` (drop its `erased_or_refused` call).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_owner_of_an_erased_resource_gets_410_on_every_write_door(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -674,4 +726,640 @@ async fn a_candidate_erased_under_the_batch_reads_denied(pool: PgPool) {
     );
     assert_eq!(receipt["summary"]["declined"], 1, "receipt: {receipt}");
     assert_eq!(receipt["summary"]["error"], 0, "receipt: {receipt}");
+}
+
+// ── Doors whose answer on an erased id is not the table's shape ───────────────────────────────
+
+/// `method path` as `who`, with an optional JSON body: the status and the parsed body.
+async fn call(
+    app: &common::TestApp,
+    who: &Caller,
+    method: Method,
+    path: String,
+    body: Option<Value>,
+) -> (u16, Value) {
+    let door = Door {
+        name: "ad hoc",
+        method,
+        path,
+        body,
+    };
+    send(app, who, &door).await
+}
+
+/// `owner` asserts `source → target` through `POST /api/relationships`; returns the edge handle.
+async fn assert_edge(app: &common::TestApp, owner: &Caller, source: Uuid, target: Uuid) -> Uuid {
+    let (status, body) = call(
+        app,
+        owner,
+        Method::POST,
+        "/api/relationships".to_string(),
+        Some(json!({
+            "source": source,
+            "target": target,
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "husk-edge",
+            "weight": 1.0,
+        })),
+    )
+    .await;
+    assert_eq!(status, 200, "the owner asserts the edge; body: {body}");
+    Uuid::parse_str(body["edge_handle"].as_str().expect("edge_handle")).expect("edge uuid")
+}
+
+/// The five doors that mutate an existing edge, addressed at `edge`. The retract's property id is
+/// a fresh uuid: the edge gate runs before the row is looked up.
+fn edge_mutate_doors(edge: Uuid) -> Vec<Door> {
+    vec![
+        Door {
+            name: "POST /api/relationships/{h}/retype",
+            method: Method::POST,
+            path: format!("/api/relationships/{edge}/retype"),
+            body: Some(json!({ "edge_kind": "near", "polarity": "forward" })),
+        },
+        Door {
+            name: "POST /api/relationships/{h}/reweight",
+            method: Method::POST,
+            path: format!("/api/relationships/{edge}/reweight"),
+            body: Some(json!({ "weight": 0.5 })),
+        },
+        Door {
+            name: "POST /api/relationships/{h}/fold",
+            method: Method::POST,
+            path: format!("/api/relationships/{edge}/fold"),
+            body: Some(json!({ "reason": "husk-write probe" })),
+        },
+        Door {
+            name: "POST /api/relationships/{h}/facets",
+            method: Method::POST,
+            path: format!("/api/relationships/{edge}/facets"),
+            body: Some(json!({ "values": { "summary": "refused" } })),
+        },
+        Door {
+            name: "DELETE /api/relationships/{h}/facets/{pid}",
+            method: Method::DELETE,
+            path: format!("/api/relationships/{edge}/facets/{}", Uuid::now_v7()),
+            body: None,
+        },
+    ]
+}
+
+/// Is `edge` folded?
+async fn edge_folded(pool: &PgPool, edge: Uuid) -> bool {
+    sqlx::query_scalar("SELECT is_folded FROM kb_edges WHERE id = $1")
+        .bind(edge)
+        .fetch_one(pool)
+        .await
+        .expect("edge row")
+}
+
+// ── WITNESS: an edge touching an erased resource was folded by the act — its doors answer 404 ──
+
+/// The erasure act folds every live edge touching the erased resource, in either direction
+/// (`resource_erasure_execute`'s per-edge fold loop, latest body `20260930000070`). So the
+/// edge-mutate doors never reach the source's write floor for such an edge: `check_edge_mutable`'s
+/// `NOT is_folded` lookup answers `404` first — to the owner of the husk as to anyone. That is NOT
+/// the table's `410`, and it is the honest answer: the door addresses the EDGE, and the edge is
+/// gone. Pinned for an edge whose SOURCE was erased and one whose TARGET was.
+///
+/// FAILS IF the act stops folding the edges of an erased resource, or the edge gate stops
+/// refusing a folded edge. The bite: drop `AND NOT is_folded` from `check_edge_mutable`'s lookup —
+/// the out-edge then reaches the source floor and answers the owner `410`, and the in-edge
+/// reaches its live source's floor and the doors answer `200`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_edge_touching_an_erased_resource_was_folded_and_its_doors_answer_404(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let erased = ingest(&app, &owner, own_context).await;
+    let live = ingest(&app, &owner, own_context).await;
+    let out_edge = assert_edge(&app, &owner, erased, live).await;
+    let in_edge = assert_edge(&app, &owner, live, erased).await;
+
+    erase(&app, erased).await;
+
+    for (edge, label) in [(out_edge, "erased source"), (in_edge, "erased target")] {
+        assert!(
+            edge_folded(&app.pool, edge).await,
+            "precondition ({label}): the act folded the edge"
+        );
+        for door in edge_mutate_doors(edge) {
+            let (status, body) = send(&app, &owner, &door).await;
+            assert_eq!(
+                status, 404,
+                "{label}: {} on a folded edge answers 404; body: {body}",
+                door.name
+            );
+            assert_ne!(
+                body["error"]["code"], RESOURCE_ERASED,
+                "{label}: {} never answers RESOURCE_ERASED; body: {body}",
+                door.name
+            );
+        }
+    }
+}
+
+// ── WITNESS: an edge whose source is deleted answers its owner the source floor's 403 ─────────
+
+/// A soft delete folds no edge (`_project_resource_deleted` flips `is_active` only), so an edge out
+/// of a tombstone stays live and the edge-mutate doors reach `check_edge_mutable`'s source clause:
+/// the write floor, inside the edge write's transaction, which refuses a tombstone `403` — never
+/// `410`. The owner still has container-write on the home and can read the live target, so the
+/// floor is the only clause that refuses.
+///
+/// FAILS IF the edge doors admit a write out of a tombstoned source, or classify it erased. The
+/// bite: in `check_edge_mutable`, make the `"kb_resources"` arm admit (replace its
+/// `write_floor::modify_floor_in_tx(..)` with `{}`) — retype, reweight and fold then answer `200`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_edge_out_of_a_deleted_resource_answers_its_owner_403(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let source = ingest(&app, &owner, own_context).await;
+    let target = ingest(&app, &owner, own_context).await;
+    let edge = assert_edge(&app, &owner, source, target).await;
+
+    delete(&app, &owner, source).await;
+    assert!(
+        !edge_folded(&app.pool, edge).await,
+        "precondition: a delete folds no edge"
+    );
+
+    for door in edge_mutate_doors(edge) {
+        let (status, body) = send(&app, &owner, &door).await;
+        assert_eq!(
+            status, 403,
+            "{}: an edge out of a tombstone is refused by the source floor; body: {body}",
+            door.name
+        );
+        assert_ne!(
+            body["error"]["code"], RESOURCE_ERASED,
+            "{}: a tombstone is never an erasure; body: {body}",
+            door.name
+        );
+    }
+}
+
+// ── WITNESS: an erased TARGET stays 404 for the source's owner ────────────────────────────────
+
+/// The erased classification reaches only the resource the caller would MODIFY — the edge's
+/// source. The owner of a live source asserting an edge into an erased resource they held gets the
+/// target read floor's `404` (`check_endpoint_readable_in_tx`), never `410`: they are not writing
+/// the target. The read door shows the same caller IS a holder of that husk (`410` on `GET`).
+///
+/// FAILS IF the target clause classifies an erased target. The bite: in
+/// `assert_edge_from_source_home_in_tx`, replace `check_endpoint_readable_in_tx(.., tgt_table,
+/// edge.tgt)` with `write_floor::modify_floor_in_tx(&mut *conn, self.profile_id,
+/// ResourceId::from(edge.tgt))` — the husk's holder then gets `410`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn an_edge_into_an_erased_target_answers_its_holder_404(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let source = ingest(&app, &owner, own_context).await;
+    let target = ingest(&app, &owner, own_context).await;
+
+    erase(&app, target).await;
+
+    let (read_status, read_body) = call(
+        &app,
+        &owner,
+        Method::GET,
+        format!("/api/resources/{target}"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        read_status, 410,
+        "precondition: the owner holds the husk; body: {read_body}"
+    );
+
+    let (status, body) = call(
+        &app,
+        &owner,
+        Method::POST,
+        "/api/relationships".to_string(),
+        Some(json!({
+            "source": source,
+            "target": target,
+            "edge_kind": "leads_to",
+            "polarity": "forward",
+            "label": "into-a-husk",
+            "weight": 1.0,
+        })),
+    )
+    .await;
+    assert_eq!(
+        status, 404,
+        "an erased target is the target floor's 404; body: {body}"
+    );
+    assert_ne!(
+        body["error"]["code"], RESOURCE_ERASED,
+        "the target is not the caller's write; body: {body}"
+    );
+}
+
+// ── WITNESS: blob relate refuses an erased or deleted resource peer ───────────────────────────
+
+/// A blob app: the in-memory provider and a test-sized blob config, as `blob_handler_test.rs`.
+async fn blob_app(pool: PgPool) -> common::TestApp {
+    use std::sync::Arc;
+    use temper_services::config::{BlobConfig, BlobCredentialMode};
+    use temper_substrate::blob_store::InMemoryBlobStore;
+    common::setup_test_app_with_state(pool, move |state| {
+        state.blob_store = Some(Arc::new(InMemoryBlobStore::default()));
+        let mut config = (*state.config).clone();
+        config.blob = Some(BlobConfig {
+            store_id: "store_test".to_string(),
+            read_write_token: Some("vercel_rw_test_store_test".to_string()),
+            credential_mode: BlobCredentialMode::Token,
+            oidc_token_source: Arc::new(|| None),
+            max_bytes: 1 << 20,
+            allowlist: vec!["image/png".to_string()],
+            single_request_max_bytes: 64 * 1024,
+        });
+        state.config = Arc::new(config);
+    })
+    .await
+}
+
+/// Blob relate keeps its authority on the BLOB's home by design (no `can_modify` on the peer). Its
+/// peer gate is `endpoint_readable_by_profile`, whose `kb_resources` arm is `resources_visible_to`
+/// and joins `kb_resources.is_active` — so an erased peer (`is_active` false with the husk) and a
+/// deleted one are refused `404`, in both directions, to the owner who held them.
+///
+/// FAILS IF relate admits an edge onto a dead resource peer. The bite: delete
+/// `check_peer_readable(pool, caller, &peer).await?;` from `blob_service::relate_blob`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn blob_relate_refuses_an_erased_or_deleted_resource_peer(pool: PgPool) {
+    let app = blob_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let erased = ingest(&app, &owner, own_context).await;
+    let deleted = ingest(&app, &owner, own_context).await;
+
+    let part = reqwest::multipart::Part::bytes(b"husk-peer".to_vec())
+        .file_name("figure.png")
+        .mime_str("image/png")
+        .expect("mime");
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("home_table", "kb_contexts".to_string())
+        .text("home_id", own_context.to_string());
+    let resp = app
+        .client
+        .post(app.url("/api/blobs"))
+        .header("Authorization", format!("Bearer {}", owner.token))
+        .multipart(form)
+        .send()
+        .await
+        .expect("blob commit request");
+    assert_eq!(resp.status().as_u16(), 200, "the owner commits a blob");
+    let committed: Value = resp.json().await.expect("blob JSON");
+    let blob = Uuid::parse_str(committed["blob_id"].as_str().expect("blob_id")).expect("uuid");
+
+    erase(&app, erased).await;
+    delete(&app, &owner, deleted).await;
+
+    for (peer, label) in [(erased, "erased peer"), (deleted, "deleted peer")] {
+        for direction in ["blob_as_source", "blob_as_target"] {
+            let (status, body) = call(
+                &app,
+                &owner,
+                Method::POST,
+                format!("/api/blobs/{blob}/relations"),
+                Some(json!({
+                    "direction": direction,
+                    "peer_table": "kb_resources",
+                    "peer_id": peer,
+                    "edge_kind": "express",
+                    "polarity": "forward",
+                    "label": "husk-peer",
+                    "weight": 1.0,
+                })),
+            )
+            .await;
+            assert_eq!(
+                status, 404,
+                "{label}, {direction}: refused as absent; body: {body}"
+            );
+            assert_ne!(
+                body["error"]["code"], RESOURCE_ERASED,
+                "{label}, {direction}: the peer is not the caller's write; body: {body}"
+            );
+        }
+    }
+    let edges: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_edges \
+          WHERE (source_table = 'kb_blobs' AND source_id = $1) \
+             OR (target_table = 'kb_blobs' AND target_id = $1)",
+    )
+    .bind(blob)
+    .fetch_one(&app.pool)
+    .await
+    .expect("edge count");
+    assert_eq!(edges, 0, "no relation landed on a dead peer");
+}
+
+// ── WITNESS: single reassign — owner of a husk 410, everyone else 403, nothing moves ─────────
+
+/// `resource_husk_held_by(profile, resource)`, read directly.
+async fn holds_husk(pool: &PgPool, profile: Uuid, resource: Uuid) -> bool {
+    sqlx::query_scalar("SELECT resource_husk_held_by($1, $2)")
+        .bind(profile)
+        .bind(resource)
+        .fetch_one(pool)
+        .await
+        .expect("husk probe")
+}
+
+/// The resource's home owner.
+async fn home_owner(pool: &PgPool, resource: Uuid) -> Uuid {
+    sqlx::query_scalar("SELECT owner_profile_id FROM kb_resource_homes WHERE resource_id = $1")
+        .bind(resource)
+        .fetch_one(pool)
+        .await
+        .expect("home row")
+}
+
+/// `POST /api/resources/{id}/reassign` as `who`, to `to`.
+async fn reassign(app: &common::TestApp, who: &Caller, resource: Uuid, to: Uuid) -> (u16, Value) {
+    call(
+        app,
+        who,
+        Method::POST,
+        format!("/api/resources/{resource}/reassign"),
+        Some(json!({ "to_profile_id": to })),
+    )
+    .await
+}
+
+/// Reassign's population differs from the table's, by design (plan 2c, controller ruling 5): its
+/// AUTHORITY stays owner-or-admin-reach and runs first, reading only the home; the liveness floor
+/// runs after it, inside the reassign's transaction. So:
+///
+/// * the owner of a husk passes the authority gate and the floor refuses it: `410`;
+/// * a read-grant holder of the husk is not its owner and has no admin reach: the authority gate's
+///   `403` — the husk is never confirmed to someone the gate already refuses;
+/// * a stranger: `403`.
+///
+/// Nothing moves: the home owner is unchanged, and so is `resource_husk_held_by`'s population.
+///
+/// FAILS IF reassign moves, or answers anything but the above for, an erased resource. The bite:
+/// delete the `write_floor::liveness_floor_in_tx(..)` call in `reassign_service::reassign_resource`
+/// — the owner then gets `200` and the husk's home moves to the stranger.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reassign_of_an_erased_resource_answers_its_owner_410_and_moves_nothing(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, _) = caller(&app.pool, "owner").await;
+    let (grantee, _) = caller(&app.pool, "grantee").await;
+    let (stranger, _) = caller(&app.pool, "stranger").await;
+    let home = team_context(&app.pool, &[owner.profile]).await;
+    let resource = ingest(&app, &owner, home).await;
+    grant_read(&app, &owner, resource, grantee.profile).await;
+
+    erase(&app, resource).await;
+
+    let (status, body) = reassign(&app, &owner, resource, stranger.profile).await;
+    assert_eq!(
+        status, 410,
+        "owner: the floor refuses the husk; body: {body}"
+    );
+    assert_eq!(
+        body["error"]["code"], RESOURCE_ERASED,
+        "owner; body: {body}"
+    );
+
+    for (who, label) in [(&grantee, "read-grant holder"), (&stranger, "stranger")] {
+        let (status, body) = reassign(&app, who, resource, who.profile).await;
+        assert_eq!(
+            status, 403,
+            "{label}: the authority gate refuses first; body: {body}"
+        );
+        assert_ne!(
+            body["error"]["code"], RESOURCE_ERASED,
+            "{label}; body: {body}"
+        );
+    }
+
+    assert_eq!(
+        home_owner(&app.pool, resource).await,
+        owner.profile,
+        "the husk's home did not move"
+    );
+    assert!(
+        holds_husk(&app.pool, owner.profile, resource).await,
+        "the owner still holds the husk"
+    );
+    assert!(
+        holds_husk(&app.pool, grantee.profile, resource).await,
+        "the read-grant holder still holds the husk"
+    );
+    assert!(
+        !holds_husk(&app.pool, stranger.profile, resource).await,
+        "the would-be recipient gained no standing"
+    );
+}
+
+/// FAILS IF reassign moves a soft-deleted resource, or answers its owner anything but `403`
+/// (never `410` — a tombstone is not an erasure). The bite: delete the
+/// `write_floor::liveness_floor_in_tx(..)` call in `reassign_service::reassign_resource` — the
+/// owner then gets `200` and the tombstone's home moves.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reassign_of_a_deleted_resource_answers_its_owner_403(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let (recipient, _) = caller(&app.pool, "recipient").await;
+    let resource = ingest(&app, &owner, own_context).await;
+
+    delete(&app, &owner, resource).await;
+
+    let (status, body) = reassign(&app, &owner, resource, recipient.profile).await;
+    assert_eq!(status, 403, "a tombstone fails liveness; body: {body}");
+    assert_ne!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+    assert_eq!(
+        home_owner(&app.pool, resource).await,
+        owner.profile,
+        "the tombstone's home did not move"
+    );
+}
+
+// ── WITNESS: team reassign skips a husk and a tombstone; the run completes ────────────────────
+
+/// A team holding the given `(profile, role)` memberships. Returns the team id.
+async fn team_with(pool: &PgPool, members: &[(Uuid, &str)]) -> Uuid {
+    let team = Uuid::now_v7();
+    let slug = format!("husk-reassign-{}", &team.simple().to_string()[..8]);
+    sqlx::query("INSERT INTO kb_teams (id, slug, name) VALUES ($1, $2, $2)")
+        .bind(team)
+        .bind(&slug)
+        .execute(pool)
+        .await
+        .expect("insert team");
+    for (profile, role) in members {
+        sqlx::query(
+            "INSERT INTO kb_team_members (team_id, profile_id, role) \
+             VALUES ($1, $2, $3::team_role)",
+        )
+        .bind(team)
+        .bind(*profile)
+        .bind(*role)
+        .execute(pool)
+        .await
+        .expect("add team member");
+    }
+    team
+}
+
+/// `team_scoped_owned` (the bulk run's scope) filters the CONTEXT's liveness but not the
+/// resource's, so a departing member's tombstone and husk ARE enumerated. The liveness floor in the
+/// run's transaction skips each: the run answers `200`, moves the live resource, leaves the dead
+/// ones with their owner, and returns only the moved id. (`BulkReassignAck` has no slot to count a
+/// skip; the skip is visible as the id's absence.)
+///
+/// FAILS IF a dead resource is moved, or fails the whole run. The bites: in
+/// `reassign_service::reassign_team_resources`, turn the floor's refusal arm into
+/// `return Err(..)` (the run answers `403`/`410` and nothing moves), or delete the floor call (the
+/// husk and the tombstone move to the recipient).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn team_reassign_skips_an_erased_and_a_deleted_resource(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (admin, _) = caller(&app.pool, "admin").await;
+    let (from, from_context) = caller(&app.pool, "departing").await;
+    let (to, _) = caller(&app.pool, "recipient").await;
+    let team = team_with(
+        &app.pool,
+        &[
+            (admin.profile, "owner"),
+            (from.profile, "member"),
+            (to.profile, "member"),
+        ],
+    )
+    .await;
+    sqlx::query("INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+        .bind(from_context)
+        .bind(team)
+        .execute(&app.pool)
+        .await
+        .expect("share the departing member's context to the team");
+
+    let live = ingest(&app, &from, from_context).await;
+    let husk = ingest(&app, &from, from_context).await;
+    let tombstone = ingest(&app, &from, from_context).await;
+    erase(&app, husk).await;
+    delete(&app, &from, tombstone).await;
+
+    let (status, body) = call(
+        &app,
+        &admin,
+        Method::POST,
+        format!("/api/teams/{team}/reassign"),
+        Some(json!({ "from_profile_id": from.profile, "to_profile_id": to.profile })),
+    )
+    .await;
+    assert_eq!(status, 200, "the run completes; body: {body}");
+    assert_eq!(
+        body["resource_ids"],
+        json!([live]),
+        "only the live resource was reassigned; body: {body}"
+    );
+
+    assert_eq!(
+        home_owner(&app.pool, live).await,
+        to.profile,
+        "the live one moved"
+    );
+    assert_eq!(
+        home_owner(&app.pool, husk).await,
+        from.profile,
+        "the husk did not move"
+    );
+    assert_eq!(
+        home_owner(&app.pool, tombstone).await,
+        from.profile,
+        "the tombstone did not move"
+    );
+}
+
+// ── WITNESS: a system admin is refused on a tombstone and answered 410 on a husk they hold ────
+
+/// `who` grants read on `resource` to a fresh principal id: the status and body.
+async fn grant_as(app: &common::TestApp, who: &Caller, resource: Uuid) -> (u16, Value) {
+    call(
+        app,
+        who,
+        Method::POST,
+        format!("/api/resources/{resource}/grants"),
+        Some(json!({
+            "principal_table": "kb_profiles",
+            "principal_id": Uuid::now_v7(),
+            "can_read": true,
+            "can_write": false,
+            "can_delete": false,
+            "can_grant": false,
+        })),
+    )
+    .await
+}
+
+/// `GrantAuthority::resolve`'s system-admin arm used to return before any subject-liveness check,
+/// so an admin was admitted to administer grants on a tombstone or a husk that every other arm
+/// refuses (`can()`'s floor, migration `20260902000010`). The admin arm now carries the same
+/// liveness floor for a resource subject:
+///
+/// * an admin who is NOT a holder: `403` on a tombstone and on a husk (grant and revoke alike —
+///   one authority gates both verbs);
+/// * an admin who owns the husk: the grant door's classification, `410`.
+///
+/// FAILS IF a system admin is admitted on a dead resource. The bite: in `GrantAuthority::resolve`,
+/// return `GrantAuthority::SystemAdmin` unconditionally in the admin arm — the outsider admin then
+/// gets `200` on the tombstone and the husk, and the owner-admin `200` on their husk.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_system_admin_is_refused_on_a_dead_resource(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner_admin, owner_context) = caller(&app.pool, "owner-admin").await;
+    common::fixtures::make_test_admin(&app.pool, owner_admin.profile).await;
+    let (outsider_admin, _) = caller(&app.pool, "outsider-admin").await;
+    common::fixtures::make_test_admin(&app.pool, outsider_admin.profile).await;
+    let (other, other_context) = caller(&app.pool, "other").await;
+
+    let husk = ingest(&app, &owner_admin, owner_context).await;
+    let tombstone = ingest(&app, &other, other_context).await;
+    let live = ingest(&app, &other, other_context).await;
+
+    let (status, body) = grant_as(&app, &outsider_admin, live).await;
+    assert_eq!(
+        status, 200,
+        "precondition: the admin arm admits a live resource it does not own; body: {body}"
+    );
+
+    erase(&app, husk).await;
+    delete(&app, &other, tombstone).await;
+
+    let (status, body) = grant_as(&app, &owner_admin, husk).await;
+    assert_eq!(status, 410, "owner-admin on their husk; body: {body}");
+    assert_eq!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+
+    for (resource, label) in [(husk, "husk"), (tombstone, "tombstone")] {
+        let (status, body) = grant_as(&app, &outsider_admin, resource).await;
+        assert_eq!(
+            status, 403,
+            "outsider admin grant on a {label}; body: {body}"
+        );
+        assert_ne!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+
+        let (status, body) = call(
+            &app,
+            &outsider_admin,
+            Method::DELETE,
+            format!("/api/resources/{resource}/grants"),
+            Some(json!({
+                "principal_table": "kb_profiles",
+                "principal_id": Uuid::now_v7(),
+            })),
+        )
+        .await;
+        assert_eq!(
+            status, 403,
+            "outsider admin revoke on a {label}; body: {body}"
+        );
+        assert_ne!(body["error"]["code"], RESOURCE_ERASED, "body: {body}");
+    }
 }

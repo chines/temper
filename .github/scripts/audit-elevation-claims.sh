@@ -189,6 +189,11 @@ current_gates() {
 # actually opened. Everything else is honestly `-`.
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
+#
+# REVIEWED 2026-10-01 (resource erasure 2c, Step 3) — `grant` f1de797e6695 -> 38fca1c55861. The gate
+# NARROWED: `GrantAuthority::resolve`'s system-admin arm now refuses a dead `kb_resources` subject
+# (tombstone or erased husk). No claim in this baseline binds `grant`, so no prose could have
+# become an over-claim.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 14 is_system_admin
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
@@ -229,7 +234,7 @@ claim crates/temper-services/src/services/team_service.rs 2 require_manage_on_te
 gate audit_gate 05a9b61226c4
 gate connection 1281bf5040ff
 gate context_admin 6bd5aa70ab69
-gate grant f1de797e6695
+gate grant 38fca1c55861
 gate machine 18570f26a292
 gate read_gates 5b394645d054
 gate subscription efe0d95990a8

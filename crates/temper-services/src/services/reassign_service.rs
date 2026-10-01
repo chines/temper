@@ -13,8 +13,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::backend::write_floor;
 use crate::error::{ApiError, ApiResult};
 use crate::services::team_service::{can_manage, role_on_team};
+use temper_core::error::TemperError;
 use temper_core::types::ids::ProfileId;
 
 /// A resource's home owner + the anchor table it's homed under.
@@ -105,6 +107,20 @@ pub async fn reassign_resource(
     if !authorized {
         return Err(ApiError::Forbidden);
     }
+
+    // The liveness floor (resource erasure spec D13; plan 2c, controller ruling 5), at the head of
+    // the reassign's own transaction: the resource must be live, under the `FOR KEY SHARE` row
+    // lock the erasure act's `FOR UPDATE` conflicts with, held until the reassign commits. Liveness
+    // only — the authority stays the gate above. A refusal is classified as every write floor's
+    // is: 410 `RESOURCE_ERASED` to a holder of an erased husk, 403 otherwise (a tombstone always
+    // 403). It runs ahead of the no-op return so a husk is never answered `200`.
+    let mut tx = pool.begin().await?;
+    write_floor::liveness_floor_in_tx(
+        &mut tx,
+        caller,
+        temper_substrate::ids::ResourceId::from(resource_id),
+    )
+    .await?;
     if home.owner == to_profile_id {
         return Ok(()); // idempotent no-op
     }
@@ -127,8 +143,8 @@ pub async fn reassign_resource(
     let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    temper_substrate::writes::reassign_resource_with(
-        pool,
+    temper_substrate::writes::reassign_resource_in_tx(
+        &mut tx,
         temper_substrate::ids::ResourceId::from(resource_id),
         home.owner.into(),
         to_profile_id.into(),
@@ -137,6 +153,7 @@ pub async fn reassign_resource(
     )
     .await
     .map_err(|e| ApiError::Internal(e.to_string()))?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -198,9 +215,10 @@ pub async fn team_scoped_owned(
         .collect())
 }
 
-/// Bulk-reassign, from `from_profile_id` to `to_profile_id`, every resource owned by
+/// Bulk-reassign, from `from_profile_id` to `to_profile_id`, every LIVE resource owned by
 /// `from` and homed in a context shared to `team_id`. Auth: caller manages the team AND
-/// `to` is a member of it. One transaction; returns the reassigned resource ids.
+/// `to` is a member of it. One transaction; returns the reassigned resource ids — a tombstoned
+/// or erased resource in the scope fails the liveness floor, is skipped, and is not among them.
 pub async fn reassign_team_resources(
     pool: &PgPool,
     caller: ProfileId,
@@ -252,10 +270,23 @@ pub async fn reassign_team_resources(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let mut tx = pool.begin().await?;
+    let mut reassigned = Vec::with_capacity(targets.len());
     for &rid in &targets {
+        let resource = temper_substrate::ids::ResourceId::from(rid);
+        // The liveness floor per resource (controller ruling 5), in the run's transaction, ahead
+        // of its write. `team_scoped_owned` does not filter `kb_resources.is_active`, so a
+        // tombstone or an erased husk the departing owner still holds a home row on IS enumerated;
+        // the floor also catches one erased or deleted after the scope read. Either is SKIPPED —
+        // left with its owner and absent from the returned ids — never a whole-run failure. Only
+        // the floor's two refusals skip; a fault aborts the run as before.
+        match write_floor::liveness_floor_in_tx(&mut tx, caller, resource).await {
+            Ok(()) => {}
+            Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => continue,
+            Err(e) => return Err(e.into()),
+        }
         temper_substrate::writes::reassign_resource_in_tx(
             &mut tx,
-            temper_substrate::ids::ResourceId::from(rid),
+            resource,
             from_profile_id.into(),
             to_profile_id.into(),
             emitter,
@@ -263,9 +294,10 @@ pub async fn reassign_team_resources(
         )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+        reassigned.push(rid);
     }
     tx.commit().await?;
-    Ok(targets)
+    Ok(reassigned)
 }
 
 #[cfg(all(test, feature = "test-db"))]
