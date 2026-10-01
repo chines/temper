@@ -107,7 +107,7 @@ fn the_migration_literal_matches_the_committed_fixture() {
             "20260909000015_erasure_act_vocabulary.sql",
             &[
                 "principal_erased.v1.schema.json",
-                "principal_erasure_refused.v1.schema.json",
+                SUPERSEDED, // principal_erasure_refused: 20260930000050
                 "blob_erased.v1.schema.json",
             ],
         ),
@@ -120,8 +120,11 @@ fn the_migration_literal_matches_the_committed_fixture() {
             ],
         ),
         (
-            "20260930000050_resource_erasure_present_truth_wording.sql",
-            &["resource_erasure_refused.v1.schema.json"],
+            "20260930000050_erasure_present_truth_wording.sql",
+            &[
+                "resource_erasure_refused.v1.schema.json",
+                "principal_erasure_refused.v1.schema.json",
+            ],
         ),
     ] {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../migrations/");

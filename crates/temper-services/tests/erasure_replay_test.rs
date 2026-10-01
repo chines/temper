@@ -20,7 +20,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
-use temper_services::services::erasure_service::{execute_erasure, survey_erasure, ErasureOutcome};
+use temper_services::services::erasure_service::{execute_erasure, survey_erasure};
 use temper_substrate::blob_store::{blob_pathname, InMemoryBlobStore};
 use temper_substrate::content::{self, IncomingChunk};
 use temper_substrate::events::{fire, EventContext, SeedAction};
@@ -420,6 +420,7 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
     let (subject, _) = insert_profile(&pool).await;
     let (operator, _) = insert_profile(&pool).await;
     temper_services::test_support::grant_governance(&pool, operator).await;
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, operator).await;
     let home = insert_personal_context(&pool, subject, "notes").await;
     let emitter: Uuid = sqlx::query_scalar(
         "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
@@ -543,35 +544,32 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
          a governed home"
     );
 
-    // A non-operator's attempt FIRST: the recorded refusal (D6) is part of the ledger this test
-    // replays, and the roundtrip witness below validates its typed shape against a
-    // really-emitted payload, not a fixture.
-    let attempted = execute_erasure(
-        &pool,
-        ProfileId::from(subject),
-        ProfileId::from(subject),
-        Uuid::now_v7(),
-        Surface::ApiHttp,
+    // A recorded refusal FIRST, through the act's own refusal function: it is part of the ledger
+    // this test replays, and the roundtrip witness below validates its typed shape against a
+    // really-emitted payload, not a fixture. No door raises a principal refusal, but the
+    // vocabulary stays registered (`unauthorized` among it, retired) and a ledger may hold one,
+    // so replay must carry it.
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT principal_erasure_refuse($1, $2, $3, $4, 'unauthorized')",
     )
+    .bind(subject)
+    .bind(subject)
+    .bind(emitter)
+    .bind(Uuid::now_v7())
+    .fetch_one(&pool)
     .await
-    .expect("the attempt is answered");
-    assert!(
-        matches!(attempted, ErasureOutcome::Refused(_)),
-        "a non-operator's attempt is refused and RECORDED, got {attempted:?}"
-    );
+    .expect("the refusal records");
 
     let outcome = execute_erasure(
         &pool,
-        ProfileId::from(operator),
+        &admin,
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
     )
     .await
     .expect("the operator's act completes");
-    let ErasureOutcome::Completed(_completion) = outcome else {
-        panic!("must complete, got {outcome:?}");
-    };
+    let _completion = outcome;
     let world = ErasedWorld {
         chunk: sqlx::query_scalar("SELECT id FROM kb_chunks WHERE content_hash = $1")
             .bind(&chunk_hash)
@@ -632,18 +630,18 @@ async fn replay_of_an_erasure_is_byte_identical_and_a_replayed_re_erase_is_a_no_
     assert_redacted_shape(&pool, &world).await;
 
     // ── erase again on the REPLAYED namespace: the no-op completion (spec §5) ──
+    // The proof is minted again here, so the gate reads the replayed namespace's governance.
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, operator).await;
     let outcome = execute_erasure(
         &pool,
-        ProfileId::from(operator),
+        &admin,
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
     )
     .await
     .expect("the re-erase on the replayed namespace completes");
-    let ErasureOutcome::Completed(re_erase) = outcome else {
-        panic!("a re-erase is a completion, never a refusal");
-    };
+    let re_erase = outcome;
     assert!(re_erase.already_erased, "the no-op completion says so");
     assert!(
         re_erase
@@ -713,6 +711,7 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
     let (subject, _) = insert_profile(&pool).await;
     let (operator, _) = insert_profile(&pool).await;
     temper_services::test_support::grant_governance(&pool, operator).await;
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, operator).await;
     let home = insert_personal_context(&pool, subject, "notes").await;
     let emitter: Uuid = sqlx::query_scalar(
         "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
@@ -742,16 +741,14 @@ async fn post_erasure_recommits_survive_replay(pool: sqlx::PgPool) {
 
     let outcome = execute_erasure(
         &pool,
-        ProfileId::from(operator),
+        &admin,
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
     )
     .await
     .expect("completes");
-    let ErasureOutcome::Completed(_) = outcome else {
-        panic!("must complete");
-    };
+    let _ = outcome;
 
     // ── AFTER the erasure event, in the same ledger ──
     // (a) The blob re-commit: identical bytes, the store re-put, a FRESH row.
@@ -908,6 +905,7 @@ async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(poo
     let (subject, _) = insert_profile(&pool).await;
     let (operator, _) = insert_profile(&pool).await;
     temper_services::test_support::grant_governance(&pool, operator).await;
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, operator).await;
     let (guest, _) = insert_profile(&pool).await;
     let home = insert_personal_context(&pool, subject, "notes").await;
     let subject_emitter: Uuid = sqlx::query_scalar(
@@ -983,16 +981,14 @@ async fn a_guest_committed_blob_in_a_governed_home_is_struck_with_the_estate(poo
 
     let outcome = execute_erasure(
         &pool,
-        ProfileId::from(operator),
+        &admin,
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
     )
     .await
     .expect("the operator's act completes");
-    let ErasureOutcome::Completed(completion) = outcome else {
-        panic!("must complete, got {outcome:?}");
-    };
+    let completion = outcome;
 
     // The unchanged arm: the subject's own row strikes exactly as always.
     let (own_type, own_kept): (Option<String>, String) =
@@ -1131,6 +1127,7 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
     let (subject, handle) = insert_profile(&pool).await;
     let (operator, _) = insert_profile(&pool).await;
     temper_services::test_support::grant_governance(&pool, operator).await;
+    let admin = temper_services::test_support::system_admin_proof_for(&pool, operator).await;
     let subject_emitter: Uuid = sqlx::query_scalar(
         "SELECT id FROM kb_entities WHERE profile_id = $1 AND name LIKE '%@web'",
     )
@@ -1187,7 +1184,7 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
     .expect("the team resource carries block content");
 
     // The survey predicts the remainder; the act records it — one computation, two doors.
-    let survey = survey_erasure(&pool, ProfileId::from(operator), ProfileId::from(subject))
+    let survey = survey_erasure(&pool, &admin, ProfileId::from(subject))
         .await
         .expect("the operator's survey");
     let predicted: Vec<_> = survey
@@ -1207,16 +1204,14 @@ async fn the_subjects_team_context_text_is_named_in_the_record(pool: sqlx::PgPoo
 
     let outcome = execute_erasure(
         &pool,
-        ProfileId::from(operator),
+        &admin,
         ProfileId::from(subject),
         Uuid::now_v7(),
         Surface::ApiHttp,
     )
     .await
     .expect("the operator's act completes");
-    let ErasureOutcome::Completed(completion) = outcome else {
-        panic!("must complete, got {outcome:?}");
-    };
+    let completion = outcome;
 
     // The named remainder: the team-context prose is reported with its hash, and the act
     // names exactly what the survey named.

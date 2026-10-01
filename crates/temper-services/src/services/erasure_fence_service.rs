@@ -697,7 +697,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::services::erasure_service::{self, ErasureOutcome};
+    use crate::services::erasure_service;
     use crate::test_support;
 
     /// A profile + its `<handle>@web` emitter entity (the erasure_service fixture shape).
@@ -776,25 +776,23 @@ mod tests {
         (blob.uuid(), hash, pathname)
     }
 
-    /// Erase `subject` as `operator` — the real act, real payload, real strikes.
+    /// Erase `subject` as `operator` — the real act, real payload, real strikes. The operator's
+    /// proof is minted through the real gate, so `operator` must already hold governance.
     async fn erase(
         pool: &PgPool,
         operator: Uuid,
         subject: Uuid,
     ) -> erasure_service::ErasureCompletion {
-        let outcome = erasure_service::execute_erasure(
+        let admin = test_support::system_admin_proof_for(pool, operator).await;
+        erasure_service::execute_erasure(
             pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
-        .expect("the act completes");
-        match outcome {
-            ErasureOutcome::Completed(c) => c,
-            ErasureOutcome::Refused(r) => panic!("the operator's act must complete, got {r:?}"),
-        }
+        .expect("the act completes")
     }
 
     /// A store that can fail on demand and RECORDS every delete batch — the witness

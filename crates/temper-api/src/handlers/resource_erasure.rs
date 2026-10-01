@@ -2,14 +2,16 @@
 //! operator's execute door and the read-only survey beside it. They conform to the principal
 //! doors in [`crate::handlers::erasure`] and their posture is documented there.
 //!
-//! **Gate-free by ruling, like the principal doors.** `resource_erasure_service` resolves
-//! `is_system_admin` before anything else; a door that pre-empted it would decide legality twice.
-//! A non-operator's execute is a RECORDED `unauthorized` refusal rendered as 404 (never 403); a
-//! non-operator's survey is the service's silent 404. Either way the refused caller learns
-//! nothing about the RESOURCE: the gate answers before any lookup, so every id it is given gets
-//! the same 404, which says neither that the resource exists nor that it was erased. The doors
-//! themselves are discoverable, and the 404 does not claim to hide them. No tenant axis exists:
-//! the gate is the instance operator and nothing more (ruled 2026-09-30).
+//! **A non-admin is rejected at the wire, like the principal doors.** Each door mints the sealed
+//! `&SystemAdmin` proof through [`crate::handlers::erasure::require_erasure_operator`] before it
+//! dispatches, and the service functions take that proof. A caller the gate declines gets a 404
+//! (never 403) and one telemetry line, and the ledger gains nothing. The refused caller learns
+//! nothing about the RESOURCE: the gate answers before any lookup and before the service checks
+//! the blob list, so every id and every well-formed blob list gets the same 404, which says neither
+//! that the resource exists nor that it was erased (axum's `Json` still rejects a malformed or
+//! unknown-field body first; that names only the caller's own input). The doors themselves are
+//! discoverable, and the 404 does not claim to hide them. No tenant axis exists: the gate is the
+//! instance operator and nothing more (ruled 2026-09-30).
 //!
 //! **No caller-supplied request reference.** The service mints the act's reference and both
 //! execute answers return it. The execute body is `deny_unknown_fields`, so a body that carries
@@ -24,8 +26,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use temper_core::types::ids::{BlobId, EdgeId, ProfileId, ResourceId};
-use temper_services::error::{ApiError, ApiResult};
+use temper_core::types::ids::{BlobId, EdgeId, ResourceId};
+use temper_services::error::ApiResult;
 use temper_services::services::resource_erasure_service::{
     self, ResourceErasureOutcome, ResourceErasureRequest, ResourceErasureSurvey,
 };
@@ -34,7 +36,7 @@ use temper_substrate::payloads::{
     ErasureTargetOutcome, RedactedEventFields, ResourceErasureRefusalReason,
 };
 
-use crate::handlers::erasure::BlobStrikeView;
+use crate::handlers::erasure::{require_erasure_operator, BlobStrikeView};
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
 
@@ -55,7 +57,8 @@ pub struct ResourceErasureExecuteRequest {
 }
 
 /// What the execute door's act did: a completion and a refusal are different answers, so the
-/// response is a tagged enum. `unauthorized` never reaches the wire (the door answers 404).
+/// response is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,
+/// `already_erased`); a caller who is not a system admin never reaches the act.
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ResourceErasureExecuteResponse {
@@ -84,6 +87,7 @@ pub async fn execute(
     RequestSurface(surface): RequestSurface,
     Json(body): Json<ResourceErasureExecuteRequest>,
 ) -> ApiResult<Json<ResourceErasureExecuteResponse>> {
+    let admin = require_erasure_operator(&state, &auth, "resource_erasure.execute").await?;
     let blobs: Vec<BlobId> = body
         .also_strike_blobs
         .unwrap_or_default()
@@ -93,8 +97,8 @@ pub async fn execute(
     let outcome = resource_erasure_service::execute_resource_erasure(
         &state.pool,
         state.blob_store.as_deref(),
+        &admin,
         ResourceErasureRequest {
-            caller: ProfileId::from(auth.0.profile().id),
             resource: ResourceId::from(body.resource),
             also_strike_blobs: &blobs,
             surface,
@@ -103,12 +107,6 @@ pub async fn execute(
     .await?;
 
     match outcome {
-        // The gate's refusal face: absent (404), never 403. The refusal is already recorded.
-        ResourceErasureOutcome::Refused(r)
-            if r.reason == ResourceErasureRefusalReason::Unauthorized =>
-        {
-            Err(ApiError::NotFound("not found".to_string()))
-        }
         ResourceErasureOutcome::Refused(r) => Ok(Json(ResourceErasureExecuteResponse::Refused {
             request_reference: r.request_reference,
             event_id: r.event_id,
@@ -136,18 +134,19 @@ pub async fn execute(
     }
 }
 
-/// `POST /api/admin/resources/erasure/survey` — the read-only survey. The service's gate answers
-/// a non-operator with a silent 404 (nothing recorded); an unknown id past the gate is a 404 too.
-/// The service's survey types serialize as-is (`Serialize` derived on them), so the door mirrors
-/// nothing field by field.
+/// `POST /api/admin/resources/erasure/survey` — the read-only survey. The gate answers a caller
+/// who is not a system admin with the same 404 as execute and records nothing; an unknown id past
+/// the gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on
+/// them), so the door mirrors nothing field by field.
 pub async fn survey(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(body): Json<ResourceErasureSurveyRequest>,
 ) -> ApiResult<Json<ResourceErasureSurvey>> {
+    let admin = require_erasure_operator(&state, &auth, "resource_erasure.survey").await?;
     let survey = resource_erasure_service::survey_resource_erasure(
         &state.pool,
-        ProfileId::from(auth.0.profile().id),
+        &admin,
         ResourceId::from(body.resource),
     )
     .await?;

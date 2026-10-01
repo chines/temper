@@ -1,20 +1,20 @@
-//! The erasure act's service layer — execute + refuse (spec 2026-08-31, task 01a0577c Beat 2).
+//! The erasure act's service layer — execute + survey (spec 2026-08-31, task 01a0577c Beat 2).
 //!
 //! THE DOOR IS OPERATOR-ONLY (ruled 2026-09-09): the instance-level operator — the
-//! `is_system_admin` standing — is the ONLY executor. A subject (or any non-operator) asking
-//! for an erasure through this door gets the `unauthorized` refusal face, RECORDED (D6);
-//! self-serve is a non-goal of this build. The gate resolves BEFORE any mutation
-//! (authz-before-writes), and the refusal is the only mutation an unauthorized attempt makes.
+//! `is_system_admin` standing — is the ONLY executor; self-serve is a non-goal of this build.
+//! Both functions take the sealed [`SystemAdmin`] proof, so the gate is the signature: a caller
+//! who is not a system admin cannot reach them, and the surface that mints the proof rejects that
+//! caller before dispatch with no ledger event (`handlers::erasure`, ruled 2026-09-30). The act is
+//! attributed to `admin.actor()`.
 //!
 //! SQL commits, it does not decide legality (`principal_standing_apply`'s shape,
 //! migrations/20260720000030): the scope computation, the per-row governed-home strikes, the
-//! tombstone machinery and both events live in `principal_erasure_execute` /
-//! `principal_erasure_refuse` / `_erasure_apply_redaction` (migration 20260909000025; the
-//! computation itself moved whole into `principal_erasure_survey_plan`, 20260913000010, which
-//! the act consumes and the survey door serves). The admin surface's HTTP doors
-//! (`handlers::erasure::execute`, `handlers::erasure::survey`) call straight into
-//! [`execute_erasure`] / [`survey_erasure`] — this module stays the service layer and carries
-//! no HTTP types.
+//! tombstone machinery and the completion event live in `principal_erasure_execute` /
+//! `_erasure_apply_redaction` (migration 20260909000025; the computation itself moved whole into
+//! `principal_erasure_survey_plan`, 20260913000010, which the act consumes and the survey door
+//! serves). The admin surface's HTTP doors (`handlers::erasure::execute`,
+//! `handlers::erasure::survey`) call straight into [`execute_erasure`] / [`survey_erasure`] —
+//! this module stays the service layer and carries no HTTP types.
 //!
 //! The request reference is an opaque UUID supplied by the caller: it rides
 //! `kb_events."references"` (rel `request`) and the act's correlation id — never the payload —
@@ -24,12 +24,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
-use temper_substrate::payloads::{ErasureRefusalReason, ErasureTargetOutcome};
+use temper_substrate::payloads::ErasureTargetOutcome;
 use temper_substrate::writes::resolve_emitter;
 use temper_workflow::operations::Surface;
 
+use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
-use crate::services::access_service;
 
 /// One blob strike's verdict, exactly what the `blob_delete` wrapper returned. The provider
 /// bytes themselves are not the service's business: a released verdict is drained by the
@@ -45,7 +45,9 @@ pub struct BlobStrikeOutcome {
 /// `already_erased`). The no-op's targets are whatever live rows the estate still holds:
 /// post-act re-commits into a retired home report strikes, not `already-erased`, so an
 /// empty target set means an empty estate, not merely a tombstoned subject. Either way ONE
-/// `principal_erased` event stands behind these values.
+/// `principal_erased` event stands behind these values. This is the act's only answer: no door
+/// raises a principal refusal (a non-admin is rejected at the wire, and a re-erase is this
+/// no-op completion).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ErasureCompletion {
     pub event_id: Uuid,
@@ -58,21 +60,6 @@ pub struct ErasureCompletion {
     pub blob_strikes: Vec<BlobStrikeOutcome>,
     /// True when the subject was already tombstoned: this completion erased nothing new.
     pub already_erased: bool,
-}
-
-/// A recorded refusal (D6): one `principal_erasure_refused` event, nothing else mutated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ErasureRefusal {
-    pub event_id: Uuid,
-    pub reason: ErasureRefusalReason,
-    pub detail: Option<String>,
-}
-
-/// What a door call actually did.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ErasureOutcome {
-    Completed(ErasureCompletion),
-    Refused(ErasureRefusal),
 }
 
 /// The jsonb `principal_erasure_execute` returns, before mapping onto the typed outcome.
@@ -119,11 +106,10 @@ struct SurveyOutcomeWire {
     blob_strikes: Vec<BlobStrikeVerdict>,
 }
 
-/// Execute the erasure act for `subject`.
+/// Execute the erasure act for `subject`, as the operator `admin` names.
 ///
-/// Authority FIRST: a caller without the `is_system_admin` standing gets the `unauthorized`
-/// refusal recorded and nothing else — the existence of the subject is never disclosed to a
-/// caller the gate has already declined (existence checks come after the gate, operator-only).
+/// The [`SystemAdmin`] proof is the authority: the gate ran where the proof was minted, before
+/// anything here, so the existence of the subject is disclosed only to an operator.
 ///
 /// The request reference tolerates retries: a retried call with the SAME reference re-executes
 /// as a no-op completion on an already-erased subject (`already_erased`, spec §5). Correlation
@@ -131,39 +117,23 @@ struct SurveyOutcomeWire {
 /// the act's events, it does not deduplicate the door.
 pub async fn execute_erasure(
     pool: &PgPool,
-    caller: ProfileId,
+    admin: &SystemAdmin,
     subject: ProfileId,
     request_reference: Uuid,
     surface: Surface,
-) -> ApiResult<ErasureOutcome> {
+) -> ApiResult<ErasureCompletion> {
+    let operator = admin.actor();
     // The emitter resolves on the pool, before the transaction opens (a read, not part of the
-    // mutation) — and it is the CALLER's entity on both arms: an authorized act attributes to
-    // the operator, a refused attempt attributes to whoever attempted it. Hard precondition,
-    // the `slack_disconnect_service` shape: an unattributable authority act is worse than a
-    // failed one. The surface rides from the door (`Surface::ApiHttp` from the HTTP door, the
-    // one that exists today) so the ledger says where the act came from, never a hard-wired
-    // guess that outlives its accuracy — the blob commit's S5 correction.
-    let emitter = resolve_emitter(pool, caller, surface.marker())
+    // mutation) — the operator's entity on the door's surface. Hard precondition, the
+    // `slack_disconnect_service` shape: an unattributable authority act is worse than a failed
+    // one. The surface rides from the door (`Surface::ApiHttp` from the HTTP door, the one that
+    // exists today) so the ledger says where the act came from, never a hard-wired guess that
+    // outlives its accuracy — the blob commit's S5 correction.
+    let emitter = resolve_emitter(pool, operator, surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let is_operator = access_service::is_system_admin(pool, caller).await?;
-
-    if !is_operator {
-        let refusal = refuse_erasure(
-            pool,
-            subject,
-            caller,
-            request_reference,
-            ErasureRefusalReason::Unauthorized,
-            None,
-            surface,
-        )
-        .await?;
-        return Ok(ErasureOutcome::Refused(refusal));
-    }
-
-    // Gate passed — NOW existence may be disclosed (and as an error, not a ledger row).
+    // Operator-only from here: existence may be disclosed (and as an error, not a ledger row).
     let exists: Option<Uuid> = sqlx::query_scalar!(
         r#"SELECT id FROM kb_profiles WHERE id = $1"#,
         subject.uuid()
@@ -177,7 +147,7 @@ pub async fn execute_erasure(
     let raw = sqlx::query_scalar!(
         r#"SELECT principal_erasure_execute($1, $2, $3, $4) AS "outcome: serde_json::Value""#,
         subject.uuid(),
-        caller.uuid(),
+        operator.uuid(),
         emitter.uuid(),
         request_reference,
     )
@@ -194,13 +164,13 @@ pub async fn execute_erasure(
     // correlation id.
     let blob_strikes = strike_verdicts(pool, wire.event_id).await?;
 
-    Ok(ErasureOutcome::Completed(ErasureCompletion {
+    Ok(ErasureCompletion {
         event_id: wire.event_id,
         redacted_hashes: wire.redacted_hashes,
         targets: wire.targets,
         blob_strikes,
         already_erased: wire.already_erased,
-    }))
+    })
 }
 
 /// The per-row strike verdicts for a completion: every `blob_erased` event sharing the
@@ -269,26 +239,17 @@ async fn strike_verdicts(
 /// commit or sibling strike that lands after the survey (a preview that can disagree is
 /// worse than no preview).
 ///
-/// THE GATE IS FIRST AND SILENT (ruled 2026-09-12 with Pete): a non-operator gets
-/// [`ApiError::NotFound`] and NOTHING ELSE — no emitter resolves, no
-/// `principal_erasure_refused` event is recorded, nothing mutates. A survey attempt is not
-/// an erasure request: the execute door's refusal is the recording of a REQUESTED erasure,
-/// and the survey requests nothing. There is deliberately no `Surface` parameter for the
-/// same reason — the survey appends nothing, so there is nothing to attribute.
+/// The [`SystemAdmin`] proof is the gate, as for the act. The survey writes nothing, so there is
+/// deliberately no `Surface` parameter: it appends nothing, so there is nothing to attribute
+/// (ruled 2026-09-12: a survey attempt is not an erasure request).
 ///
-/// Existence is disclosed only past the gate (the execute door's order, operator-only).
+/// Existence is disclosed only to an operator (the execute door's order).
 pub async fn survey_erasure(
     pool: &PgPool,
-    caller: ProfileId,
+    _admin: &SystemAdmin,
     subject: ProfileId,
 ) -> ApiResult<ErasureSurvey> {
-    let is_operator = access_service::is_system_admin(pool, caller).await?;
-
-    if !is_operator {
-        return Err(ApiError::NotFound("not found".to_string()));
-    }
-
-    // Gate passed — NOW existence may be disclosed (and as an error, not a ledger row).
+    // Operator-only from here: existence may be disclosed (and as an error, not a ledger row).
     let exists: Option<Uuid> = sqlx::query_scalar!(
         r#"SELECT id FROM kb_profiles WHERE id = $1"#,
         subject.uuid()
@@ -315,59 +276,6 @@ pub async fn survey_erasure(
         redacted_hashes: wire.redacted_hashes,
         targets: wire.targets,
         blob_strikes: wire.blob_strikes,
-    })
-}
-
-/// Record a refusal (D6) — the negative face: ONE `principal_erasure_refused` event with the
-/// reason code and nothing else mutated.
-///
-/// This is the recording primitive, not a gated door: [`execute_erasure`]'s authority gate is
-/// its ONLY caller — a non-operator's attempt is refused there, attributed to whoever
-/// attempted it, and the HTTP door never calls this directly (it cannot: the refusal face
-/// belongs to the gate, and a second call site would be a second legality decision). The door
-/// does not pre-gate its callers either — the 404 posture is a RENDERING of this function's
-/// recorded refusal, not a separate check. `pub(crate)` until a second door exists to call it;
-/// widening it before then would invite a refusal path that bypasses the gate. `detail` carries
-/// the reason's evidence — the named unhonourable part, or the obligation held — and must
-/// never name a person (D6: the record never re-identifies). The refusal is attributed through
-/// the caller's `surface`, the same provenance the execute arm rides — a refusal is an event
-/// on the ledger too, and it names where the attempt came from.
-pub(crate) async fn refuse_erasure(
-    pool: &PgPool,
-    subject: ProfileId,
-    attempted_by: ProfileId,
-    request_reference: Uuid,
-    reason: ErasureRefusalReason,
-    detail: Option<String>,
-    surface: Surface,
-) -> ApiResult<ErasureRefusal> {
-    let emitter = resolve_emitter(pool, attempted_by, surface.marker())
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-
-    let reason_str = serde_json::to_value(reason)
-        .expect("a refusal reason always serializes")
-        .as_str()
-        .expect("a refusal reason serializes to a string")
-        .to_string();
-
-    let event_id: Uuid = sqlx::query_scalar!(
-        r#"SELECT principal_erasure_refuse($1, $2, $3, $4, $5, $6) AS "event: Uuid""#,
-        subject.uuid(),
-        attempted_by.uuid(),
-        emitter.uuid(),
-        request_reference,
-        reason_str,
-        detail,
-    )
-    .fetch_one(pool)
-    .await?
-    .ok_or_else(|| ApiError::Internal("principal_erasure_refuse returned no row".to_string()))?;
-
-    Ok(ErasureRefusal {
-        event_id,
-        reason,
-        detail,
     })
 }
 
@@ -676,108 +584,6 @@ mod tests {
             .expect("count")
     }
 
-    /// ── WITNESS: the authority bite ──────────────────────────────────────────────────────
-    /// FAILS IF a non-operator's attempt mutates anything: exactly ONE refusal event is the
-    /// whole effect — the profile, the content, the blobs and the erased-content set are all
-    /// untouched, and no strike event exists.
-    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-    async fn a_non_operator_attempt_records_the_unauthorized_refusal_and_mutates_nothing(
-        pool: sqlx::PgPool,
-    ) {
-        let (subject, _) = insert_profile(&pool).await;
-        let (caller, _) = insert_profile(&pool).await;
-        let world = seed_content(&pool, subject).await;
-        let (blob, hash, _) = seed_blob(&pool, subject, "kb_contexts", world.context, "aa").await;
-        let request = Uuid::now_v7();
-
-        let outcome = execute_erasure(
-            &pool,
-            ProfileId::from(caller),
-            ProfileId::from(subject),
-            request,
-            Surface::ApiHttp,
-        )
-        .await
-        .expect("the door answers");
-
-        let ErasureOutcome::Refused(refusal) = outcome else {
-            panic!("a non-operator attempt must be refused, got {outcome:?}");
-        };
-        assert_eq!(refusal.reason, ErasureRefusalReason::Unauthorized);
-        assert!(refusal.detail.is_none());
-
-        // The refusal is RECORDED (D6) — and attributed to the attempter.
-        let (reason, actor, unanchored): (String, Uuid, bool) = sqlx::query_as(
-            "SELECT e.payload->>'reason', (e.payload->>'actor')::uuid, \
-                    e.producing_anchor_table IS NULL \
-               FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-              WHERE t.name = 'principal_erasure_refused'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("the refusal event exists");
-        assert_eq!(reason, "unauthorized");
-        assert_eq!(actor, caller, "the attempt is attributed to the attempter");
-        assert!(unanchored, "the refusal face is NULL-anchored (admin)");
-
-        // …and NOTHING else mutated.
-        let (handle, display, email, prefs, tomb): (
-            String,
-            String,
-            Option<String>,
-            serde_json::Value,
-            Option<i32>,
-        ) = sqlx::query_as(
-            "SELECT handle, display_name, email, preferences, \
-                    (tombstoned_at IS NOT NULL)::int AS tomb FROM kb_profiles WHERE id = $1",
-        )
-        .bind(subject)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(tomb, Some(0), "the profile is not tombstoned");
-        assert!(email.is_some(), "the email survives a refused attempt");
-        assert_ne!(handle, format!("erased-{subject}"));
-        assert_ne!(display, format!("erased-{subject}"));
-        assert_eq!(prefs, serde_json::json!({ "theme": "dark" }));
-        assert_eq!(
-            count(
-                &pool,
-                "SELECT count(*) FROM kb_chunk_content WHERE content <> ''"
-            )
-            .await,
-            1,
-            "chunk prose survives"
-        );
-        assert_eq!(
-            count(
-                &pool,
-                "SELECT count(*) FROM kb_blobs WHERE content_type IS NOT NULL"
-            )
-            .await,
-            1,
-            "the blob row is still live"
-        );
-        assert_eq!(
-            count_hash(
-                &pool,
-                "SELECT count(*) FROM kb_erased_content WHERE content_hash = $1",
-                hash,
-            )
-            .await,
-            0,
-            "the erased-content set admits nothing on a refusal"
-        );
-        let strikes = count(
-            &pool,
-            "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-             WHERE t.name IN ('principal_erased', 'blob_erased')",
-        )
-        .await;
-        assert_eq!(strikes, 0, "no completion and no strike exists");
-        let _ = (world, blob);
-    }
-
     /// ── WITNESS: the surface flows ──────────────────────────────────────────────────────
     /// FAILS WHILE the door hard-wires the `web` emitter: an authorized act executed
     /// through a named surface must be attributed to THAT surface's emitter entity —
@@ -798,20 +604,19 @@ mod tests {
             .await
             .expect("seed cli emitter entity");
         test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
         let world = seed_content(&pool, subject).await;
 
         let outcome = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::CliCloud,
         )
         .await
         .expect("the operator's act completes");
-        let ErasureOutcome::Completed(_) = outcome else {
-            panic!("an operator's act must complete, got {outcome:?}");
-        };
+        let _ = outcome;
 
         let emitter: String = sqlx::query_scalar(
             "SELECT ent.name \
@@ -831,53 +636,6 @@ mod tests {
         let _ = world;
     }
 
-    /// ── WITNESS: the refusal arm rides the surface too ──────────────────────────────────
-    /// FAILS WHILE the refusal emitter is hard-wired: a refused attempt is a RECORDED
-    /// event (D6), and its emitter names where the attempt came from. A non-operator
-    /// arriving over MCP gets the refusal attributed to `<handle>@mcp`, not to the web
-    /// entity that used to take every erasure event.
-    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-    async fn a_refused_attempt_is_attributed_to_the_surface_it_came_from(pool: sqlx::PgPool) {
-        let (subject, _) = insert_profile(&pool).await;
-        let (attempter, handle) = insert_profile(&pool).await;
-        sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, $2)")
-            .bind(attempter)
-            .bind(format!("{handle}@mcp"))
-            .execute(&pool)
-            .await
-            .expect("seed mcp emitter entity");
-
-        let outcome = execute_erasure(
-            &pool,
-            ProfileId::from(attempter),
-            ProfileId::from(subject),
-            Uuid::now_v7(),
-            Surface::Mcp,
-        )
-        .await
-        .expect("the door answers");
-        let ErasureOutcome::Refused(r) = outcome else {
-            panic!("a non-operator attempt must be refused, got {outcome:?}");
-        };
-        assert_eq!(r.reason, ErasureRefusalReason::Unauthorized);
-
-        let emitter: String = sqlx::query_scalar(
-            "SELECT ent.name \
-               FROM kb_events e \
-               JOIN kb_event_types t ON t.id = e.event_type_id \
-               JOIN kb_entities ent ON ent.id = e.emitter_entity_id \
-              WHERE t.name = 'principal_erasure_refused'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("the refusal event with its emitter");
-        assert_eq!(
-            emitter,
-            format!("{handle}@mcp"),
-            "the recorded refusal names the surface the attempt came from"
-        );
-    }
-
     /// ── WITNESS: the personal-homed blob strike ─────────────────────────────────────────
     /// FAILS IF the strike does not go through the wrapper as a per-row `blob_erased` event:
     /// the row lands in the D5.2 shape, the verdict rides the payload's per-target outcomes,
@@ -887,22 +645,21 @@ mod tests {
         let (subject, _) = insert_profile(&pool).await;
         let (operator, _) = insert_profile(&pool).await;
         test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
         let world = seed_content(&pool, subject).await;
         let (blob, hash, pathname) =
             seed_blob(&pool, subject, "kb_contexts", world.context, "aa").await;
 
         let outcome = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
         .expect("the operator's act completes");
-        let ErasureOutcome::Completed(completion) = outcome else {
-            panic!("an operator's act must complete, got {outcome:?}");
-        };
+        let completion = outcome;
         assert_eq!(
             completion.redacted_hashes.len(),
             3,
@@ -974,6 +731,7 @@ mod tests {
         let (subject, handle) = insert_profile(&pool).await;
         let (operator, _) = insert_profile(&pool).await;
         test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
         let world = seed_content(&pool, subject).await;
         let team_context = seed_team_context(&pool, &handle).await;
         let (blob, hash, pathname) =
@@ -981,16 +739,14 @@ mod tests {
 
         let outcome = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
         .expect("completes");
-        let ErasureOutcome::Completed(completion) = outcome else {
-            panic!("must complete, got {outcome:?}");
-        };
+        let completion = outcome;
 
         // The row is byte-identical: content_type untouched, pathname untouched.
         let (p_path, p_type): (Option<String>, Option<String>) =
@@ -1049,6 +805,7 @@ mod tests {
         let (other, _) = insert_profile(&pool).await;
         let (operator, _) = insert_profile(&pool).await;
         test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
         let world = seed_content(&pool, subject).await;
 
         // The other principal's resource: byte-identical content stack, own governed home,
@@ -1160,16 +917,14 @@ mod tests {
 
         let outcome = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
         .expect("completes");
-        let ErasureOutcome::Completed(completion) = outcome else {
-            panic!("must complete, got {outcome:?}");
-        };
+        let completion = outcome;
         assert!(
             completion.redacted_hashes.contains(&world.chunk_hash),
             "the shared hash is redacted — the subject's own copy is in scope"
@@ -1278,20 +1033,19 @@ mod tests {
         let (subject, _) = insert_profile(&pool).await;
         let (operator, _) = insert_profile(&pool).await;
         test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
         let world = seed_content(&pool, subject).await;
 
         let outcome = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
         .expect("completes");
-        let ErasureOutcome::Completed(completion) = outcome else {
-            panic!("must complete, got {outcome:?}");
-        };
+        let completion = outcome;
 
         let (content, hash): (String, String) = sqlx::query_as(
             "SELECT cc.content, c.content_hash FROM kb_chunk_content cc \
@@ -1383,6 +1137,7 @@ mod tests {
         let (operator, _) = insert_profile(&pool).await;
         let (stranger, _) = insert_profile(&pool).await;
         test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
         let world = seed_content(&pool, subject).await;
 
         // The stranger's own context, watermarked like any materialized anchor.
@@ -1433,16 +1188,14 @@ mod tests {
 
         let outcome = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
         .expect("completes");
-        let ErasureOutcome::Completed(completion) = outcome else {
-            panic!("must complete");
-        };
+        let completion = outcome;
         assert!(
             completion
                 .targets
@@ -1482,21 +1235,20 @@ mod tests {
         let (subject, _) = insert_profile(&pool).await;
         let (operator, _) = insert_profile(&pool).await;
         test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
         let _ = seed_content(&pool, subject).await;
         seed_slack(&pool, subject, "slack:T123:Uerasure").await;
 
         let outcome = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
         .expect("completes");
-        let ErasureOutcome::Completed(completion) = outcome else {
-            panic!("must complete, got {outcome:?}");
-        };
+        let completion = outcome;
 
         let (handle, display, email, prefs, tombstoned_at, id): (
             String,
@@ -1587,34 +1339,29 @@ mod tests {
         let (subject, _) = insert_profile(&pool).await;
         let (operator, _) = insert_profile(&pool).await;
         test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
         let world = seed_content(&pool, subject).await;
         let (blob, _, _) = seed_blob(&pool, subject, "kb_contexts", world.context, "aa").await;
 
         let first = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
         .expect("first act completes");
-        let ErasureOutcome::Completed(first) = first else {
-            panic!("first act must complete");
-        };
 
         let second = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
         .expect("re-erase completes");
-        let ErasureOutcome::Completed(second) = second else {
-            panic!("a re-erase is a completion, never a refusal (spec §5)");
-        };
         assert!(second.already_erased, "the no-op completion says so");
         assert_ne!(first.event_id, second.event_id, "a new event is recorded");
         assert!(
@@ -1659,88 +1406,6 @@ mod tests {
         );
     }
 
-    /// ── WITNESS: the refusal faces ──────────────────────────────────────────────────────
-    /// FAILS IF any reason code fails to record, or a refusal mutates anything beyond its one
-    /// event: each D6 reason records with its detail and leaves every site untouched.
-    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-    async fn each_refusal_reason_records_and_mutates_nothing_else(pool: sqlx::PgPool) {
-        let (subject, _) = insert_profile(&pool).await;
-        let (operator, _) = insert_profile(&pool).await;
-        let world = seed_content(&pool, subject).await;
-
-        let cases = [
-            (ErasureRefusalReason::Unauthorized, None),
-            (
-                ErasureRefusalReason::UnhonourableScope,
-                Some("the subject's content in team homes".to_string()),
-            ),
-            (
-                ErasureRefusalReason::IndependentObligation,
-                Some("legal hold case 42".to_string()),
-            ),
-        ];
-        for (reason, detail) in cases {
-            let refusal = refuse_erasure(
-                &pool,
-                ProfileId::from(subject),
-                ProfileId::from(operator),
-                Uuid::now_v7(),
-                reason,
-                detail.clone(),
-                Surface::ApiHttp,
-            )
-            .await
-            .expect("the refusal records");
-            let (stored_reason, stored_detail, subject_id): (String, Option<String>, Uuid) =
-                sqlx::query_as(
-                    "SELECT payload->>'reason', payload->>'detail', (payload->>'subject_id')::uuid \
-                       FROM kb_events WHERE id = $1",
-                )
-                .bind(refusal.event_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-            assert_eq!(
-                stored_reason,
-                serde_json::to_value(reason)
-                    .unwrap()
-                    .as_str()
-                    .expect("a refusal reason serializes to a string")
-            );
-            assert_eq!(stored_detail, detail, "the reason's evidence rides along");
-            assert_eq!(subject_id, subject, "both types spell the subject");
-        }
-        assert_eq!(
-            count(
-                &pool,
-                "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-                 WHERE t.name = 'principal_erasure_refused'",
-            )
-            .await,
-            3,
-            "one event per reason code"
-        );
-
-        // Nothing else mutated: the world is exactly as seeded.
-        assert_eq!(
-            count(
-                &pool,
-                "SELECT count(*) FROM kb_chunk_content WHERE content <> ''"
-            )
-            .await,
-            1
-        );
-        let (tomb,): (Option<i32>,) = sqlx::query_as(
-            "SELECT (tombstoned_at IS NOT NULL)::int FROM kb_profiles WHERE id = $1",
-        )
-        .bind(subject)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(tomb, Some(0), "a refusal never tombstones");
-        let _ = world;
-    }
-
     /// ── WITNESS: the payload shape (D2 by construction) ─────────────────────────────────
     /// FAILS IF the completion payload grows any key the trail functions could join on: the
     /// top-level key set is exactly the PrincipalErased shape, `redacted_hashes` is the ONLY
@@ -1750,6 +1415,7 @@ mod tests {
         let (subject, handle) = insert_profile(&pool).await;
         let (operator, _) = insert_profile(&pool).await;
         test_support::grant_governance(&pool, operator).await;
+        let admin = test_support::system_admin_proof_for(&pool, operator).await;
         let world = seed_content(&pool, subject).await;
         let team_context = seed_team_context(&pool, &handle).await;
         let _ = seed_blob(&pool, subject, "kb_contexts", world.context, "aa").await;
@@ -1757,16 +1423,14 @@ mod tests {
 
         let outcome = execute_erasure(
             &pool,
-            ProfileId::from(operator),
+            &admin,
             ProfileId::from(subject),
             Uuid::now_v7(),
             Surface::ApiHttp,
         )
         .await
         .expect("completes");
-        let ErasureOutcome::Completed(completion) = outcome else {
-            panic!("must complete");
-        };
+        let completion = outcome;
 
         let (payload,): (serde_json::Value,) =
             sqlx::query_as("SELECT payload FROM kb_events WHERE id = $1")

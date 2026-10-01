@@ -2,12 +2,12 @@
 //! Witnesses for the resource-erasure act's operator doors (resource erasure 2b, PR 2):
 //!
 //! * the execute door (`POST /api/admin/resources/erasure`) — an operator completes, and the
-//!   targets the act records equal the survey's prediction; a non-operator gets the **404
-//!   posture** while the `unauthorized` refusal is RECORDED, with a bite probe that stands the
-//!   gate down; an unknown id is 404; a body carrying `request_reference` is refused at the door
-//!   (`deny_unknown_fields`, axum answers 422), never silently honoured. A repeat erasure
-//!   renders 200 `refused` / `already_erased` with the recorded refusal's reference, and a
-//!   non-operator's unknown id is the same 404 with a recorded `unauthorized`.
+//!   targets the act records equal the survey's prediction; a non-operator is rejected AT THE
+//!   WIRE (the door mints the `&SystemAdmin` proof before dispatch): 404, ZERO new events, with a
+//!   bite probe that stands the gate down; an unknown id is 404; a body carrying
+//!   `request_reference` is refused at the door (`deny_unknown_fields`, axum answers 422), never
+//!   silently honoured. A repeat erasure renders 200 `refused` / `already_erased` with the
+//!   recorded refusal's reference, and a non-operator's unknown id gets the gate's own 404 body.
 //! * the survey door (`POST /api/admin/resources/erasure/survey`) — a non-operator gets the same
 //!   404 and ZERO new events (a survey requests nothing).
 //! * the admin ledger lists both `resource_erased` and `resource_erasure_refused`.
@@ -54,7 +54,7 @@ async fn provision_operator(app: &common::TestApp, sub: &str, email: &str) -> (S
     (token, profile)
 }
 
-/// A non-operator: standing ONLY, so it reaches the gated router but fails the service gate.
+/// A non-operator: standing ONLY, so it reaches the gated router but fails the door's gate.
 async fn provision_non_operator(app: &common::TestApp, sub: &str, email: &str) -> (String, Uuid) {
     let (token, profile) = provision(app, sub, email).await;
     common::fixtures::approve_standing(&app.pool, profile).await;
@@ -173,40 +173,66 @@ async fn an_operator_completes_and_the_recorded_targets_equal_the_surveys_predic
     assert!(is_erased(&app.pool, resource).await);
 }
 
-// ── WITNESS: the non-operator's 404, the recorded refusal, and the bite ──────────────────────
+// ── WITNESS: the non-operator's 404 at the wire, zero events, and the bite ──────────────────
 
-/// FAILS IF a non-operator's attempt erases anything, leaks anything but 404, or skips the
-/// recorded `unauthorized` refusal. The bite: the SAME caller with the gate granted completes
-/// the SAME request, so the refusal was the service gate's work and not the router's.
+/// FAILS IF a non-operator's attempt erases anything, leaks anything but 404, or appends ANY
+/// event — not even a refusal: a rejected caller is recorded only in telemetry. The same holds
+/// for a body the service would refuse with a 400 (a blob listed twice): the gate answers before
+/// the service ever sees the list, so the non-operator learns nothing from it. The bite: the
+/// SAME caller with the gate granted completes the SAME request, so the 404 was the door gate's
+/// work and not the router's.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_non_operator_gets_404_and_a_recorded_refusal_until_the_gate_stands_down(pool: PgPool) {
+async fn a_non_operator_gets_404_and_zero_new_events_until_the_gate_stands_down(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (token, non_admin) =
         provision_non_operator(&app, "rx-nonadmin", "rx-nonadmin@example.com").await;
     let resource = create_resource(&app).await;
     let body = json!({ "resource": resource });
+    let before = count_events(&app.pool, None).await;
 
     let resp = post(&app, &token, EXECUTE, &body).await;
     assert_eq!(resp.status().as_u16(), 404, "the door renders ABSENT");
 
-    let (reason, actor): (String, Uuid) = sqlx::query_as(
-        "SELECT e.payload->>'reason', (e.payload->>'actor')::uuid \
-           FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-          WHERE t.name = 'resource_erasure_refused'",
+    // A duplicate blob list is a 400 for an operator; for a non-operator it is the same 404.
+    let blob = Uuid::now_v7();
+    let resp = post(
+        &app,
+        &token,
+        EXECUTE,
+        &json!({ "resource": resource, "also_strike_blobs": [blob, blob] }),
     )
-    .fetch_one(&app.pool)
-    .await
-    .expect("the refusal is recorded");
-    assert_eq!(reason, "unauthorized");
-    assert_eq!(actor, non_admin);
+    .await;
+    assert_eq!(
+        resp.status().as_u16(),
+        404,
+        "the gate answers before the service validates the list"
+    );
+
+    assert_eq!(
+        count_events(&app.pool, None).await,
+        before,
+        "a rejected caller appends NOTHING — no resource_erasure_refused, no event at all"
+    );
     assert!(
         !is_erased(&app.pool, resource).await,
-        "a refusal erases nothing"
+        "a rejected attempt erases nothing"
     );
-    assert_eq!(count_events(&app.pool, Some("resource_erased")).await, 0);
 
-    // THE BITE: only `is_system_admin` moves.
+    // THE BITE: only `is_system_admin` moves. The duplicate list now reaches the service and is
+    // its 400, so the earlier 404 for it was the gate's.
     temper_services::test_support::grant_governance(&app.pool, non_admin).await;
+    let resp = post(
+        &app,
+        &token,
+        EXECUTE,
+        &json!({ "resource": resource, "also_strike_blobs": [blob, blob] }),
+    )
+    .await;
+    assert_eq!(
+        resp.status().as_u16(),
+        400,
+        "past the gate, the service refuses the duplicate"
+    );
     let resp = post(&app, &token, EXECUTE, &body).await;
     assert_eq!(
         resp.status().as_u16(),
@@ -220,9 +246,9 @@ async fn a_non_operator_gets_404_and_a_recorded_refusal_until_the_gate_stands_do
 
 // ── WITNESS: the survey's silent 404 ─────────────────────────────────────────────────────────
 
-/// FAILS IF a non-operator's survey records anything or answers anything but 404. A refusal
-/// event here would mean someone "fixed" the survey to record (a survey requests nothing). The
-/// bite: the same caller, gate granted, the same call answers 200.
+/// FAILS IF a non-operator's survey records anything or answers anything but 404 (a rejected
+/// caller is recorded only in telemetry). The bite: the same caller, gate granted, the same call
+/// answers 200.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_non_operator_survey_gets_404_and_zero_new_events_until_the_gate_stands_down(
     pool: PgPool,
@@ -314,26 +340,20 @@ async fn a_caller_supplied_request_reference_is_refused_at_the_door(pool: PgPool
 // ── WITNESS: the admin ledger lists both resource families ───────────────────────────────────
 
 /// FAILS IF the existing admin ledger does not list BOTH `resource_erased` and
-/// `resource_erasure_refused` for an operator reading by the resource subject. The refusal is
-/// real (a non-operator's attempt) and the completion is real (the operator's act).
+/// `resource_erasure_refused` for an operator reading by the resource subject. Both are real:
+/// the operator's act, then the operator's repeat, refused `already_erased`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn the_admin_ledger_lists_resource_erased_and_resource_erasure_refused(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (token, _) = provision_operator(&app, "rx-auditor", "rx-auditor@example.com").await;
-    let (other_token, _) =
-        provision_non_operator(&app, "rx-attempter", "rx-attempter@example.com").await;
     let resource = create_resource(&app).await;
 
-    let refused = post(
-        &app,
-        &other_token,
-        EXECUTE,
-        &json!({ "resource": resource }),
-    )
-    .await;
-    assert_eq!(refused.status().as_u16(), 404);
     let completed = post(&app, &token, EXECUTE, &json!({ "resource": resource })).await;
     assert_eq!(completed.status().as_u16(), 200);
+    let repeat = post(&app, &token, EXECUTE, &json!({ "resource": resource })).await;
+    assert_eq!(repeat.status().as_u16(), 200);
+    let repeat: Value = repeat.json().await.expect("the tagged outcome");
+    assert_eq!(repeat["reason"], "already_erased", "{repeat}");
 
     let resp = app
         .client
@@ -409,30 +429,40 @@ async fn a_repeat_erasure_renders_refused_already_erased_with_the_recorded_refer
 // ── WITNESS: a non-operator's unknown id ─────────────────────────────────────────────────────
 
 /// FAILS IF a non-operator naming an id that does not exist gets anything but the 404 a real
-/// id gets, or if the attempt goes unrecorded: the gate runs before any lookup, so the refusal
-/// is recorded against the unknown id as `unauthorized`, attributed to the attempter. The bite:
-/// the operator's 404 for the same id records nothing, so the refusal is the gate's work.
+/// id gets, or if the attempt appends anything: the gate runs before any lookup, so the body is
+/// the gate's own EXACTLY "not found" for both ids. The bite: the operator's 404 for the same
+/// unknown id is the lookup's "resource not found", so the non-operator's body was the gate's,
+/// not the id's.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn a_non_operator_gets_404_and_a_recorded_unauthorized_for_an_unknown_id(pool: PgPool) {
+async fn a_non_operator_gets_the_gates_404_for_an_unknown_id_and_nothing_is_recorded(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
-    let (token, non_admin) =
+    let (token, _) =
         provision_non_operator(&app, "rx-ghost-nonadmin", "rx-ghost-na@example.com").await;
     let (op_token, _) = provision_operator(&app, "rx-ghost-op2", "rx-ghost-op2@example.com").await;
+    let real = create_resource(&app).await;
     let ghost = Uuid::now_v7();
-    let body = json!({ "resource": ghost });
+    let before = count_events(&app.pool, None).await;
 
-    let resp = post(&app, &token, EXECUTE, &body).await;
-    assert_eq!(resp.status().as_u16(), 404);
-    let (payload, _) = the_event(&app.pool, "resource_erasure_refused").await;
-    assert_eq!(payload["reason"], "unauthorized");
-    assert_eq!(payload["actor"], Value::String(non_admin.to_string()));
-    assert_eq!(payload["subject_id"], Value::String(ghost.to_string()));
-
-    let resp = post(&app, &op_token, EXECUTE, &body).await;
-    assert_eq!(resp.status().as_u16(), 404);
+    for id in [real, ghost] {
+        let resp = post(&app, &token, EXECUTE, &json!({ "resource": id })).await;
+        assert_eq!(resp.status().as_u16(), 404);
+        let body: Value = resp.json().await.expect("the 404 body");
+        assert_eq!(
+            body["error"]["message"], "not found",
+            "the gate's face is the same for a real id and an unknown one"
+        );
+    }
     assert_eq!(
-        count_events(&app.pool, Some("resource_erasure_refused")).await,
-        1,
-        "the operator's 404 for the same id records nothing"
+        count_events(&app.pool, None).await,
+        before,
+        "nothing is recorded"
+    );
+
+    let resp = post(&app, &op_token, EXECUTE, &json!({ "resource": ghost })).await;
+    assert_eq!(resp.status().as_u16(), 404);
+    let body: Value = resp.json().await.expect("the 404 body");
+    assert_eq!(
+        body["error"]["message"], "resource not found",
+        "past the gate, the lookup answers"
     );
 }

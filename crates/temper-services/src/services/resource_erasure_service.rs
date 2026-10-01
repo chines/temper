@@ -5,10 +5,11 @@
 //! THE GATE IS `is_system_admin` AND NOTHING MORE (ruled 2026-09-30). "Operator + tenant" means
 //! the instance: there is no tenant axis — `is_system_admin` (20260720000100) is the single
 //! gating team's owner — and the act reaches a resource in any context (D5), so no per-context
-//! check is added. The gate resolves before any SQL touches the resource (authz-before-writes):
-//! a non-operator's execute is a RECORDED `unauthorized` refusal and its only mutation; a
-//! non-operator's survey is a silent 404 that records nothing (D10: a survey requests nothing).
-//! Existence is disclosed only past the gate, as [`ApiError::NotFound`], never as raise text.
+//! check is added. Both functions take the sealed [`SystemAdmin`] proof, so the gate is the
+//! signature and runs before any SQL touches the resource (authz-before-writes): a caller who is
+//! not a system admin cannot reach them, and the surface that mints the proof rejects that caller
+//! before dispatch with no ledger event (`handlers::resource_erasure`, ruled 2026-09-30).
+//! Existence is disclosed only to an operator, as [`ApiError::NotFound`], never as raise text.
 //!
 //! SQL commits, it does not decide legality: the plan, the folds, the strikes and the redaction
 //! body live in `resource_erasure_survey_plan` / `resource_erasure_execute` /
@@ -50,8 +51,8 @@ use temper_substrate::payloads::{
 use temper_substrate::writes::{release_blob_bytes, resolve_emitter};
 use temper_workflow::operations::Surface;
 
+use crate::auth::SystemAdmin;
 use crate::error::{ApiError, ApiResult};
-use crate::services::access_service;
 use crate::services::erasure_fence_service::{
     classify_blob_outcome, content_hash_of_pathname, BlobOutcomeClass, BLOB_TARGET,
 };
@@ -109,10 +110,10 @@ impl ResourceErasureRefusalDetail {
     }
 }
 
-/// One execute request. The request reference is not here: the service mints it.
+/// One execute request. The operator is not here (the [`SystemAdmin`] proof names it), and
+/// neither is the request reference: the service mints it.
 #[derive(Debug, Clone, Copy)]
 pub struct ResourceErasureRequest<'a> {
-    pub caller: ProfileId,
     pub resource: ResourceId,
     /// The blobs the operator lists for striking (D8): each must be named in the survey's
     /// related-blob remainder, or the act refuses the whole request.
@@ -251,7 +252,7 @@ struct SurveyPlanWire {
 /// Who is attempting which act, under which reference: everything a refusal records.
 #[derive(Debug, Clone, Copy)]
 struct Attempt {
-    caller: ProfileId,
+    operator: ProfileId,
     emitter: EntityId,
     resource: ResourceId,
     request_reference: Uuid,
@@ -282,24 +283,22 @@ enum ActFailure {
     Other,
 }
 
-/// Execute the resource-erasure act.
+/// Execute the resource-erasure act, as the operator `admin` names.
 ///
-/// The emitter resolves first (an unattributable authority act is worse than a failed one), then
-/// the `is_system_admin` gate: a non-operator's attempt is recorded as the `unauthorized`
-/// refusal, attributed to the attempter, and nothing else happens. Past the gate, an unknown
-/// resource is [`ApiError::NotFound`] (existence is disclosed after the gate, operator-only).
-/// A charter or an already-erased resource is a recorded refusal (the effect of a repeat
-/// erasure is a no-op: no second `resource_erased` is minted).
-/// A listed blob the act refuses to strike is [`ApiError::BadRequest`] naming that blob; the act
-/// rolled back whole, so nothing was struck. An operator's list naming one blob twice is a
-/// [`ApiError::BadRequest`] before the act runs; the gate still answers first, so a
-/// non-operator's attempt is the recorded `unauthorized` refusal whatever its body holds.
+/// The [`SystemAdmin`] proof is the gate, and it ran where the proof was minted. The operator's
+/// emitter resolves first (an unattributable authority act is worse than a failed one). An
+/// unknown resource is [`ApiError::NotFound`] (existence is disclosed only to an operator). A
+/// charter or an already-erased resource is a recorded refusal (the effect of a repeat erasure is
+/// a no-op: no second `resource_erased` is minted). A listed blob the act refuses to strike is
+/// [`ApiError::BadRequest`] naming that blob; the act rolled back whole, so nothing was struck.
+/// A list naming one blob twice is a [`ApiError::BadRequest`] before the act runs.
 pub async fn execute_resource_erasure(
     pool: &PgPool,
     store: Option<&dyn BlobStore>,
+    admin: &SystemAdmin,
     request: ResourceErasureRequest<'_>,
 ) -> ApiResult<ResourceErasureOutcome> {
-    execute_with_release_timeout(pool, store, request, POST_COMMIT_RELEASE_TIMEOUT).await
+    execute_with_release_timeout(pool, store, admin, request, POST_COMMIT_RELEASE_TIMEOUT).await
 }
 
 /// [`execute_resource_erasure`] with the post-commit release bound as a parameter, so a witness
@@ -307,33 +306,23 @@ pub async fn execute_resource_erasure(
 async fn execute_with_release_timeout(
     pool: &PgPool,
     store: Option<&dyn BlobStore>,
+    admin: &SystemAdmin,
     request: ResourceErasureRequest<'_>,
     release_timeout: Duration,
 ) -> ApiResult<ResourceErasureOutcome> {
-    let emitter = resolve_emitter(pool, request.caller, request.surface.marker())
+    let operator = admin.actor();
+    let emitter = resolve_emitter(pool, operator, request.surface.marker())
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let is_operator = access_service::is_system_admin(pool, request.caller).await?;
     let attempt = Attempt {
-        caller: request.caller,
+        operator,
         emitter,
         resource: request.resource,
         request_reference: Uuid::now_v7(),
     };
 
-    if !is_operator {
-        let refusal = refuse(
-            pool,
-            &attempt,
-            ResourceErasureRefusalReason::Unauthorized,
-            None,
-        )
-        .await?;
-        return Ok(ResourceErasureOutcome::Refused(refusal));
-    }
-
-    // Gate passed — NOW the body is validated (a non-operator learns nothing from it), and
-    // existence may be disclosed, as an error, not a ledger row.
+    // Operator-only from here: the body is validated, and existence may be disclosed, as an
+    // error, not a ledger row.
     reject_duplicate_blobs(request.also_strike_blobs)?;
     if erased_state(pool, request.resource).await?.is_none() {
         return Err(ApiError::NotFound(RESOURCE_NOT_FOUND.to_string()));
@@ -378,15 +367,15 @@ async fn execute_with_release_timeout(
     ))
 }
 
-/// A list naming one blob twice is refused after the gate and before the act touches the
-/// resource: the act would strike it on its first mention and raise on its second as "struck by
-/// an earlier act", a false account of the request.
+/// A list naming one blob twice is refused before the act touches the resource: the act would
+/// strike it on its first mention and raise on its second as "struck by an earlier act", a false
+/// account of the request. The id is formatted through `BlobId`'s own `Display` (the hyphenated
+/// UUID).
 fn reject_duplicate_blobs(blobs: &[BlobId]) -> ApiResult<()> {
     let mut seen = HashSet::with_capacity(blobs.len());
-    match blobs.iter().find(|b| !seen.insert(b.uuid())) {
+    match blobs.iter().find(|b| !seen.insert(**b)) {
         Some(dup) => Err(ApiError::BadRequest(format!(
-            "blob {} is listed more than once; list each blob once; nothing was struck",
-            dup.uuid()
+            "blob {dup} is listed more than once; list each blob once; nothing was struck"
         ))),
         None => Ok(()),
     }
@@ -417,7 +406,7 @@ async fn run_act(
             r#"SELECT resource_erasure_execute($1, $2, $3, $4, $5)
                    AS "outcome: serde_json::Value""#,
             attempt.resource.uuid(),
-            attempt.caller.uuid(),
+            attempt.operator.uuid(),
             attempt.emitter.uuid(),
             attempt.request_reference,
             &blobs[..],
@@ -549,8 +538,9 @@ fn between<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
     s.strip_prefix(prefix)?.strip_suffix(suffix)
 }
 
-/// Record a refusal: ONE `resource_erasure_refused` event, nothing else mutated. Attributed to
-/// the attempter through the request's surface, correlated by the attempt's reference.
+/// Record an operator-facing refusal: ONE `resource_erasure_refused` event, nothing else mutated.
+/// Attributed to the operator through the request's surface, correlated by the attempt's
+/// reference.
 async fn refuse(
     pool: &PgPool,
     attempt: &Attempt,
@@ -566,7 +556,7 @@ async fn refuse(
     let event_id: Uuid = sqlx::query_scalar!(
         r#"SELECT resource_erasure_refuse($1, $2, $3, $4, $5, $6) AS "event: Uuid""#,
         attempt.resource.uuid(),
-        attempt.caller.uuid(),
+        attempt.operator.uuid(),
         attempt.emitter.uuid(),
         attempt.request_reference,
         reason_str,
@@ -619,7 +609,7 @@ fn label_strikes(
                 BlobOutcomeClass::Unrecognized => {
                     tracing::error!(
                         request_reference = %request_reference,
-                        blob = %blob.uuid(),
+                        blob = %blob,
                         "resource erasure committed, but a strike verdict has no known shape; \
                          labelled unreleased, and the fence counts it as unparseable"
                     );
@@ -683,20 +673,15 @@ async fn release_struck_bytes(
 /// The read-only survey: what [`execute_resource_erasure`] would do if it ran now, rendered
 /// from the act's own plan (`resource_erasure_survey_plan`, D10), plus display-only annotations.
 ///
-/// THE GATE IS FIRST AND SILENT: a non-operator gets [`ApiError::NotFound`] and nothing else —
-/// no emitter resolves and no refusal is recorded (a survey attempt is not an erasure request).
-/// Past the gate (the execute door's order, operator-only), an unknown resource is `NotFound`,
-/// and an already-erased one short-circuits to a minimal survey with no plan: the plan still
-/// counts rows on a husk, which would misstate what an act could reach.
+/// The [`SystemAdmin`] proof is the gate, as for the act; the survey records nothing (a survey
+/// attempt is not an erasure request). An unknown resource is `NotFound`, and an already-erased
+/// one short-circuits to a minimal survey with no plan: the plan still counts rows on a husk,
+/// which would misstate what an act could reach.
 pub async fn survey_resource_erasure(
     pool: &PgPool,
-    caller: ProfileId,
+    _admin: &SystemAdmin,
     resource: ResourceId,
 ) -> ApiResult<ResourceErasureSurvey> {
-    if !access_service::is_system_admin(pool, caller).await? {
-        return Err(ApiError::NotFound("not found".to_string()));
-    }
-
     match erased_state(pool, resource).await? {
         None => return Err(ApiError::NotFound(RESOURCE_NOT_FOUND.to_string())),
         Some(true) => {
@@ -1037,11 +1022,11 @@ mod classifier_tests {
             label_strikes(Uuid::now_v7(), &[a, b], &targets),
             vec![
                 BlobStrikeOutcome {
-                    blob_id: a.uuid(),
+                    blob_id: Uuid::from(a),
                     released: false,
                 },
                 BlobStrikeOutcome {
-                    blob_id: b.uuid(),
+                    blob_id: Uuid::from(b),
                     released: true,
                 },
             ]
@@ -1063,7 +1048,7 @@ mod classifier_tests {
         assert_eq!(
             label_strikes(Uuid::now_v7(), &[a], &[blob_target("struck somehow")]),
             vec![BlobStrikeOutcome {
-                blob_id: a.uuid(),
+                blob_id: Uuid::from(a),
                 released: false,
             }]
         );
@@ -1077,8 +1062,8 @@ mod classifier_tests {
         assert!(reject_duplicate_blobs(&[]).is_ok());
         match reject_duplicate_blobs(&[a, b, a]) {
             Err(ApiError::BadRequest(msg)) => {
-                assert!(msg.contains(&a.uuid().to_string()), "{msg}");
-                assert!(!msg.contains(&b.uuid().to_string()), "{msg}");
+                assert!(msg.contains(&a.to_string()), "{msg}");
+                assert!(!msg.contains(&b.to_string()), "{msg}");
             }
             other => panic!("a duplicate is a 400, got {other:?}"),
         }
@@ -1245,10 +1230,11 @@ mod tests {
         }
     }
 
-    async fn operator(pool: &PgPool) -> ProfileId {
+    /// An operator's sealed proof, minted through the real gate after `grant_governance`.
+    async fn operator(pool: &PgPool) -> SystemAdmin {
         let op = principal(pool).await;
         test_support::grant_governance(pool, op.profile.uuid()).await;
-        op.profile
+        test_support::system_admin_proof_for(pool, op.profile.uuid()).await
     }
 
     /// A resource created through the REAL create path, homed in `owner`'s context.
@@ -1337,13 +1323,8 @@ mod tests {
         (blob, pathname)
     }
 
-    fn request(
-        caller: ProfileId,
-        resource: ResourceId,
-        blobs: &[BlobId],
-    ) -> ResourceErasureRequest<'_> {
+    fn request(resource: ResourceId, blobs: &[BlobId]) -> ResourceErasureRequest<'_> {
         ResourceErasureRequest {
-            caller,
             resource,
             also_strike_blobs: blobs,
             surface: Surface::ApiHttp,
@@ -1352,10 +1333,10 @@ mod tests {
 
     async fn execute(
         pool: &PgPool,
-        caller: ProfileId,
+        admin: &SystemAdmin,
         resource: ResourceId,
     ) -> ApiResult<ResourceErasureOutcome> {
-        execute_resource_erasure(pool, None, request(caller, resource, &[])).await
+        execute_resource_erasure(pool, None, admin, request(resource, &[])).await
     }
 
     async fn events_of(pool: &PgPool, kind: &str) -> i64 {
@@ -1403,49 +1384,6 @@ mod tests {
         }
     }
 
-    /// ── WITNESS: the authority gate ─────────────────────────────────────────────────────────
-    /// FAILS IF a non-operator's execute mutates anything but its one refusal event, or if the
-    /// refusal is not what the gate decided: granting governance makes the SAME call complete.
-    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-    async fn a_non_operator_execute_records_unauthorized_and_mutates_nothing(pool: PgPool) {
-        let owner = principal(&pool).await;
-        let caller = principal(&pool).await;
-        let r = resource(&pool, &owner, "gate").await;
-
-        let refusal = refused(
-            execute(&pool, caller.profile, r)
-                .await
-                .expect("the door answers"),
-        );
-        assert_eq!(refusal.reason, ResourceErasureRefusalReason::Unauthorized);
-        assert_eq!(refusal.detail, None);
-
-        let (reason, actor, correlation): (String, Uuid, Uuid) = sqlx::query_as(
-            "SELECT e.payload->>'reason', (e.payload->>'actor')::uuid, e.correlation_id \
-               FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
-              WHERE t.name = 'resource_erasure_refused'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("the refusal event");
-        assert_eq!(events_of(&pool, "resource_erasure_refused").await, 1);
-        assert_eq!(reason, "unauthorized");
-        assert_eq!(actor, caller.profile.uuid(), "attributed to the attempter");
-        assert_eq!(correlation, refusal.request_reference);
-        assert!(erased_at(&pool, r).await.is_none(), "nothing was erased");
-        assert_eq!(events_of(&pool, "resource_erased").await, 0);
-        assert_eq!(events_of(&pool, "relationship_folded").await, 0);
-
-        // The bite: the same caller, governed, completes the same call.
-        test_support::grant_governance(&pool, caller.profile.uuid()).await;
-        completed(
-            execute(&pool, caller.profile, r)
-                .await
-                .expect("the act runs"),
-        );
-        assert!(erased_at(&pool, r).await.is_some());
-    }
-
     /// ── WITNESS: the charter refusal ────────────────────────────────────────────────────────
     /// FAILS IF a charter resource is not refused-and-recorded, or its detail is not the fixed
     /// map-grain text.
@@ -1475,7 +1413,7 @@ mod tests {
             .1
         };
 
-        let refusal = refused(execute(&pool, op, telos).await.expect("the door answers"));
+        let refusal = refused(execute(&pool, &op, telos).await.expect("the door answers"));
         assert_eq!(
             refusal.reason,
             ResourceErasureRefusalReason::CharterResource
@@ -1508,12 +1446,12 @@ mod tests {
         let owner = principal(&pool).await;
         let op = operator(&pool).await;
         let r = resource(&pool, &owner, "repeat").await;
-        completed(execute(&pool, op, r).await.expect("the first act runs"));
+        completed(execute(&pool, &op, r).await.expect("the first act runs"));
         let before = temper_substrate::replay::dump_projections(&pool)
             .await
             .expect("dump");
 
-        let refusal = refused(execute(&pool, op, r).await.expect("the door answers"));
+        let refusal = refused(execute(&pool, &op, r).await.expect("the door answers"));
         assert_eq!(refusal.reason, ResourceErasureRefusalReason::AlreadyErased);
         assert_eq!(refusal.detail, None);
 
@@ -1584,12 +1522,12 @@ mod tests {
         );
 
         completed(
-            execute(&pool, op, tombstone)
+            execute(&pool, &op, tombstone)
                 .await
                 .expect("the tombstone erases"),
         );
         let flight = completed(
-            execute(&pool, op, in_flight)
+            execute(&pool, &op, in_flight)
                 .await
                 .expect("the ingest erases"),
         );
@@ -1614,12 +1552,12 @@ mod tests {
         let owner = principal(&pool).await;
         let op = operator(&pool).await;
         let a = completed(
-            execute(&pool, op, resource(&pool, &owner, "first").await)
+            execute(&pool, &op, resource(&pool, &owner, "first").await)
                 .await
                 .expect("first act"),
         );
         let b = completed(
-            execute(&pool, op, resource(&pool, &owner, "second").await)
+            execute(&pool, &op, resource(&pool, &owner, "second").await)
                 .await
                 .expect("second act"),
         );
@@ -1670,7 +1608,7 @@ mod tests {
             .expect("telos")
             .1
         };
-        let charter = refused(execute(&pool, op, telos).await.expect("answers"));
+        let charter = refused(execute(&pool, &op, telos).await.expect("answers"));
         texts.extend(charter.detail.map(|d| d.as_str().to_string()));
         assert_eq!(
             texts.len(),
@@ -1684,11 +1622,11 @@ mod tests {
         let r3 = resource(&pool, &owner, "raise-r3").await;
         let (blob, _) = related_blob(&pool, &store, &owner, &[r1, r2]).await;
         completed(
-            execute_resource_erasure(&pool, Some(&store), request(op, r1, &[blob]))
+            execute_resource_erasure(&pool, Some(&store), &op, request(r1, &[blob]))
                 .await
                 .expect("r1 erases, striking the blob"),
         );
-        let repeat = refused(execute(&pool, op, r1).await.expect("answers"));
+        let repeat = refused(execute(&pool, &op, r1).await.expect("answers"));
         assert_eq!(repeat.reason, ResourceErasureRefusalReason::AlreadyErased);
         texts.extend(repeat.detail.map(|d| d.as_str().to_string()));
         assert_eq!(
@@ -1698,26 +1636,23 @@ mod tests {
         );
 
         // The blob again, through r2 (still related, already struck) and r3 (never related).
-        let struck = execute_resource_erasure(&pool, Some(&store), request(op, r2, &[blob]))
+        let struck = execute_resource_erasure(&pool, Some(&store), &op, request(r2, &[blob]))
             .await
             .expect_err("an already-struck blob is refused");
-        let unrelated = execute_resource_erasure(&pool, Some(&store), request(op, r3, &[blob]))
+        let unrelated = execute_resource_erasure(&pool, Some(&store), &op, request(r3, &[blob]))
             .await
             .expect_err("an unrelated blob is refused");
         for err in [&struck, &unrelated] {
             let ApiError::BadRequest(msg) = err else {
                 panic!("a blob refusal is a 400, got {err:?}");
             };
-            assert!(
-                msg.contains(&blob.uuid().to_string()),
-                "names the blob: {msg}"
-            );
+            assert!(msg.contains(&blob.to_string()), "names the blob: {msg}");
             texts.push(err.to_string());
         }
         assert!(erased_at(&pool, r2).await.is_none() && erased_at(&pool, r3).await.is_none());
 
         // An unknown id, past the gate.
-        let unknown = execute(&pool, op, ResourceId::from(Uuid::now_v7()))
+        let unknown = execute(&pool, &op, ResourceId::from(Uuid::now_v7()))
             .await
             .expect_err("an unknown id is not found");
         assert!(matches!(unknown, ApiError::NotFound(_)), "got {unknown:?}");
@@ -1791,7 +1726,7 @@ mod tests {
             .expect_err("unrelated raises");
         assert_eq!(
             classify_act_error(&err),
-            ActFailure::BlobNotInRemainder(Some(blob.uuid()))
+            ActFailure::BlobNotInRemainder(Some(Uuid::from(blob)))
         );
 
         let err = raw(r2.uuid(), vec![blob.uuid()])
@@ -1799,46 +1734,13 @@ mod tests {
             .expect_err("struck raises");
         assert_eq!(
             classify_act_error(&err),
-            ActFailure::BlobAlreadyStruck(Some(blob.uuid()))
+            ActFailure::BlobAlreadyStruck(Some(Uuid::from(blob)))
         );
 
         let err = raw(Uuid::now_v7(), vec![])
             .await
             .expect_err("unknown raises");
         assert_eq!(classify_act_error(&err), ActFailure::NotFound);
-    }
-
-    /// ── WITNESS: the survey gate is silent ──────────────────────────────────────────────────
-    /// FAILS IF a non-operator's survey records anything or answers anything but 404 — and the
-    /// bite: the same caller, governed, gets the plan (the 404 was the gate's, not the id's).
-    #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-    async fn a_non_operator_survey_is_silent(pool: PgPool) {
-        let owner = principal(&pool).await;
-        let caller = principal(&pool).await;
-        let r = resource(&pool, &owner, "silent").await;
-        let events_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
-            .fetch_one(&pool)
-            .await
-            .expect("count");
-
-        let err = survey_resource_erasure(&pool, caller.profile, r)
-            .await
-            .expect_err("a non-operator's survey is refused");
-        assert!(matches!(err, ApiError::NotFound(_)), "got {err:?}");
-        let events_after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
-            .fetch_one(&pool)
-            .await
-            .expect("count");
-        assert_eq!(
-            events_before, events_after,
-            "a refused survey records nothing"
-        );
-
-        test_support::grant_governance(&pool, caller.profile.uuid()).await;
-        let survey = survey_resource_erasure(&pool, caller.profile, r)
-            .await
-            .expect("an operator's survey answers");
-        assert!(survey.plan.is_some());
     }
 
     /// ── WITNESS: the husk short-circuit ─────────────────────────────────────────────────────
@@ -1848,9 +1750,9 @@ mod tests {
         let owner = principal(&pool).await;
         let op = operator(&pool).await;
         let r = resource(&pool, &owner, "husk").await;
-        completed(execute(&pool, op, r).await.expect("erases"));
+        completed(execute(&pool, &op, r).await.expect("erases"));
 
-        let survey = survey_resource_erasure(&pool, op, r)
+        let survey = survey_resource_erasure(&pool, &op, r)
             .await
             .expect("answers");
         assert!(survey.already_erased);
@@ -1922,7 +1824,7 @@ mod tests {
         .await
         .expect("the owner's edge");
 
-        let plan = survey_resource_erasure(&pool, op, r)
+        let plan = survey_resource_erasure(&pool, &op, r)
             .await
             .expect("answers")
             .plan
@@ -1961,7 +1863,7 @@ mod tests {
         let (shared, _) = related_blob(&pool, &store, &owner, &[r, holder]).await;
         let (alone, _) = related_blob(&pool, &store, &owner, &[r]).await;
 
-        let plan = survey_resource_erasure(&pool, op, r)
+        let plan = survey_resource_erasure(&pool, &op, r)
             .await
             .expect("answers")
             .plan
@@ -1999,14 +1901,14 @@ mod tests {
         );
 
         let completion = completed(
-            execute_resource_erasure(&pool, Some(&store), request(op, r, &[blob]))
+            execute_resource_erasure(&pool, Some(&store), &op, request(r, &[blob]))
                 .await
                 .expect("the act completes"),
         );
         assert_eq!(
             completion.blob_strikes,
             vec![BlobStrikeOutcome {
-                blob_id: blob.uuid(),
+                blob_id: Uuid::from(blob),
                 released: true,
             }]
         );
@@ -2053,7 +1955,7 @@ mod tests {
         let (blob, pathname) = related_blob(&pool, &store, &owner, &[r]).await;
 
         let completion = completed(
-            execute_resource_erasure(&pool, None, request(op, r, &[blob]))
+            execute_resource_erasure(&pool, None, &op, request(r, &[blob]))
                 .await
                 .expect("the act completes"),
         );
@@ -2099,13 +2001,13 @@ mod tests {
         let (second_blob, second) = related_blob(&pool, &store, &owner, &[r]).await;
 
         let completion = completed(
-            execute_resource_erasure(&pool, None, request(op, r, &[]))
+            execute_resource_erasure(&pool, None, &op, request(r, &[]))
                 .await
                 .expect("the act completes"),
         );
         let mut named = related_blob_ids(&completion.remainder).expect("the plan's shape");
         named.sort();
-        let mut both = vec![first_blob.uuid(), second_blob.uuid()];
+        let mut both = vec![Uuid::from(first_blob), Uuid::from(second_blob)];
         both.sort();
         assert_eq!(
             named, both,
@@ -2149,7 +2051,8 @@ mod tests {
                 execute_with_release_timeout(
                     &pool,
                     Some(&store),
-                    request(op, r, &[blob]),
+                    &op,
+                    request(r, &[blob]),
                     Duration::from_millis(200),
                 ),
             )
@@ -2171,7 +2074,7 @@ mod tests {
             assert_eq!(
                 completion.blob_strikes,
                 vec![BlobStrikeOutcome {
-                    blob_id: blob.uuid(),
+                    blob_id: Uuid::from(blob),
                     released: true,
                 }],
                 "{mode:?}"
@@ -2188,44 +2091,29 @@ mod tests {
     /// ── WITNESS: a list naming one blob twice ───────────────────────────────────────────────
     /// FAILS IF an operator's duplicate reaches the act (the SQL would strike the blob, then
     /// raise on its second mention and answer the false "struck by an earlier act" 400), or if
-    /// the validation answers before the gate: a non-operator sending the same list must get the
-    /// recorded `unauthorized` refusal, never the 400 (gate-first; the door's validation teaches
-    /// a refused caller nothing). The bite on the ordering: move the check above the gate and
-    /// the non-operator's call returns the 400, so `refused` panics. The last call — the same
-    /// blob listed once — completes.
+    /// the 400 appends anything. A caller who is not a system admin never reaches this check:
+    /// the door answers 404 first (`admin_resource_erasure_surface_test`). The last call — the
+    /// same blob listed once — completes.
     #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
-    async fn a_blob_listed_twice_is_refused_after_the_gate_and_before_the_act(pool: PgPool) {
+    async fn a_blob_listed_twice_is_refused_before_the_act(pool: PgPool) {
         let owner = principal(&pool).await;
-        let caller = principal(&pool).await;
         let op = operator(&pool).await;
         let store = InMemoryBlobStore::default();
         let r = resource(&pool, &owner, "duplicate").await;
         let (blob, _) = related_blob(&pool, &store, &owner, &[r]).await;
 
-        let refusal = refused(
-            execute_resource_erasure(
-                &pool,
-                Some(&store),
-                request(caller.profile, r, &[blob, blob]),
-            )
-            .await
-            .expect("the gate answers a non-operator, whatever the body"),
-        );
-        assert_eq!(refusal.reason, ResourceErasureRefusalReason::Unauthorized);
-        assert_eq!(events_of(&pool, "resource_erasure_refused").await, 1);
-
         let events_before: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
             .fetch_one(&pool)
             .await
             .expect("count");
-        let err = execute_resource_erasure(&pool, Some(&store), request(op, r, &[blob, blob]))
+        let err = execute_resource_erasure(&pool, Some(&store), &op, request(r, &[blob, blob]))
             .await
             .expect_err("an operator's duplicate is refused");
         let ApiError::BadRequest(msg) = &err else {
             panic!("a duplicate is a 400, got {err:?}");
         };
         assert!(msg.contains("listed more than once"), "{msg}");
-        assert!(msg.contains(&blob.uuid().to_string()), "{msg}");
+        assert!(msg.contains(&blob.to_string()), "{msg}");
         assert_no_raise_literal(msg);
         let events_after: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events")
             .fetch_one(&pool)
@@ -2238,7 +2126,7 @@ mod tests {
         assert!(erased_at(&pool, r).await.is_none());
 
         completed(
-            execute_resource_erasure(&pool, Some(&store), request(op, r, &[blob]))
+            execute_resource_erasure(&pool, Some(&store), &op, request(r, &[blob]))
                 .await
                 .expect("listed once, the act completes"),
         );

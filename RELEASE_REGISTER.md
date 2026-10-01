@@ -38,8 +38,13 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   CLI receive a gone error where they received not-found; keying on the code, and the CLI and MCP
   rendering, are build order 2c. Two operator-only doors land out of the OpenAPI contract
   (`POST /api/admin/resources/erasure` and `/survey`, gated by `is_system_admin` — no tenant axis
-  exists); a non-operator gets `404`. Who observes: the owner or a grant holder of an erased
-  resource, and the instance operator. User-visible: yes. Release relevance: signal-only.
+  exists); a non-operator gets `404`. A non-operator at either erasure door pair, the principal
+  pair included, is now rejected before dispatch with no ledger event: `POST /api/admin/erasure`
+  no longer records an `unauthorized` `principal_erasure_refused`, and the `unauthorized` reason
+  in both refusal vocabularies is retired (still registered). Its 200 body is now the completion
+  alone, without the `status` tag (no door raises a principal refusal). Who observes: the owner or a grant
+  holder of an erased resource, and the instance operator. User-visible: yes. Release
+  relevance: signal-only.
 pr: self
 classes: additive,behavioral
 surfaces: http,clients,mcp,cli-stdout
