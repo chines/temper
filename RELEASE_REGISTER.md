@@ -23,6 +23,24 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **The system-admin surface enters the OpenAPI contract, isolated as its own route group**
+  The routes whose only authorization is the `&SystemAdmin` proof — `/api/access/admin/*` (the
+  join-request and reconsideration queues and their counts, full settings, promote/demote, the
+  four standing acts, auto-join reconcile, the profile directory), `POST /api/admin/erasure`,
+  `POST /api/admin/resources/erasure` and their `/survey` doors, `POST /api/embed/admin/reembed`
+  and `POST /api/machine-clients/{id}/rebind` — gain `#[utoipa::path]` documentation under a new
+  `Admin` tag and move from `gated_routes` to a new `admin_routes` group at the same gated tier.
+  `POST /api/admin/slack/links/disconnect` (already documented, `Slack Link` tag) moves with them
+  unchanged. Every existing path's operation is byte-identical; the contract only grows (23 new
+  operations, their request/response schemas, an `AdminApi` in each generated SDK). No route's
+  path, method, gate, status codes or wire bytes change: `GET /api/access/admin/profiles` now
+  returns an untagged enum that serializes exactly as the page or card it returned before. Who
+  observes: OpenAPI/SDK consumers, who can now call the operator surface with an admin bearer.
+  User-visible: no. Release relevance: signal-only.
+pr: self
+classes: additive
+surfaces: http,clients
+status: signal-only
 - **Resource erasure 2b PR 2: an erased resource reads as `410 RESOURCE_ERASED` to a caller with standing; the operator erasure doors**
   `GET /api/resources/{id}`, `/content` and `/meta` (which composes from the same read) gain a
   `410` under the new code `RESOURCE_ERASED`, with a fixed message

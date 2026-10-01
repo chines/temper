@@ -1525,6 +1525,7 @@ pub struct PrincipalGovernanceChanged {
 /// execution build's to pin. `unhonourable_scope` outcomes land here, never silent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ErasureTargetOutcome {
     /// Manifest identity of the target (`kb_profiles.display_name`, `kb_teams.slug`, …).
     pub target: String,
@@ -1630,6 +1631,7 @@ pub struct PrincipalErasureRefused {
 /// never values: the record of a redaction must not carry what was redacted.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct RedactedEventFields {
     pub event: EventId,
     /// JSON paths within that event's `payload` (or `metadata`), e.g. `title`, `origin_uri`.
@@ -1686,6 +1688,7 @@ pub struct ResourceErased {
 /// The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ResourceErasureRefusalReason {
     /// Retired: no path raises it. A non-admin is refused at the wire with no event. The value

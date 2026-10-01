@@ -12,6 +12,7 @@
 #   ---------------------------  ----------------------------  --------------------------------------------------------------
 #   auth_only_routes             AuthOnly                      require_auth                          (JWT — authenticated)
 #   gated_routes                 Gated                         require_auth + require_system_access  (JWT + system access)
+#   admin_routes                 Gated                         same stack as gated_routes            (+ &SystemAdmin proof in every service)
 #   public_routes                Public                        (none)                                by-design public: /health
 #   blob_commit_routes           Gated (+ inner body limit)    same stack as gated_routes
 #   blob_segment_routes          Gated (+ inner body limit)    same stack as gated_routes
@@ -99,7 +100,7 @@ APP_BUILDERS='create_app create_internal_app'
 # and to nothing else. That indirection is exactly what makes a bare AUTH_COVERED entry too weak
 # here: the entry asserts a posture, and the posture is a property of where the merge lands. The
 # merge-landing assertion below is what closes that, and it is why this name may sit here at all.
-AUTH_COVERED='auth_only_routes|gated_routes|query_routes|blob_segment_routes|blob_commit_routes'
+AUTH_COVERED='auth_only_routes|gated_routes|admin_routes|query_routes|blob_segment_routes|blob_commit_routes'
 # Groups whose routes are NOT behind require_auth — every entry is a reviewed compensating control.
 REVIEW_GROUPS='public_routes|embed_internal_routes|internal_routes|slack_link_internal_routes|slack_mint_internal_routes|slack_link_public_routes|webhook_intake_routes'
 
@@ -216,6 +217,7 @@ require_row() {
 require_row 'public_routes'              'Group { key: "public_routes", tier: Tier::Public, build: Documented(public_routes), body_limit: None, serves: Serves::AppOnly },'
 require_row 'auth_only_routes'           'Group { key: "auth_only_routes", tier: Tier::AuthOnly, build: Documented(auth_only_routes), body_limit: None, serves: Serves::AppOnly },'
 require_row 'gated_routes'               'Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly },'
+require_row 'admin_routes'               'Group { key: "admin_routes", tier: Tier::Gated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly },'
 require_row 'blob_commit_routes'         'Group { key: "blob_commit_routes", tier: Tier::Gated, build: Documented(blob_commit_routes), body_limit: Some(BodyLimit::CommitDoor), serves: Serves::AppOnly },'
 require_row 'blob_segment_routes'        'Group { key: "blob_segment_routes", tier: Tier::Gated, build: Documented(blob_segment_routes), body_limit: Some(BodyLimit::Fixed(blob_doors::BLOB_SEGMENT_MAX_BODY_BYTES)), serves: Serves::AppOnly },'
 require_row 'internal_routes'            'Group { key: "internal_routes", tier: Tier::InternalHmac(SignatureKind::Reconcile), build: Undocumented(internal_routes), body_limit: None, serves: Serves::BothBuilders },'

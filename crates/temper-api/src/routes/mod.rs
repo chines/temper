@@ -1,6 +1,6 @@
 //! The route table.
 //!
-//! Every route group temper-api serves is one row below: a group key (the nine postures
+//! Every route group temper-api serves is one row below: a group key (the postures
 //! `.github/scripts/audit-route-auth.sh` names), the tier whose middleware stack wraps it, an
 //! optional body limit, and the builders that mount it. The per-group route declarations live in
 //! this module's sibling files; the layer policy for a tier is applied in exactly one place
@@ -12,6 +12,7 @@
 //! axum 0.8.9 source (`Endpoint::layer`/`PathRouter::layer` wrap the existing route). The
 //! group doc comments carry the per-group lore.
 
+mod admin;
 mod auth_only;
 mod blob_doors;
 mod embed_internal;
@@ -33,6 +34,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::middleware::{auth, internal_auth, relay_trust, system_access};
 use crate::openapi::ApiDoc;
+use admin::admin_routes;
 use auth_only::auth_only_routes;
 use blob_doors::{blob_commit_body_limit, blob_commit_routes, blob_segment_routes};
 use embed_internal::embed_internal_routes;
@@ -135,6 +137,11 @@ fn route_table() -> Vec<Group> {
         // own limits (the blob rows below, `/api/query` inside the group) stay inner
         // and win on their routes — the network door's ruling 3, design §D4.
         Group { key: "gated_routes", tier: Tier::Gated, build: Documented(gated_routes), body_limit: None, serves: Serves::AppOnly },
+        // The system-admin surface: the gated tier unchanged, its own row so the operator
+        // surface is one auditable set. The tier admits any approved principal; the gate that
+        // makes these routes admin-only is the `&SystemAdmin` proof each service requires,
+        // minted in the handler before dispatch (see `admin.rs` for the membership rule).
+        Group { key: "admin_routes", tier: Tier::Gated, build: Documented(admin_routes), body_limit: None, serves: Serves::AppOnly },
         // The two blob doors, at the gated tier with their own body limits INNER to the
         // tier stack so the decisions they chose win on their routes. The commit door's
         // bound is the config's D7 threshold plus multipart overhead — the transport

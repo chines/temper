@@ -10,6 +10,1394 @@
     "version": "0.5.4"
   },
   "paths": {
+    "/api/access/admin/auto-join/reconcile": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the\nstanding-approved population (admin only). Returns the (team, profile) pairs added plus\nthe touched teams that also carry SAML group mappings (whose new native rows pre-empt\nIdP role assertions); an empty `added` means the instance was already converged.",
+        "operationId": "admin_reconcile_auto_join",
+        "responses": {
+          "200": {
+            "description": "The roster pairs added (empty when already converged) and the SAML-mapped teams touched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileAutoJoinOutcome"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/demote": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).",
+        "description": "The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in\n`standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries\nNO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the\n`audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.",
+        "operationId": "admin_demote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoteAdminRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "System-admin governance grant revoked (idempotent)"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/principals/{id}/approve": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).",
+        "operationId": "admin_approve_principal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Profile ID of the principal",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Principal approved"
+          },
+          "400": {
+            "description": "Approval is not a legal transition from the principal's standing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The principal is already approved, or has a request pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/principals/{id}/deactivate": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).",
+        "operationId": "admin_deactivate_principal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Profile ID of the principal",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Principal deactivated"
+          },
+          "400": {
+            "description": "Deactivation is not a legal transition from the principal's standing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The transition conflicts with the principal's current standing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/principals/{id}/reactivate": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).",
+        "operationId": "admin_reactivate_principal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Profile ID of the principal",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Principal reactivated"
+          },
+          "400": {
+            "description": "Reactivation is not a legal transition from the principal's standing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The transition conflicts with the principal's current standing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/principals/{id}/revoke": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).",
+        "operationId": "admin_revoke_principal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Profile ID of the principal",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokePrincipalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Principal's admission revoked"
+          },
+          "400": {
+            "description": "Revocation is not a legal transition from the principal's standing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The transition conflicts with the principal's current standing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/profiles": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/access/admin/profiles — the directory list, or the state card when `?email=`\nresolves exactly one verified address.",
+        "operationId": "admin_list_profiles",
+        "parameters": [
+          {
+            "name": "standing",
+            "in": "query",
+            "description": "Filter by admission state: `denied|requested|approved|revoked|deactivated|needs-access|all`.\nDefault `needs-access` — every non-approved state INCLUDING no standing row (the\noperator's work queue). Case-insensitive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "email_contains",
+            "in": "query",
+            "description": "Case-insensitive LITERAL substring matched over the profile's verified auth-link emails.\n`%`, `_` and `\\` have no wildcard meaning here. When set, each row carries `matched_email`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "email",
+            "in": "query",
+            "description": "EXACT, case-insensitive match over verified auth-link emails. When present the route\nanswers with the single matching profile's state card (not a page): the one place a\nhuman-controlled address becomes a target UUID. Zero matches → 404; more than one profile\nverified-owns the address → 404 whose body names the collision. Mutually exclusive with\n`email_contains`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "team",
+            "in": "query",
+            "description": "Restrict to members of this team, by slug or UUID.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size. Clamped server-side: default 50, capped at 200.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Page offset. Floor 0, capped at 10000 (depth protection).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A directory page, or — when `email` is given — the one matching profile's state card",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProfilesListAnswer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filter, or both `email` and `email_contains` given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`email` matched no profile, or more than one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/profiles/{profile_id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/access/admin/profiles/{profile_id} — the principal state card.",
+        "operationId": "admin_show_profile",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "description": "Profile ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The principal state card",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminProfileCard"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/promote": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/access/admin/promote — promote a profile to system admin (admin only).",
+        "description": "Grants `kb_principal_governance` + `approved` standing (the real admin-ness\nunder D11). `team_id` omitted ⇒ the configured gating team for the retained\nside-effect `owner` row.",
+        "operationId": "admin_promote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteAdminRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Profile promoted; the side-effect team membership row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamMemberRow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The profile or team cannot be promoted into",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/requests": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/access/admin/requests — list pending join requests (admin only).",
+        "operationId": "admin_list_join_requests",
+        "responses": {
+          "200": {
+            "description": "Pending join requests, with the requesting profile's identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JoinRequestWithProfile"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/requests/count": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).",
+        "description": "[`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may\nnot read the queue still gets a `403` — never a `0`, which would tell them the queue is empty\nwhile refusing to let them see it.",
+        "operationId": "admin_count_join_requests",
+        "responses": {
+          "200": {
+            "description": "How many join requests are pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueCount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/requests/{id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).",
+        "operationId": "admin_review_join_request",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Join request ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The reviewed join request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JoinRequest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The decision is not a legal review outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such join request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/reviews": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/access/admin/reviews — list undecided reconsideration requests.",
+        "description": "The read half of the inbox `kb_principal_review_requests` always described itself as and never\nhad. Same operator-only posture as the join-request queue above: the `&SystemAdmin` proof is\nminted here and required by the service.",
+        "operationId": "admin_list_reviews",
+        "responses": {
+          "200": {
+            "description": "Open reconsideration requests, with the asking principal's identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewRequestWithProfile"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/reviews/count": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).",
+        "description": "[`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.",
+        "operationId": "admin_count_reviews",
+        "responses": {
+          "200": {
+            "description": "How many reconsideration requests are open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueCount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/reviews/{id}": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.",
+        "description": "Returns `204`: there is no updated resource worth handing back, because closing changes nothing\nthe caller can act on further. It moves **no** standing — readmitting a principal is\n`POST /api/access/admin/approve`, deliberately a different call.",
+        "operationId": "admin_close_review",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Reconsideration request ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseReviewBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Reconsideration recorded as handled; no standing moved"
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such open reconsideration request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/access/admin/settings": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "GET /api/access/admin/settings — read FULL system settings (admin only).",
+        "description": "Unlike the public `GET /api/access/settings`, this returns `gating_team_slug`\nand `updated`, which an admin needs to administer the gate.",
+        "operationId": "admin_get_settings",
+        "responses": {
+          "200": {
+            "description": "Full system settings, including the gating team slug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      },
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "PATCH /api/access/admin/settings — partial update of system settings (admin only).",
+        "operationId": "admin_update_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Settings after the partial update",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid settings value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
     "/api/access/requests": {
       "parameters": [
         {
@@ -315,6 +1703,316 @@
           }
         ],
         "x-apidog-folder": "Reference/API Reference/Access"
+      }
+    },
+    "/api/admin/erasure": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "`POST /api/admin/erasure` — the operator's execute door.",
+        "description": "The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof\nand attributes the act to `admin.actor()`.\n\nThe request reference tolerates retries: a retried POST with the SAME reference re-executes\nas a no-op completion (the subject is already tombstoned, so the act completes with\n`already_erased: true`). Correlation is INDEXED, never unique\n(20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does\nnot deduplicate the door.",
+        "operationId": "admin_erase_principal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErasureExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The erasure completed (`already_erased` on a repeat)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureExecuteResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/admin/erasure/survey": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "`POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task\n01a09628 item 2).",
+        "description": "Gated here like execute (`require_erasure_operator`): a caller who is not a system admin\ngets the same 404 and no event. The survey is witnessed read-only: no events, no projection\nchange — it previews, it never prepares.",
+        "operationId": "admin_survey_principal_erasure",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErasureSurveyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the erasure act would do; nothing is recorded or changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureSurveyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/admin/resources/erasure": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "`POST /api/admin/resources/erasure` — the operator's execute door.",
+        "operationId": "admin_erase_resource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceErasureExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The act completed, or was refused and the refusal recorded (`status` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceErasureExecuteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`also_strike_blobs` names a blob twice, or one the act refuses to strike (the act rolled back; nothing was struck)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown field in the body (a caller-supplied `request_reference` is refused, not ignored)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
+    "/api/admin/resources/erasure/survey": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "`POST /api/admin/resources/erasure/survey` — the read-only survey. The gate answers a caller\nwho is not a system admin with the same 404 as execute and records nothing; an unknown id past\nthe gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on\nthem), so the door mirrors nothing field by field.",
+        "operationId": "admin_survey_resource_erasure",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceErasureSurveyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the act would do (`plan` is absent when the resource was already erased); nothing is recorded or changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourceErasureSurvey"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
       }
     },
     "/api/admin/slack/links/disconnect": {
@@ -3901,6 +5599,89 @@
         "x-apidog-folder": "Reference/API Reference/Data Artifacts"
       }
     },
+    "/api/embed/admin/reembed": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.",
+        "description": "Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute\ndrain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as\nthe jobs are queued.\n\nNothing is marked dirty. Staleness is *derived* (`embedding IS NULL OR embedded_with IS DISTINCT\nFROM <current model>`), so this is idempotent, safe to re-run, and safe to run while the drain is\nmid-flight: it simply picks up whatever is still stale. A resource that already has a live job is\nskipped, so it can never double-queue.\n\nAdmin-gated on the caller's own identity (`is_system_admin`) rather than the drain's shared secret:\nthis is a human operator action, and it should work with the operator's normal login instead of\nrequiring them to hold a deploy secret.\n\nDocumented under the `Admin` tag with the rest of the operator surface (`routes/admin.rs`). The\ndrain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.",
+        "operationId": "admin_reembed",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReembedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What is stale in scope, and the resources enqueued (none on `dry_run`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReembedSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not exactly one of `resource_id`, `context_id`, `all`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
+      }
+    },
     "/api/events/{kb_context_id}/cursor": {
       "parameters": [
         {
@@ -5351,6 +7132,120 @@
           }
         ],
         "x-apidog-folder": "Reference/API Reference/Invocations"
+      }
+    },
+    "/api/machine-clients/{id}/rebind": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "POST /api/machine-clients/{id}/rebind — point a fresh IdP `client_id` at the agent profile an\nexisting machine client holds (system admin only). Mounted by `routes/admin.rs`, apart from its\nowner-gated siblings: team ownership cannot bound the reach a rebind inherits.",
+        "operationId": "admin_rebind_machine_client",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The machine client whose profile the new client id inherits",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RebindMachineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The new machine client, bound to the inherited profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MachineClient"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The source client cannot be rebound (e.g. already revoked)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is not a system admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such machine client",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The new `client_id` is already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Admin"
       }
     },
     "/api/profile": {
@@ -10498,6 +12393,335 @@
           }
         }
       },
+      "AdminDirectoryEntry": {
+        "type": "object",
+        "description": "One row of the directory list — minimal on purpose; the state card is the deep read.",
+        "required": [
+          "profile_id",
+          "handle",
+          "display_name",
+          "standing",
+          "is_system_admin",
+          "team_count",
+          "has_pending_request"
+        ],
+        "properties": {
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile's default verified email (default link if verified, else earliest-verified),\n`None` when no verified link exists. An unverified email never renders here."
+          },
+          "handle": {
+            "type": "string"
+          },
+          "has_pending_request": {
+            "type": "boolean",
+            "description": "The profile holds an open (`pending`) join request — the direct bridge to\n`admin requests review <id>`."
+          },
+          "is_system_admin": {
+            "type": "boolean",
+            "description": "Reads the principal-governance grant and nothing else."
+          },
+          "matched_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present only when the `email_contains` filter drove the match: the address that\nsatisfied it, so \"why was this person enumerated\" is answerable from the row itself."
+          },
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provisioned_via": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Auth-link provider of the link [`Self::email`] came from (or of the earliest link when no\nverified link exists) — the \"provisioned via Google / saml:idp-key\" answer."
+          },
+          "standing": {
+            "type": "string",
+            "description": "Admission state as rendered: `denied|requested|approved|revoked|deactivated`. A profile\nwith no standing row renders `denied` (absence denies) rather than as an absent field."
+          },
+          "standing_updated": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the standing row was last written; `None` exactly when no row exists."
+          },
+          "team_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AdminDirectoryListResponse": {
+        "type": "object",
+        "description": "A page of the directory. Carries `total` — the count of EVERY profile matching the filter,\nnot just this page — so a paging agent is never silently incomplete.",
+        "required": [
+          "entries",
+          "total"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminDirectoryEntry"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total profiles matching the filter across all pages."
+          }
+        }
+      },
+      "AdminOpenJoinRequest": {
+        "type": "object",
+        "description": "The profile's open join request, if any — the direct bridge to\n`admin requests review <id>`. Closed/rejected history is ledger territory and stays off v1.",
+        "required": [
+          "id",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AdminOpenReviewRequest": {
+        "type": "object",
+        "description": "The profile's open reconsideration request, if any — the bridge to\n`admin reviews close <id>`.",
+        "required": [
+          "id",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "AdminProfileAuthLink": {
+        "type": "object",
+        "description": "One identity link on the card — the SAML-provenance answer. Rendered verbatim from\n`kb_profile_auth_links`; `email_verified` is what \"verified\" means throughout the directory.",
+        "required": [
+          "auth_provider",
+          "email_verified",
+          "is_default",
+          "linked_at"
+        ],
+        "properties": {
+          "auth_provider": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The linked address, `None` for machine-style links (which a human card will not carry,\nbut the projection stays total over the table)."
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "linked_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AdminProfileCard": {
+        "type": "object",
+        "description": "The principal state card — one response composed from existing tables, the deep read behind\n`GET /api/access/admin/profiles/{profile_id}` and `?email=`. Hints name EXISTING commands;\nthey are reads that print, not new mutation doors.",
+        "required": [
+          "profile_id",
+          "handle",
+          "display_name",
+          "standing",
+          "is_system_admin",
+          "auth_links",
+          "teams",
+          "pending_invitations",
+          "hints"
+        ],
+        "properties": {
+          "auth_links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminProfileAuthLink"
+            }
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The default verified email (default link if it exists and is verified, else the\nearliest-verified link), `None` when no verified link exists."
+          },
+          "handle": {
+            "type": "string"
+          },
+          "hints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The existing enablement commands, as copy-runnable text."
+          },
+          "is_system_admin": {
+            "type": "boolean"
+          },
+          "open_join_request": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AdminOpenJoinRequest"
+              }
+            ]
+          },
+          "open_reconsideration": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AdminOpenReviewRequest"
+              }
+            ]
+          },
+          "pending_invitations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminProfileInvitation"
+            }
+          },
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provisioned_via": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Provider of the link [`Self::email`] came from, else of the earliest link overall."
+          },
+          "standing": {
+            "type": "string"
+          },
+          "standing_updated": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminProfileTeamMembership"
+            }
+          }
+        }
+      },
+      "AdminProfileInvitation": {
+        "type": "object",
+        "description": "A pending team invitation attributed to the profile. FIELD-PINNED: there is deliberately no\n`token` field — the token accepts the invitation, and leaking it here would hand every reader\nof a terminal scrollback or agent transcript a mutation capability. An invitation whose\ntarget email is verified-owned by two or more profiles is attributed to NEITHER card.",
+        "required": [
+          "id",
+          "team_slug",
+          "role",
+          "invited_by_profile_id",
+          "created",
+          "expires_at"
+        ],
+        "properties": {
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invited_by_profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "type": "string"
+          },
+          "team_slug": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminProfileTeamMembership": {
+        "type": "object",
+        "description": "A team membership on the card — including memberships held while denied, which is legal\ntoday and confers nothing until Approve.",
+        "required": [
+          "team_slug",
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "team_slug": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminProfilesListAnswer": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AdminDirectoryListResponse",
+            "description": "The directory page (no `email` in the query)."
+          },
+          {
+            "$ref": "#/components/schemas/AdminProfileCard",
+            "description": "The single state card `?email=` resolved."
+          }
+        ],
+        "description": "The list route's two answers. Untagged, so each arm serializes exactly as its inner type does\n— the wire is the page or the card, never an envelope around them — and the contract states\nboth shapes as a `oneOf` rather than leaving a client to discover the second one."
+      },
       "AdvanceWatermarkAck": {
         "type": "object",
         "description": "Acknowledgement for a watermark advance — **the cursors as stored**, read back from the UPDATE\nitself (`RETURNING`), never an echo of the request.\n\nThe difference is load-bearing. Both fields are optional on the way in and both have a server-side\nrule applied to them (an absent `event_id` leaves the watermark put; an absent\n`boundary_fingerprint` falls back to the write-time boundary), so echoing the input would report a\nstate that may not exist. A caller — and a test — can compare these against what it sent and see\nexactly which rule fired.",
@@ -11203,6 +13427,22 @@
           }
         }
       },
+      "AutoJoinReconcileRow": {
+        "type": "object",
+        "description": "One (team, profile) pair an auto-join reconciliation added — the answer of\n`POST /api/access/admin/auto-join/reconcile` and `temper admin access reconcile-auto-join`.\nThe roster drift it repairs was silent (profiles approved through the direct-grant door\nnever joined the `everyone` pool); the repair names what it did.",
+        "required": [
+          "team_slug",
+          "profile_handle"
+        ],
+        "properties": {
+          "profile_handle": {
+            "type": "string"
+          },
+          "team_slug": {
+            "type": "string"
+          }
+        }
+      },
       "BindTeamOutcome": {
         "type": "object",
         "description": "The result of binding a cognitive map to a team. `bound` is `false` when the\nbinding already existed (idempotent no-op) — the clean mirror of genesis's\n`created` flag.",
@@ -11237,6 +13477,26 @@
             "type": "string",
             "format": "uuid",
             "description": "The team to bind the cognitive map to."
+          }
+        }
+      },
+      "BlobCoLinks": {
+        "type": "object",
+        "description": "A related blob and the other resources that hold a live edge to it.",
+        "required": [
+          "blob_id",
+          "holders"
+        ],
+        "properties": {
+          "blob_id": {
+            "$ref": "#/components/schemas/BlobId"
+          },
+          "holders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceId"
+            },
+            "description": "Empty when no other resource links the blob."
           }
         }
       },
@@ -11429,6 +13689,23 @@
           "weight": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "BlobStrikeView": {
+        "type": "object",
+        "description": "One blob strike of a completed erasure, as the door reports it.",
+        "required": [
+          "blob_id",
+          "released"
+        ],
+        "properties": {
+          "blob_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "released": {
+            "type": "boolean"
           }
         }
       },
@@ -12195,6 +14472,18 @@
           },
           "outcome": {
             "description": "Opaque terminal outcome payload (agent-defined shape)."
+          }
+        }
+      },
+      "CloseReviewBody": {
+        "type": "object",
+        "description": "Body for closing a reconsideration request.\n\nIt carries **only** a note, and that is the design rather than an omission. Closing a review\nrecords that an admin handled it; it grants nothing (D15). A `status` field here would invite\nexactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is\na separate `POST /api/access/admin/approve`.",
+        "properties": {
+          "decision_note": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -12998,6 +15287,20 @@
           }
         }
       },
+      "DemoteAdminRequest": {
+        "type": "object",
+        "description": "Body for `POST /api/access/admin/demote`.\n\nThe governance twin of [`PromoteAdminRequest`]: it revokes the system-admin grant. Not\nteam-scoped — governance is keyed on the profile alone, so it carries no team.\n\nIt carries the `web-api` derive because the admin surface is part of the documented contract,\nbut not the `typescript`/`mcp` set: it is fronted by no MCP tool and consumed by no UI, so those\nderives would generate surface nothing consumes.",
+        "required": [
+          "profile_id"
+        ],
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Profile to demote (revoke its system-admin governance grant)."
+          }
+        }
+      },
       "DeviceOverrides": {
         "type": "object",
         "description": "Per-device configuration overrides keyed by X-Temper-Device-Id.",
@@ -13560,6 +15863,146 @@
           }
         }
       },
+      "ErasureExecuteRequest": {
+        "type": "object",
+        "description": "The execute door's request: the subject as the pseudonym UUID, plus the opaque request\nreference (UUID — the `RefRel::Request` apparatus Beat 2 pinned). No name, no email, no case\ndescription: the request-to-person mapping lives in the operator's DSAR records, outside the\nledger.",
+        "required": [
+          "subject",
+          "request_reference"
+        ],
+        "properties": {
+          "request_reference": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subject": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ErasureExecuteResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "event_id",
+              "already_erased",
+              "redacted_hashes",
+              "targets",
+              "blob_strikes",
+              "status"
+            ],
+            "properties": {
+              "already_erased": {
+                "type": "boolean"
+              },
+              "blob_strikes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BlobStrikeView"
+                }
+              },
+              "event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "redacted_hashes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The redacted set (D2): content hashes only."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "completed"
+                ]
+              },
+              "targets": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ErasureTargetOutcome"
+                },
+                "description": "Per-target outcomes and the named remainder (D6's accepted-in-part arm): the\noperator sees the `independent_obligation` remainder AT THE DOOR, not only in the\nledger — the completion's own payload is the audit, but the door's caller is the\nactor and deserves the same facts."
+              }
+            }
+          }
+        ],
+        "description": "What the door's act did: the completion, in full or as the no-op completion on an\nalready-erased subject. It is the door's only answer, since no door raises a principal refusal\n(a caller who is not a system admin is answered 404 before dispatch). It stays a tagged enum\nof one variant so the wire keeps `\"status\": \"completed\"`: removing the tag would change the\nbody's shape for no behavioural reason."
+      },
+      "ErasureSurveyRequest": {
+        "type": "object",
+        "description": "The survey door's request: the subject as the pseudonym UUID, and nothing else. No\nrequest_reference — nothing is requested (ruled 2026-09-12: a survey attempt is not an\nerasure request, so no reference is minted and no refusal would be recorded).",
+        "required": [
+          "subject"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ErasureSurveyResponse": {
+        "type": "object",
+        "description": "What the survey predicts the act would do — the execute response minus `event_id`: the\nsurvey fires no event, so there is no event id to report. The targets are the prose the\nact would write; the blob strikes are PREDICTIONS honest about the moment the survey ran\n(the act's strike-time verdict is authoritative).",
+        "required": [
+          "subject",
+          "already_erased",
+          "redacted_hashes",
+          "targets",
+          "blob_strikes"
+        ],
+        "properties": {
+          "already_erased": {
+            "type": "boolean"
+          },
+          "blob_strikes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlobStrikeView"
+            }
+          },
+          "redacted_hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The redacted set (D2) the act would admit."
+          },
+          "subject": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErasureTargetOutcome"
+            },
+            "description": "Per-target outcomes and the named remainder, exactly as the record would carry them."
+          }
+        }
+      },
+      "ErasureTargetOutcome": {
+        "type": "object",
+        "description": "One target of a completed erasure and what happened to it (erasure spec, \"per-target\noutcomes\"). The target names itself the way the personal-data manifest does — `table` or\n`table.column`; the outcome is the act's own record of what redaction applied. Deliberately\nopen-textured in v1: ceilings are DATA, not types (D1), and the per-target vocabulary is the\nexecution build's to pin. `unhonourable_scope` outcomes land here, never silent.",
+        "required": [
+          "target",
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "What the act did to it (erased / sentinel-scrubbed / accepted-in-part / …)."
+          },
+          "target": {
+            "type": "string",
+            "description": "Manifest identity of the target (`kb_profiles.display_name`, `kb_teams.slug`, …)."
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "required": [
@@ -13621,6 +16064,11 @@
             "description": "Most recent `kb_events.id` for the context, newest by `created`."
           }
         }
+      },
+      "EventId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A `kb_events.id` value. Always UUIDv7 (time-sortable)."
       },
       "EventTrail": {
         "type": "object",
@@ -14901,6 +17349,96 @@
           "withdrawn"
         ]
       },
+      "JoinRequestWithProfile": {
+        "type": "object",
+        "description": "A join request with the requesting profile's display info (for admin queue).",
+        "required": [
+          "id",
+          "team_id",
+          "requesting_profile_id",
+          "status",
+          "source",
+          "created",
+          "updated",
+          "display_name"
+        ],
+        "properties": {
+          "accepted_terms_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "accepted_terms_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decision_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requesting_profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reviewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reviewed_by_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JoinRequestStatus"
+          },
+          "team_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "updated": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "KindOwnerInput": {
         "oneOf": [
           {
@@ -14976,6 +17514,74 @@
           },
           "title": {
             "type": "string"
+          }
+        }
+      },
+      "MachineClient": {
+        "type": "object",
+        "description": "A registered machine (`client_credentials`) principal.\n\nNo secret is stored, in this phase or ever (D1). `team_id` is the machine's\nOWNER, never its reach (D6).",
+        "required": [
+          "id",
+          "client_id",
+          "issuer",
+          "label",
+          "profile_id",
+          "registered_by_profile_id",
+          "created"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "registered_by_profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revoked_by_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "team_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -15387,6 +17993,53 @@
           }
         }
       },
+      "OtherAuthorEdge": {
+        "type": "object",
+        "description": "An edge touching the resource whose asserting principal is not the resource's owner.",
+        "required": [
+          "edge_id",
+          "author",
+          "folded"
+        ],
+        "properties": {
+          "author": {
+            "$ref": "#/components/schemas/ProfileId",
+            "description": "The profile behind the entity that emitted the edge's asserting event."
+          },
+          "edge_id": {
+            "$ref": "#/components/schemas/EdgeId"
+          },
+          "folded": {
+            "type": "boolean",
+            "description": "Already folded at survey time: the act appends no fold for it, but still nulls its label\nand sentinels its properties (steps 9c and 9d reach live and folded edges)."
+          }
+        }
+      },
+      "OtherAuthorEdgeProperty": {
+        "type": "object",
+        "description": "A property row owned by an edge touching the resource, asserted by another principal.",
+        "required": [
+          "property_id",
+          "edge_id",
+          "author",
+          "folded"
+        ],
+        "properties": {
+          "author": {
+            "$ref": "#/components/schemas/ProfileId"
+          },
+          "edge_id": {
+            "$ref": "#/components/schemas/EdgeId"
+          },
+          "folded": {
+            "type": "boolean",
+            "description": "Already folded at survey time (the row's own fold): the act still sentinels its key and\nvalue (step 9d reaches live and folded rows)."
+          },
+          "property_id": {
+            "$ref": "#/components/schemas/PropertyId"
+          }
+        }
+      },
       "OutcomeDeclaration": {
         "type": "object",
         "description": "Which stages come back, and how much of each row.",
@@ -15616,6 +18269,33 @@
           }
         ],
         "description": "`GET /api/profile` — the caller's own profile with their system-level entitlements.\n\n**Shared, not duplicated.** This lived in `temper-api`'s handler as a `Serialize`-only struct,\nwhich meant `temper-client` had nothing to deserialize into and read the response as a bare\n[`Profile`] instead — silently dropping `entitlements`, because `Profile` neither declares the\nfield nor denies unknown ones. Both ends now share this definition, which is what the shared-type\nrule is for: the drift it prevents had already happened.\n\n**No ts-rs derive, and that is forced.** The flattened profile cannot be codegen'd — see\n`resource_view.rs`, which records the same constraint: \"ts-rs cannot codegen a flattened\nfield\". The flatten is kept because it is the wire shape already in production; changing it to a\nnamed field to buy a TypeScript type would break every existing reader."
+      },
+      "PromoteAdminRequest": {
+        "type": "object",
+        "description": "Body for `POST /api/access/admin/promote`.",
+        "required": [
+          "profile_id"
+        ],
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Profile to promote (grant `owner` on the target team)."
+          },
+          "team_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Target team for the side-effect `owner` row; `None` ⇒ the configured gating team. The\ngovernance grant is what mints the admin, not this membership."
+          }
+        }
+      },
+      "PropertyId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "A `kb_properties.id` value — a facet/doc_type/block_role assertion."
       },
       "PropertyOp": {
         "oneOf": [
@@ -15861,6 +18541,20 @@
           }
         }
       },
+      "QueueCount": {
+        "type": "object",
+        "description": "How many principals are waiting in an operator queue — the count-shaped answer to\n`GET /api/access/admin/requests/count` and `GET /api/access/admin/reviews/count`.\n\n**A count, not a queue.** `temper warmup` reports that a queue has something in it; the\nqueue itself is one command away (`temper admin requests list`, `temper admin reviews\nlist`). Fetching every row with its handle, display name, email and message so that\n`.len()` could be taken made a session-start primer carry other people's identities\nthrough the client on every session.\n\n**A refusal is a `403`, never a zero.** These routes sit behind `require_system_admin`,\nexactly as their list siblings do, so a caller who may not see the queue is told so — and\n\"not yours to see\" stays distinguishable from \"yours to see, and empty\". A count endpoint\nthat answered a non-admin with `0` would erase that difference silently, which is the one\nthing the primer's `Option` fields exist to prevent.",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`i32` for the same reason as [`crate::types::invitation::PendingInvitationCounts::count`]: a 64-bit count reaches\nTypeScript as `bigint` and does not survive `JSON.stringify`."
+          }
+        }
+      },
       "ReassignAck": {
         "type": "object",
         "description": "API response acknowledging a single reassignment.",
@@ -15940,6 +18634,34 @@
           "to_profile_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "RebindMachineRequest": {
+        "type": "object",
+        "description": "Point a fresh `client_id` at an existing agent profile (D8).",
+        "required": [
+          "client_id",
+          "from_machine_client_id",
+          "label",
+          "keep_old_active"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "description": "The new IdP client id."
+          },
+          "from_machine_client_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The existing `kb_machine_clients.id` whose profile is inherited. On\n`POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it."
+          },
+          "keep_old_active": {
+            "type": "boolean",
+            "description": "When false (the default), the old row is revoked in the same transaction."
+          },
+          "label": {
+            "type": "string"
           }
         }
       },
@@ -16254,6 +18976,28 @@
           }
         }
       },
+      "ReconcileAutoJoinOutcome": {
+        "type": "object",
+        "description": "The outcome of an operator auto-join reconciliation: the (team, profile) pairs added,\nplus the touched teams that also carry SAML group mappings. Enrollment writes NATIVE\nrows on auto-join teams, and `reconcile_idp_memberships` skips any (team, profile) pair\nthe profile holds natively — so on a SAML-mapped auto-join team every pair in `added`\npermanently pre-empts the IdP's role assertions for that pair (native-wins-skip). The\nverb names those teams so the operator sees the conversion the repair is making.",
+        "required": [
+          "added",
+          "saml_mapped_teams"
+        ],
+        "properties": {
+          "added": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutoJoinReconcileRow"
+            }
+          },
+          "saml_mapped_teams": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ReconcileCogmapRequest": {
         "type": "object",
         "description": "The `PUT /api/cognitive-maps/{id}` request body — a desired-state manifest.",
@@ -16463,6 +19207,95 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "RedactedEventFields": {
+        "type": "object",
+        "description": "The ledger paths of one event: redacted (`redacted_fields`) or named-and-unreached\n(`ledger_remainder`). ONE shape for both, so the cut-2 completion pass derives what it redacts\nfrom what cut 1 recorded without translating (resource erasure spec D12). The event is keyed\n`event`, never `event_id` — no trail join-key shape rides an admin payload (D1). Paths only,\nnever values: the record of a redaction must not carry what was redacted.",
+        "required": [
+          "event",
+          "paths"
+        ],
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/EventId"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "JSON paths within that event's `payload` (or `metadata`), e.g. `title`, `origin_uri`."
+          }
+        }
+      },
+      "ReembedRequest": {
+        "type": "object",
+        "description": "Body for `POST /api/embed/admin/reembed`.\n\nExactly one scope: a single resource, a whole context, or everything. Three granularities because a\nre-embed is a thing you try on **one**, then a **few**, then **all** — in that order. A trigger that\nonly offers \"all\" is one nobody dares pull.\n\nNothing is *marked* dirty. Staleness is derived — a chunk is stale when it has no vector, or when\nits `embedded_with` is not the model the server embeds with — so this only ever enqueues work for\nchunks that genuinely need it, and it is safe to re-run at any time.",
+        "properties": {
+          "all": {
+            "type": "boolean",
+            "description": "Re-embed everything stale. Must be set explicitly — an empty body is a no-op, not \"all\"."
+          },
+          "context_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Re-embed every stale resource homed in this context."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Report what is stale without enqueuing anything. The safe first move."
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Max resources to enqueue this call. Bounds blast radius: run it repeatedly to walk the index."
+          },
+          "resource_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Re-embed just this resource."
+          }
+        }
+      },
+      "ReembedSummary": {
+        "type": "object",
+        "description": "Result of a re-embed trigger — and, on `dry_run`, just the survey.",
+        "required": [
+          "stale_resources",
+          "stale_chunks",
+          "enqueued"
+        ],
+        "properties": {
+          "enqueued": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Resources actually enqueued by this call. Empty on `dry_run`, and empty for any resource that\nalready had a live job (re-running never double-queues)."
+          },
+          "stale_chunks": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Stale chunks in scope. Divide by the drain's per-tick throughput to estimate the drain time.",
+            "minimum": 0
+          },
+          "stale_resources": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Resources in scope still holding stale chunks.",
+            "minimum": 0
           }
         }
       },
@@ -17186,6 +20019,279 @@
           }
         ],
         "description": "Request body for creating a resource."
+      },
+      "ResourceErasureExecuteRequest": {
+        "type": "object",
+        "description": "The execute door's request. `deny_unknown_fields`: the act's request reference is minted by\nthe service, so a caller that sends one is refused, not ignored.",
+        "required": [
+          "resource"
+        ],
+        "properties": {
+          "also_strike_blobs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Related blobs to strike with the resource (D8); each must be in the survey's remainder."
+          },
+          "resource": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ResourceErasureExecuteResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "request_reference",
+              "event_id",
+              "folded_edges",
+              "targets",
+              "remainder",
+              "ledger_remainder",
+              "blob_strikes",
+              "status"
+            ],
+            "properties": {
+              "blob_strikes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BlobStrikeView"
+                }
+              },
+              "event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "folded_edges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EdgeId"
+                }
+              },
+              "ledger_remainder": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RedactedEventFields"
+                }
+              },
+              "remainder": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ErasureTargetOutcome"
+                }
+              },
+              "request_reference": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The server-minted reference the operator cites."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "completed"
+                ]
+              },
+              "targets": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ErasureTargetOutcome"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "request_reference",
+              "event_id",
+              "reason",
+              "status"
+            ],
+            "properties": {
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "event_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/ResourceErasureRefusalReason"
+              },
+              "request_reference": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "refused"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What the execute door's act did: a completion and a refusal are different answers, so the\nresponse is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,\n`already_erased`); a caller who is not a system admin never reaches the act."
+      },
+      "ResourceErasurePlan": {
+        "type": "object",
+        "description": "The plan `resource_erasure_survey` renders, plus the display-only annotations. The act never\nconsumes the annotations (D10's fingerprint posture): they are read after the plan, in Rust.",
+        "required": [
+          "n_blocks",
+          "n_revisions",
+          "n_chunks",
+          "n_artifacts",
+          "n_edges",
+          "edges",
+          "targets",
+          "ingest_state",
+          "fingerprint_available",
+          "remainder",
+          "ledger_remainder",
+          "other_author_edges",
+          "other_author_edge_properties",
+          "blob_co_links"
+        ],
+        "properties": {
+          "blob_co_links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlobCoLinks"
+            }
+          },
+          "charter_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Set when the resource is a cogmap's charter: the act would refuse."
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EdgeId"
+            },
+            "description": "The live edges the act would fold."
+          },
+          "fingerprint_available": {
+            "type": "boolean"
+          },
+          "ingest_state": {
+            "type": "string"
+          },
+          "ledger_remainder": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RedactedEventFields"
+            }
+          },
+          "n_artifacts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "n_blocks": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "n_chunks": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "n_edges": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "n_revisions": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "other_author_edge_properties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OtherAuthorEdgeProperty"
+            }
+          },
+          "other_author_edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OtherAuthorEdge"
+            }
+          },
+          "remainder": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErasureTargetOutcome"
+            },
+            "description": "Derivers, related blobs, cross-resource ledger text and shared remote sources (D8)."
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ErasureTargetOutcome"
+            }
+          }
+        }
+      },
+      "ResourceErasureRefusalReason": {
+        "type": "string",
+        "description": "The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).",
+        "enum": [
+          "unauthorized",
+          "charter_resource",
+          "ingest_in_flight",
+          "already_erased"
+        ]
+      },
+      "ResourceErasureSurvey": {
+        "type": "object",
+        "description": "The read-only survey. `plan` is `None` exactly when the resource was already erased when the\nsurvey began (the short-circuit); `already_erased` also reads true when an act lands between\nthat read and the plan, and then the plan is present.",
+        "required": [
+          "resource",
+          "already_erased"
+        ],
+        "properties": {
+          "already_erased": {
+            "type": "boolean"
+          },
+          "plan": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceErasurePlan"
+              }
+            ]
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceId"
+          }
+        }
+      },
+      "ResourceErasureSurveyRequest": {
+        "type": "object",
+        "description": "The survey door's request: the resource and nothing else (a survey requests nothing).",
+        "required": [
+          "resource"
+        ],
+        "properties": {
+          "resource": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       },
       "ResourceFacetRow": {
         "type": "object",
@@ -17933,6 +21039,66 @@
         ],
         "description": "Request body for `POST /api/relationships/{edge_handle}/retype`."
       },
+      "ReviewRequestBody": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "decision_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/JoinRequestStatus"
+          }
+        }
+      },
+      "ReviewRequestWithProfile": {
+        "type": "object",
+        "description": "An **open** reconsideration request, with the asking principal's identity (spec D15 admin\ninbox).\n\nThere is deliberately no `decided_at` on this shape. The queue is what is *outstanding*, so a\nrow reaching a reader is open by construction — carrying a column that is always `NULL` would\ninvite a caller to filter on it and believe they had narrowed something.\n\nThe identity join is the same one [`JoinRequestWithProfile`] does, for the same reason: the row\non its own is a bare `profile_id`, and an admin weighing a reconsideration needs to know who is\nasking. It carries **no** decision field beyond the note — closing a review records that it was\nhandled and moves no standing (D15); the admin's actual answer is a separate `Approve`.",
+        "required": [
+          "id",
+          "profile_id",
+          "created",
+          "handle",
+          "display_name"
+        ],
+        "properties": {
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "handle": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "RevokeOutcome": {
         "type": "object",
         "description": "The result of a revoke. `revoked` is `false` when no matching grant existed (idempotent no-op).",
@@ -17942,6 +21108,19 @@
         "properties": {
           "revoked": {
             "type": "boolean"
+          }
+        }
+      },
+      "RevokePrincipalBody": {
+        "type": "object",
+        "description": "Body for `POST /api/access/admin/principals/{id}/revoke`.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Required. It rides the log and the ledger, and a later review's reviewer needs it (D15)."
           }
         }
       },
@@ -19099,6 +22278,48 @@
           }
         }
       },
+      "SystemSettings": {
+        "type": "object",
+        "description": "Instance-wide system settings (singleton row).",
+        "required": [
+          "id",
+          "updated"
+        ],
+        "properties": {
+          "gating_team_slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "instance_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "terms_resource_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "terms_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "TeamCreateRequest": {
         "type": "object",
         "description": "Request body for `POST /api/teams`.\n\n`parent` is an optional team ref (`+slug` or bare `slug`); when present the\nnew team is created as a child in `kb_teams_parents` and the caller must be\n`owner`/`maintainer` on the parent. `auto_join_role` is admin-gated.",
@@ -19505,6 +22726,40 @@
           }
         }
       },
+      "UpdateSettingsRequest": {
+        "type": "object",
+        "description": "Partial-update body for `PATCH /api/access/admin/settings`.",
+        "properties": {
+          "gating_team_slug": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Gating team slug recorded in instance settings. Ownership of it confers no authorization:\n`is_system_admin` reads the principal-governance grant. `None` leaves it unchanged."
+          },
+          "instance_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-facing instance name."
+          },
+          "terms_resource_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "URI of the terms-of-service resource."
+          },
+          "terms_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Terms-of-service version label."
+          }
+        }
+      },
       "VaultConfig": {
         "type": "object",
         "description": "Server-side vault configuration stored in `kb_profiles.vault_config`.\n\nDescribes sync subscriptions, per-device overrides, and the vault path.\nStored as JSONB — existing empty `{}` values deserialize to defaults.",
@@ -19722,6 +22977,10 @@
     {
       "name": "Slack Link",
       "description": "Slack account-link disconnect — self-serve and admin"
+    },
+    {
+      "name": "Admin",
+      "description": "Operator surface — every route here requires the caller to be a system admin (the access-gate queues and standing acts, settings and governance, the profile directory, erasure, re-embed, machine-client rebind)"
     }
   ]
 }

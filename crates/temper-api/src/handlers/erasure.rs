@@ -10,8 +10,8 @@
 //! SUBJECT (not whether it exists, not whether it was erased). The doors themselves are
 //! discoverable, and the 404 does not claim to hide them. The only record of that attempt is one
 //! `tracing` line: no ledger event of any kind. A survey attempt was never recorded either (ruled 2026-09-12), so both doors now answer a
-//! non-admin alike. Both mounted plain (`.route()`), out of the OpenAPI contract like
-//! `/api/admin/ledger`; allowlisted in `.github/scripts/check-openapi-routes.sh`.
+//! non-admin alike. Both are documented under the `Admin` tag (`routes/admin.rs`): the contract
+//! states the 404, because the 404 protects the subject, not the door.
 //!
 //! The 404 covers WELL-FORMED requests: axum's `Json` extractor rejects a malformed body before
 //! the handler runs, the scope `admin_directory` states for its own gate. Such a rejection names
@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use temper_core::types::ids::ProfileId;
 use temper_services::auth::SystemAdmin;
-use temper_services::error::{ApiError, ApiResult};
+use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::services::erasure_fence_service::{self, DrainSummary};
 use temper_services::services::erasure_service;
 use temper_services::state::AppState;
@@ -69,7 +69,7 @@ pub(crate) async fn require_erasure_operator(
 /// The survey door's request: the subject as the pseudonym UUID, and nothing else. No
 /// request_reference — nothing is requested (ruled 2026-09-12: a survey attempt is not an
 /// erasure request, so no reference is minted and no refusal would be recorded).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ErasureSurveyRequest {
     pub subject: Uuid,
 }
@@ -78,14 +78,14 @@ pub struct ErasureSurveyRequest {
 /// reference (UUID — the `RefRel::Request` apparatus Beat 2 pinned). No name, no email, no case
 /// description: the request-to-person mapping lives in the operator's DSAR records, outside the
 /// ledger.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ErasureExecuteRequest {
     pub subject: Uuid,
     pub request_reference: Uuid,
 }
 
 /// One blob strike of a completed erasure, as the door reports it.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct BlobStrikeView {
     pub blob_id: Uuid,
     pub released: bool,
@@ -96,7 +96,7 @@ pub struct BlobStrikeView {
 /// (a caller who is not a system admin is answered 404 before dispatch). It stays a tagged enum
 /// of one variant so the wire keeps `"status": "completed"`: removing the tag would change the
 /// body's shape for no behavioural reason.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ErasureExecuteResponse {
     Completed {
@@ -123,6 +123,19 @@ pub enum ErasureExecuteResponse {
 /// `already_erased: true`). Correlation is INDEXED, never unique
 /// (20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does
 /// not deduplicate the door.
+#[utoipa::path(
+    post,
+    operation_id = "admin_erase_principal",
+    path = "/api/admin/erasure",
+    tag = "Admin",
+    request_body = ErasureExecuteRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The erasure completed (`already_erased` on a repeat)", body = ErasureExecuteResponse),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist", body = ErrorBody),
+    )
+)]
 pub async fn execute(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -159,7 +172,7 @@ pub async fn execute(
 /// survey fires no event, so there is no event id to report. The targets are the prose the
 /// act would write; the blob strikes are PREDICTIONS honest about the moment the survey ran
 /// (the act's strike-time verdict is authoritative).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ErasureSurveyResponse {
     pub subject: Uuid,
     pub already_erased: bool,
@@ -176,6 +189,19 @@ pub struct ErasureSurveyResponse {
 /// Gated here like execute (`require_erasure_operator`): a caller who is not a system admin
 /// gets the same 404 and no event. The survey is witnessed read-only: no events, no projection
 /// change — it previews, it never prepares.
+#[utoipa::path(
+    post,
+    operation_id = "admin_survey_principal_erasure",
+    path = "/api/admin/erasure/survey",
+    tag = "Admin",
+    request_body = ErasureSurveyRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "What the erasure act would do; nothing is recorded or changed", body = ErasureSurveyResponse),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist", body = ErrorBody),
+    )
+)]
 pub async fn survey(
     State(state): State<AppState>,
     auth: AuthUser,

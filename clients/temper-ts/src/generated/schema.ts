@@ -4,6 +4,368 @@
  */
 
 export interface paths {
+    "/api/access/admin/auto-join/reconcile": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/access/admin/auto-join/reconcile — converge every auto-join team's roster to the
+         *     standing-approved population (admin only). Returns the (team, profile) pairs added plus
+         *     the touched teams that also carry SAML group mappings (whose new native rows pre-empt
+         *     IdP role assertions); an empty `added` means the instance was already converged.
+         */
+        post: operations["admin_reconcile_auto_join"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/demote": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/access/admin/demote — revoke a profile's system-admin grant (admin only).
+         * @description The manual governance twin of `promote_admin`; the automatic path is demotion-by-transition in
+         *     `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries
+         *     NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the
+         *     `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+         */
+        post: operations["admin_demote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/principals/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only). */
+        post: operations["admin_approve_principal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/principals/{id}/deactivate": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only). */
+        post: operations["admin_deactivate_principal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/principals/{id}/reactivate": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only). */
+        post: operations["admin_reactivate_principal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/principals/{id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only). */
+        post: operations["admin_revoke_principal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/profiles": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/access/admin/profiles — the directory list, or the state card when `?email=`
+         *     resolves exactly one verified address.
+         */
+        get: operations["admin_list_profiles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/profiles/{profile_id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/access/admin/profiles/{profile_id} — the principal state card. */
+        get: operations["admin_show_profile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/promote": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/access/admin/promote — promote a profile to system admin (admin only).
+         * @description Grants `kb_principal_governance` + `approved` standing (the real admin-ness
+         *     under D11). `team_id` omitted ⇒ the configured gating team for the retained
+         *     side-effect `owner` row.
+         */
+        post: operations["admin_promote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/requests": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** GET /api/access/admin/requests — list pending join requests (admin only). */
+        get: operations["admin_list_join_requests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/requests/count": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/access/admin/requests/count — how many join requests are outstanding (admin only).
+         * @description [`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may
+         *     not read the queue still gets a `403` — never a `0`, which would tell them the queue is empty
+         *     while refusing to let them see it.
+         */
+        get: operations["admin_count_join_requests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only). */
+        patch: operations["admin_review_join_request"];
+        trace?: never;
+    };
+    "/api/access/admin/reviews": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/access/admin/reviews — list undecided reconsideration requests.
+         * @description The read half of the inbox `kb_principal_review_requests` always described itself as and never
+         *     had. Same operator-only posture as the join-request queue above: the `&SystemAdmin` proof is
+         *     minted here and required by the service.
+         */
+        get: operations["admin_list_reviews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/reviews/count": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
+         * @description [`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.
+         */
+        get: operations["admin_count_reviews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/access/admin/reviews/{id}": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * PATCH /api/access/admin/reviews/:id — record that a reconsideration was handled.
+         * @description Returns `204`: there is no updated resource worth handing back, because closing changes nothing
+         *     the caller can act on further. It moves **no** standing — readmitting a principal is
+         *     `POST /api/access/admin/approve`, deliberately a different call.
+         */
+        patch: operations["admin_close_review"];
+        trace?: never;
+    };
+    "/api/access/admin/settings": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/access/admin/settings — read FULL system settings (admin only).
+         * @description Unlike the public `GET /api/access/settings`, this returns `gating_team_slug`
+         *     and `updated`, which an admin needs to administer the gate.
+         */
+        get: operations["admin_get_settings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** PATCH /api/access/admin/settings — partial update of system settings (admin only). */
+        patch: operations["admin_update_settings"];
+        trace?: never;
+    };
     "/api/access/requests": {
         parameters: {
             query?: never;
@@ -84,6 +446,107 @@ export interface paths {
         get: operations["get_settings"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/erasure": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/admin/erasure` — the operator's execute door.
+         * @description The gate runs here, before dispatch (`require_erasure_operator`); the service takes the proof
+         *     and attributes the act to `admin.actor()`.
+         *
+         *     The request reference tolerates retries: a retried POST with the SAME reference re-executes
+         *     as a no-op completion (the subject is already tombstoned, so the act completes with
+         *     `already_erased: true`). Correlation is INDEXED, never unique
+         *     (20260624000001_canonical_schema.sql:491) — the reference pairs the act's events, it does
+         *     not deduplicate the door.
+         */
+        post: operations["admin_erase_principal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/erasure/survey": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/admin/erasure/survey` — the read-only survey beside the execute door (task
+         *     01a09628 item 2).
+         * @description Gated here like execute (`require_erasure_operator`): a caller who is not a system admin
+         *     gets the same 404 and no event. The survey is witnessed read-only: no events, no projection
+         *     change — it previews, it never prepares.
+         */
+        post: operations["admin_survey_principal_erasure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/resources/erasure": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** `POST /api/admin/resources/erasure` — the operator's execute door. */
+        post: operations["admin_erase_resource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/resources/erasure/survey": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/admin/resources/erasure/survey` — the read-only survey. The gate answers a caller
+         *     who is not a system admin with the same 404 as execute and records nothing; an unknown id past
+         *     the gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on
+         *     them), so the door mirrors nothing field by field.
+         */
+        post: operations["admin_survey_resource_erasure"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1026,6 +1489,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/embed/admin/reembed": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Operator-only re-embed trigger: `POST /api/embed/admin/reembed`.
+         * @description Enqueues embed jobs for resources holding **stale** chunks in the requested scope; the per-minute
+         *     drain then does the work. This endpoint is the *trigger*, never the engine — it returns as soon as
+         *     the jobs are queued.
+         *
+         *     Nothing is marked dirty. Staleness is *derived* (`embedding IS NULL OR embedded_with IS DISTINCT
+         *     FROM <current model>`), so this is idempotent, safe to re-run, and safe to run while the drain is
+         *     mid-flight: it simply picks up whatever is still stale. A resource that already has a live job is
+         *     skipped, so it can never double-queue.
+         *
+         *     Admin-gated on the caller's own identity (`is_system_admin`) rather than the drain's shared secret:
+         *     this is a human operator action, and it should work with the operator's normal login instead of
+         *     requiring them to hold a deploy secret.
+         *
+         *     Documented under the `Admin` tag with the rest of the operator surface (`routes/admin.rs`). The
+         *     drain and warm crons beside it stay out of the contract: their only caller holds a deploy secret.
+         */
+        post: operations["admin_reembed"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/events/{kb_context_id}/cursor": {
         parameters: {
             query?: never;
@@ -1441,6 +1941,30 @@ export interface paths {
         put?: never;
         /** Close an invocation */
         post: operations["close"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/machine-clients/{id}/rebind": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/machine-clients/{id}/rebind — point a fresh IdP `client_id` at the agent profile an
+         *     existing machine client holds (system admin only). Mounted by `routes/admin.rs`, apart from its
+         *     owner-gated siblings: team ownership cannot bound the reach a rebind inherits.
+         */
+        post: operations["admin_rebind_machine_client"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2633,6 +3157,157 @@ export interface components {
             profile_id: string;
             role: components["schemas"]["TeamRole"];
         };
+        /** @description One row of the directory list — minimal on purpose; the state card is the deep read. */
+        AdminDirectoryEntry: {
+            display_name: string;
+            /**
+             * @description The profile's default verified email (default link if verified, else earliest-verified),
+             *     `None` when no verified link exists. An unverified email never renders here.
+             */
+            email?: string | null;
+            handle: string;
+            /**
+             * @description The profile holds an open (`pending`) join request — the direct bridge to
+             *     `admin requests review <id>`.
+             */
+            has_pending_request: boolean;
+            /** @description Reads the principal-governance grant and nothing else. */
+            is_system_admin: boolean;
+            /**
+             * @description Present only when the `email_contains` filter drove the match: the address that
+             *     satisfied it, so "why was this person enumerated" is answerable from the row itself.
+             */
+            matched_email?: string | null;
+            /** Format: uuid */
+            profile_id: string;
+            /**
+             * @description Auth-link provider of the link [`Self::email`] came from (or of the earliest link when no
+             *     verified link exists) — the "provisioned via Google / saml:idp-key" answer.
+             */
+            provisioned_via?: string | null;
+            /**
+             * @description Admission state as rendered: `denied|requested|approved|revoked|deactivated`. A profile
+             *     with no standing row renders `denied` (absence denies) rather than as an absent field.
+             */
+            standing: string;
+            /**
+             * Format: date-time
+             * @description When the standing row was last written; `None` exactly when no row exists.
+             */
+            standing_updated?: string | null;
+            /** Format: int64 */
+            team_count: number;
+        };
+        /**
+         * @description A page of the directory. Carries `total` — the count of EVERY profile matching the filter,
+         *     not just this page — so a paging agent is never silently incomplete.
+         */
+        AdminDirectoryListResponse: {
+            entries: components["schemas"]["AdminDirectoryEntry"][];
+            /**
+             * Format: int64
+             * @description Total profiles matching the filter across all pages.
+             */
+            total: number;
+        };
+        /**
+         * @description The profile's open join request, if any — the direct bridge to
+         *     `admin requests review <id>`. Closed/rejected history is ledger territory and stays off v1.
+         */
+        AdminOpenJoinRequest: {
+            /** Format: date-time */
+            created: string;
+            /** Format: uuid */
+            id: string;
+            message?: string | null;
+        };
+        /**
+         * @description The profile's open reconsideration request, if any — the bridge to
+         *     `admin reviews close <id>`.
+         */
+        AdminOpenReviewRequest: {
+            /** Format: date-time */
+            created: string;
+            /** Format: uuid */
+            id: string;
+        };
+        /**
+         * @description One identity link on the card — the SAML-provenance answer. Rendered verbatim from
+         *     `kb_profile_auth_links`; `email_verified` is what "verified" means throughout the directory.
+         */
+        AdminProfileAuthLink: {
+            auth_provider: string;
+            /**
+             * @description The linked address, `None` for machine-style links (which a human card will not carry,
+             *     but the projection stays total over the table).
+             */
+            email?: string | null;
+            email_verified: boolean;
+            is_default: boolean;
+            /** Format: date-time */
+            linked_at: string;
+        };
+        /**
+         * @description The principal state card — one response composed from existing tables, the deep read behind
+         *     `GET /api/access/admin/profiles/{profile_id}` and `?email=`. Hints name EXISTING commands;
+         *     they are reads that print, not new mutation doors.
+         */
+        AdminProfileCard: {
+            auth_links: components["schemas"]["AdminProfileAuthLink"][];
+            display_name: string;
+            /**
+             * @description The default verified email (default link if it exists and is verified, else the
+             *     earliest-verified link), `None` when no verified link exists.
+             */
+            email?: string | null;
+            handle: string;
+            /** @description The existing enablement commands, as copy-runnable text. */
+            hints: string[];
+            is_system_admin: boolean;
+            open_join_request?: null | components["schemas"]["AdminOpenJoinRequest"];
+            open_reconsideration?: null | components["schemas"]["AdminOpenReviewRequest"];
+            pending_invitations: components["schemas"]["AdminProfileInvitation"][];
+            /** Format: uuid */
+            profile_id: string;
+            /** @description Provider of the link [`Self::email`] came from, else of the earliest link overall. */
+            provisioned_via?: string | null;
+            standing: string;
+            /** Format: date-time */
+            standing_updated?: string | null;
+            teams: components["schemas"]["AdminProfileTeamMembership"][];
+        };
+        /**
+         * @description A pending team invitation attributed to the profile. FIELD-PINNED: there is deliberately no
+         *     `token` field — the token accepts the invitation, and leaking it here would hand every reader
+         *     of a terminal scrollback or agent transcript a mutation capability. An invitation whose
+         *     target email is verified-owned by two or more profiles is attributed to NEITHER card.
+         */
+        AdminProfileInvitation: {
+            /** Format: date-time */
+            created: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            invited_by_profile_id: string;
+            role: string;
+            team_slug: string;
+        };
+        /**
+         * @description A team membership on the card — including memberships held while denied, which is legal
+         *     today and confers nothing until Approve.
+         */
+        AdminProfileTeamMembership: {
+            role: string;
+            team_slug: string;
+        };
+        /**
+         * @description The list route's two answers. Untagged, so each arm serializes exactly as its inner type does
+         *     — the wire is the page or the card, never an envelope around them — and the contract states
+         *     both shapes as a `oneOf` rather than leaving a client to discover the second one.
+         */
+        AdminProfilesListAnswer: components["schemas"]["AdminDirectoryListResponse"] | components["schemas"]["AdminProfileCard"];
         /**
          * @description Acknowledgement for a watermark advance — **the cursors as stored**, read back from the UPDATE
          *     itself (`RETURNING`), never an echo of the request.
@@ -3050,6 +3725,16 @@ export interface components {
             job_id?: string | null;
         };
         /**
+         * @description One (team, profile) pair an auto-join reconciliation added — the answer of
+         *     `POST /api/access/admin/auto-join/reconcile` and `temper admin access reconcile-auto-join`.
+         *     The roster drift it repairs was silent (profiles approved through the direct-grant door
+         *     never joined the `everyone` pool); the repair names what it did.
+         */
+        AutoJoinReconcileRow: {
+            profile_handle: string;
+            team_slug: string;
+        };
+        /**
          * @description The result of binding a cognitive map to a team. `bound` is `false` when the
          *     binding already existed (idempotent no-op) — the clean mirror of genesis's
          *     `created` flag.
@@ -3069,6 +3754,12 @@ export interface components {
              * @description The team to bind the cognitive map to.
              */
             team_id: string;
+        };
+        /** @description A related blob and the other resources that hold a live edge to it. */
+        BlobCoLinks: {
+            blob_id: components["schemas"]["BlobId"];
+            /** @description Empty when no other resource links the blob. */
+            holders: components["schemas"]["ResourceId"][];
         };
         /**
          * @description The response of `POST /api/blobs` — get-or-create on the content hash, PER-HOME (D2 as
@@ -3203,6 +3894,12 @@ export interface components {
             polarity: components["schemas"]["Polarity"];
             /** Format: double */
             weight: number;
+        };
+        /** @description One blob strike of a completed erasure, as the door reports it. */
+        BlobStrikeView: {
+            /** Format: uuid */
+            blob_id: string;
+            released: boolean;
         };
         /**
          * @description One blob as the list surface reports it (`GET /api/blobs`). The list can only ever
@@ -3732,6 +4429,17 @@ export interface components {
             disposition: components["schemas"]["Disposition"];
             /** @description Opaque terminal outcome payload (agent-defined shape). */
             outcome?: unknown;
+        };
+        /**
+         * @description Body for closing a reconsideration request.
+         *
+         *     It carries **only** a note, and that is the design rather than an omission. Closing a review
+         *     records that an admin handled it; it grants nothing (D15). A `status` field here would invite
+         *     exactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is
+         *     a separate `POST /api/access/admin/approve`.
+         */
+        CloseReviewBody: {
+            decision_note?: string | null;
         };
         /**
          * @description The map-level analytics picture as returned by `cogmap_analytics`: the telos charter resource id,
@@ -4269,6 +4977,23 @@ export interface components {
         DeleteResponse: {
             deleted: boolean;
         };
+        /**
+         * @description Body for `POST /api/access/admin/demote`.
+         *
+         *     The governance twin of [`PromoteAdminRequest`]: it revokes the system-admin grant. Not
+         *     team-scoped — governance is keyed on the profile alone, so it carries no team.
+         *
+         *     It carries the `web-api` derive because the admin surface is part of the documented contract,
+         *     but not the `typescript`/`mcp` set: it is fronted by no MCP tool and consumed by no UI, so those
+         *     derives would generate surface nothing consumes.
+         */
+        DemoteAdminRequest: {
+            /**
+             * Format: uuid
+             * @description Profile to demote (revoke its system-admin governance grant).
+             */
+            profile_id: string;
+        };
         /** @description Per-device configuration overrides keyed by X-Temper-Device-Id. */
         DeviceOverrides: {
             /** @description Subscription-level overrides keyed by context name */
@@ -4709,6 +5434,80 @@ export interface components {
             /** @description Whether more eligible resources exist than were drawn. */
             truncated: boolean;
         };
+        /**
+         * @description The execute door's request: the subject as the pseudonym UUID, plus the opaque request
+         *     reference (UUID — the `RefRel::Request` apparatus Beat 2 pinned). No name, no email, no case
+         *     description: the request-to-person mapping lives in the operator's DSAR records, outside the
+         *     ledger.
+         */
+        ErasureExecuteRequest: {
+            /** Format: uuid */
+            request_reference: string;
+            /** Format: uuid */
+            subject: string;
+        };
+        /**
+         * @description What the door's act did: the completion, in full or as the no-op completion on an
+         *     already-erased subject. It is the door's only answer, since no door raises a principal refusal
+         *     (a caller who is not a system admin is answered 404 before dispatch). It stays a tagged enum
+         *     of one variant so the wire keeps `"status": "completed"`: removing the tag would change the
+         *     body's shape for no behavioural reason.
+         */
+        ErasureExecuteResponse: {
+            already_erased: boolean;
+            blob_strikes: components["schemas"]["BlobStrikeView"][];
+            /** Format: uuid */
+            event_id: string;
+            /** @description The redacted set (D2): content hashes only. */
+            redacted_hashes: string[];
+            /** @enum {string} */
+            status: "completed";
+            /**
+             * @description Per-target outcomes and the named remainder (D6's accepted-in-part arm): the
+             *     operator sees the `independent_obligation` remainder AT THE DOOR, not only in the
+             *     ledger — the completion's own payload is the audit, but the door's caller is the
+             *     actor and deserves the same facts.
+             */
+            targets: components["schemas"]["ErasureTargetOutcome"][];
+        };
+        /**
+         * @description The survey door's request: the subject as the pseudonym UUID, and nothing else. No
+         *     request_reference — nothing is requested (ruled 2026-09-12: a survey attempt is not an
+         *     erasure request, so no reference is minted and no refusal would be recorded).
+         */
+        ErasureSurveyRequest: {
+            /** Format: uuid */
+            subject: string;
+        };
+        /**
+         * @description What the survey predicts the act would do — the execute response minus `event_id`: the
+         *     survey fires no event, so there is no event id to report. The targets are the prose the
+         *     act would write; the blob strikes are PREDICTIONS honest about the moment the survey ran
+         *     (the act's strike-time verdict is authoritative).
+         */
+        ErasureSurveyResponse: {
+            already_erased: boolean;
+            blob_strikes: components["schemas"]["BlobStrikeView"][];
+            /** @description The redacted set (D2) the act would admit. */
+            redacted_hashes: string[];
+            /** Format: uuid */
+            subject: string;
+            /** @description Per-target outcomes and the named remainder, exactly as the record would carry them. */
+            targets: components["schemas"]["ErasureTargetOutcome"][];
+        };
+        /**
+         * @description One target of a completed erasure and what happened to it (erasure spec, "per-target
+         *     outcomes"). The target names itself the way the personal-data manifest does — `table` or
+         *     `table.column`; the outcome is the act's own record of what redaction applied. Deliberately
+         *     open-textured in v1: ceilings are DATA, not types (D1), and the per-target vocabulary is the
+         *     execution build's to pin. `unhonourable_scope` outcomes land here, never silent.
+         */
+        ErasureTargetOutcome: {
+            /** @description What the act did to it (erased / sentinel-scrubbed / accepted-in-part / …). */
+            outcome: string;
+            /** @description Manifest identity of the target (`kb_profiles.display_name`, `kb_teams.slug`, …). */
+            target: string;
+        };
         ErrorBody: {
             error: components["schemas"]["ErrorDetail"];
         };
@@ -4741,6 +5540,11 @@ export interface components {
              */
             latest_event_id?: string | null;
         };
+        /**
+         * Format: uuid
+         * @description A `kb_events.id` value. Always UUIDv7 (time-sortable).
+         */
+        EventId: string;
         /** @description A time-ordered event trail for one node or edge. */
         EventTrail: {
             /** Format: uuid */
@@ -5554,6 +6358,32 @@ export interface components {
          * @enum {string}
          */
         JoinRequestStatus: "pending" | "approved" | "rejected" | "withdrawn";
+        /** @description A join request with the requesting profile's display info (for admin queue). */
+        JoinRequestWithProfile: {
+            /** Format: date-time */
+            accepted_terms_at?: string | null;
+            accepted_terms_version?: string | null;
+            /** Format: date-time */
+            created: string;
+            decision_note?: string | null;
+            display_name: string;
+            email?: string | null;
+            /** Format: uuid */
+            id: string;
+            message?: string | null;
+            /** Format: uuid */
+            requesting_profile_id: string;
+            /** Format: date-time */
+            reviewed_at?: string | null;
+            /** Format: uuid */
+            reviewed_by_profile_id?: string | null;
+            source: string;
+            status: components["schemas"]["JoinRequestStatus"];
+            /** Format: uuid */
+            team_id: string;
+            /** Format: date-time */
+            updated: string;
+        };
         /**
          * @description The namespace half of the family name — mirrors `temper_substrate::payloads::KindOwner`
          *     in a temper-core-native shape so the wire type does not depend on the substrate crate.
@@ -5593,6 +6423,33 @@ export interface components {
             /** Format: uuid */
             resource_id: string;
             title: string;
+        };
+        /**
+         * @description A registered machine (`client_credentials`) principal.
+         *
+         *     No secret is stored, in this phase or ever (D1). `team_id` is the machine's
+         *     OWNER, never its reach (D6).
+         */
+        MachineClient: {
+            client_id: string;
+            /** Format: date-time */
+            created: string;
+            /** Format: uuid */
+            id: string;
+            issuer: string;
+            label: string;
+            /** Format: date-time */
+            last_seen_at?: string | null;
+            /** Format: uuid */
+            profile_id: string;
+            /** Format: uuid */
+            registered_by_profile_id: string;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            /** Format: uuid */
+            revoked_by_profile_id?: string | null;
+            /** Format: uuid */
+            team_id?: string | null;
         };
         /**
          * @description Temper-governed **workflow + provenance** metadata for a vault resource.
@@ -5885,6 +6742,28 @@ export interface components {
             id: string;
             title: string;
         };
+        /** @description An edge touching the resource whose asserting principal is not the resource's owner. */
+        OtherAuthorEdge: {
+            /** @description The profile behind the entity that emitted the edge's asserting event. */
+            author: components["schemas"]["ProfileId"];
+            edge_id: components["schemas"]["EdgeId"];
+            /**
+             * @description Already folded at survey time: the act appends no fold for it, but still nulls its label
+             *     and sentinels its properties (steps 9c and 9d reach live and folded edges).
+             */
+            folded: boolean;
+        };
+        /** @description A property row owned by an edge touching the resource, asserted by another principal. */
+        OtherAuthorEdgeProperty: {
+            author: components["schemas"]["ProfileId"];
+            edge_id: components["schemas"]["EdgeId"];
+            /**
+             * @description Already folded at survey time (the row's own fold): the act still sentinels its key and
+             *     value (step 9d reaches live and folded rows).
+             */
+            folded: boolean;
+            property_id: components["schemas"]["PropertyId"];
+        };
         /** @description Which stages come back, and how much of each row. */
         OutcomeDeclaration: {
             /**
@@ -6048,6 +6927,25 @@ export interface components {
         ProfileWithEntitlements: components["schemas"]["Profile"] & {
             entitlements: components["schemas"]["Entitlements"];
         };
+        /** @description Body for `POST /api/access/admin/promote`. */
+        PromoteAdminRequest: {
+            /**
+             * Format: uuid
+             * @description Profile to promote (grant `owner` on the target team).
+             */
+            profile_id: string;
+            /**
+             * Format: uuid
+             * @description Target team for the side-effect `owner` row; `None` ⇒ the configured gating team. The
+             *     governance grant is what mints the admin, not this membership.
+             */
+            team_id?: string | null;
+        };
+        /**
+         * Format: uuid
+         * @description A `kb_properties.id` value — a facet/doc_type/block_role assertion.
+         */
+        PropertyId: string;
         /**
          * @description A property narrowing operator. CLOSED — the key space is open, the operator set is not. No
          *     operator takes a fragment of a query language; all bind their values.
@@ -6171,6 +7069,30 @@ export interface components {
              */
             trace: components["schemas"]["CompositionTrace"];
         };
+        /**
+         * @description How many principals are waiting in an operator queue — the count-shaped answer to
+         *     `GET /api/access/admin/requests/count` and `GET /api/access/admin/reviews/count`.
+         *
+         *     **A count, not a queue.** `temper warmup` reports that a queue has something in it; the
+         *     queue itself is one command away (`temper admin requests list`, `temper admin reviews
+         *     list`). Fetching every row with its handle, display name, email and message so that
+         *     `.len()` could be taken made a session-start primer carry other people's identities
+         *     through the client on every session.
+         *
+         *     **A refusal is a `403`, never a zero.** These routes sit behind `require_system_admin`,
+         *     exactly as their list siblings do, so a caller who may not see the queue is told so — and
+         *     "not yours to see" stays distinguishable from "yours to see, and empty". A count endpoint
+         *     that answered a non-admin with `0` would erase that difference silently, which is the one
+         *     thing the primer's `Option` fields exist to prevent.
+         */
+        QueueCount: {
+            /**
+             * Format: int32
+             * @description `i32` for the same reason as [`crate::types::invitation::PendingInvitationCounts::count`]: a 64-bit count reaches
+             *     TypeScript as `bigint` and does not survive `JSON.stringify`.
+             */
+            count: number;
+        };
         /** @description API response acknowledging a single reassignment. */
         ReassignAck: {
             /** Format: uuid */
@@ -6214,6 +7136,20 @@ export interface components {
         ReassignResourceRequest: {
             /** Format: uuid */
             to_profile_id: string;
+        };
+        /** @description Point a fresh `client_id` at an existing agent profile (D8). */
+        RebindMachineRequest: {
+            /** @description The new IdP client id. */
+            client_id: string;
+            /**
+             * Format: uuid
+             * @description The existing `kb_machine_clients.id` whose profile is inherited. On
+             *     `POST /api/machine-clients/{id}/rebind` the path's `{id}` is authoritative and overwrites it.
+             */
+            from_machine_client_id: string;
+            /** @description When false (the default), the old row is revoked in the same transaction. */
+            keep_old_active: boolean;
+            label: string;
         };
         /** @description One candidate's receipt row. */
         ReblockCandidate: {
@@ -6371,6 +7307,18 @@ export interface components {
             /** Format: int64 */
             would_change: number;
         };
+        /**
+         * @description The outcome of an operator auto-join reconciliation: the (team, profile) pairs added,
+         *     plus the touched teams that also carry SAML group mappings. Enrollment writes NATIVE
+         *     rows on auto-join teams, and `reconcile_idp_memberships` skips any (team, profile) pair
+         *     the profile holds natively — so on a SAML-mapped auto-join team every pair in `added`
+         *     permanently pre-empts the IdP's role assertions for that pair (native-wins-skip). The
+         *     verb names those teams so the operator sees the conversion the repair is making.
+         */
+        ReconcileAutoJoinOutcome: {
+            added: components["schemas"]["AutoJoinReconcileRow"][];
+            saml_mapped_teams: string[];
+        };
         /** @description The `PUT /api/cognitive-maps/{id}` request body — a desired-state manifest. */
         ReconcileCogmapRequest: {
             entries: components["schemas"]["ReconcileEntry"][];
@@ -6467,6 +7415,68 @@ export interface components {
         ReconcileTombstone: {
             /** Format: uuid */
             id: string;
+        };
+        /**
+         * @description The ledger paths of one event: redacted (`redacted_fields`) or named-and-unreached
+         *     (`ledger_remainder`). ONE shape for both, so the cut-2 completion pass derives what it redacts
+         *     from what cut 1 recorded without translating (resource erasure spec D12). The event is keyed
+         *     `event`, never `event_id` — no trail join-key shape rides an admin payload (D1). Paths only,
+         *     never values: the record of a redaction must not carry what was redacted.
+         */
+        RedactedEventFields: {
+            event: components["schemas"]["EventId"];
+            /** @description JSON paths within that event's `payload` (or `metadata`), e.g. `title`, `origin_uri`. */
+            paths: string[];
+        };
+        /**
+         * @description Body for `POST /api/embed/admin/reembed`.
+         *
+         *     Exactly one scope: a single resource, a whole context, or everything. Three granularities because a
+         *     re-embed is a thing you try on **one**, then a **few**, then **all** — in that order. A trigger that
+         *     only offers "all" is one nobody dares pull.
+         *
+         *     Nothing is *marked* dirty. Staleness is derived — a chunk is stale when it has no vector, or when
+         *     its `embedded_with` is not the model the server embeds with — so this only ever enqueues work for
+         *     chunks that genuinely need it, and it is safe to re-run at any time.
+         */
+        ReembedRequest: {
+            /** @description Re-embed everything stale. Must be set explicitly — an empty body is a no-op, not "all". */
+            all?: boolean;
+            /**
+             * Format: uuid
+             * @description Re-embed every stale resource homed in this context.
+             */
+            context_id?: string | null;
+            /** @description Report what is stale without enqueuing anything. The safe first move. */
+            dry_run?: boolean;
+            /**
+             * Format: int32
+             * @description Max resources to enqueue this call. Bounds blast radius: run it repeatedly to walk the index.
+             */
+            limit?: number | null;
+            /**
+             * Format: uuid
+             * @description Re-embed just this resource.
+             */
+            resource_id?: string | null;
+        };
+        /** @description Result of a re-embed trigger — and, on `dry_run`, just the survey. */
+        ReembedSummary: {
+            /**
+             * @description Resources actually enqueued by this call. Empty on `dry_run`, and empty for any resource that
+             *     already had a live job (re-running never double-queues).
+             */
+            enqueued: string[];
+            /**
+             * Format: int64
+             * @description Stale chunks in scope. Divide by the drain's per-tick throughput to estimate the drain time.
+             */
+            stale_chunks: number;
+            /**
+             * Format: int64
+             * @description Resources in scope still holding stale chunks.
+             */
+            stale_resources: number;
         };
         /**
          * @description Why a principal was refused, typed.
@@ -6799,6 +7809,98 @@ export interface components {
             kb_context_id: string;
             origin_uri: string;
             title: string;
+        };
+        /**
+         * @description The execute door's request. `deny_unknown_fields`: the act's request reference is minted by
+         *     the service, so a caller that sends one is refused, not ignored.
+         */
+        ResourceErasureExecuteRequest: {
+            /** @description Related blobs to strike with the resource (D8); each must be in the survey's remainder. */
+            also_strike_blobs?: string[] | null;
+            /** Format: uuid */
+            resource: string;
+        };
+        /**
+         * @description What the execute door's act did: a completion and a refusal are different answers, so the
+         *     response is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,
+         *     `already_erased`); a caller who is not a system admin never reaches the act.
+         */
+        ResourceErasureExecuteResponse: {
+            blob_strikes: components["schemas"]["BlobStrikeView"][];
+            /** Format: uuid */
+            event_id: string;
+            folded_edges: components["schemas"]["EdgeId"][];
+            ledger_remainder: components["schemas"]["RedactedEventFields"][];
+            remainder: components["schemas"]["ErasureTargetOutcome"][];
+            /**
+             * Format: uuid
+             * @description The server-minted reference the operator cites.
+             */
+            request_reference: string;
+            /** @enum {string} */
+            status: "completed";
+            targets: components["schemas"]["ErasureTargetOutcome"][];
+        } | {
+            detail?: string | null;
+            /** Format: uuid */
+            event_id: string;
+            reason: components["schemas"]["ResourceErasureRefusalReason"];
+            /** Format: uuid */
+            request_reference: string;
+            /** @enum {string} */
+            status: "refused";
+        };
+        /**
+         * @description The plan `resource_erasure_survey` renders, plus the display-only annotations. The act never
+         *     consumes the annotations (D10's fingerprint posture): they are read after the plan, in Rust.
+         */
+        ResourceErasurePlan: {
+            blob_co_links: components["schemas"]["BlobCoLinks"][];
+            /**
+             * Format: uuid
+             * @description Set when the resource is a cogmap's charter: the act would refuse.
+             */
+            charter_of?: string | null;
+            /** @description The live edges the act would fold. */
+            edges: components["schemas"]["EdgeId"][];
+            fingerprint_available: boolean;
+            ingest_state: string;
+            ledger_remainder: components["schemas"]["RedactedEventFields"][];
+            /** Format: int64 */
+            n_artifacts: number;
+            /** Format: int64 */
+            n_blocks: number;
+            /** Format: int64 */
+            n_chunks: number;
+            /** Format: int64 */
+            n_edges: number;
+            /** Format: int64 */
+            n_revisions: number;
+            other_author_edge_properties: components["schemas"]["OtherAuthorEdgeProperty"][];
+            other_author_edges: components["schemas"]["OtherAuthorEdge"][];
+            /** @description Derivers, related blobs, cross-resource ledger text and shared remote sources (D8). */
+            remainder: components["schemas"]["ErasureTargetOutcome"][];
+            targets: components["schemas"]["ErasureTargetOutcome"][];
+        };
+        /**
+         * @description The closed refusal vocabulary for `resource_erasure_refused` (resource erasure spec D5, D11).
+         * @enum {string}
+         */
+        ResourceErasureRefusalReason: "unauthorized" | "charter_resource" | "ingest_in_flight" | "already_erased";
+        /**
+         * @description The read-only survey. `plan` is `None` exactly when the resource was already erased when the
+         *     survey began (the short-circuit); `already_erased` also reads true when an act lands between
+         *     that read and the plan, and then the plan is present.
+         */
+        ResourceErasureSurvey: {
+            already_erased: boolean;
+            plan?: null | components["schemas"]["ResourceErasurePlan"];
+            resource: components["schemas"]["ResourceId"];
+        };
+        /** @description The survey door's request: the resource and nothing else (a survey requests nothing). */
+        ResourceErasureSurveyRequest: {
+            /** Format: uuid */
+            resource: string;
         };
         /**
          * @description One facet row owned by a **resource**, as read back by `GET /api/resources/{id}/facets`.
@@ -7428,9 +8530,43 @@ export interface components {
             edge_kind: components["schemas"]["EdgeKind"];
             polarity: components["schemas"]["Polarity"];
         };
+        ReviewRequestBody: {
+            decision_note?: string | null;
+            status: components["schemas"]["JoinRequestStatus"];
+        };
+        /**
+         * @description An **open** reconsideration request, with the asking principal's identity (spec D15 admin
+         *     inbox).
+         *
+         *     There is deliberately no `decided_at` on this shape. The queue is what is *outstanding*, so a
+         *     row reaching a reader is open by construction — carrying a column that is always `NULL` would
+         *     invite a caller to filter on it and believe they had narrowed something.
+         *
+         *     The identity join is the same one [`JoinRequestWithProfile`] does, for the same reason: the row
+         *     on its own is a bare `profile_id`, and an admin weighing a reconsideration needs to know who is
+         *     asking. It carries **no** decision field beyond the note — closing a review records that it was
+         *     handled and moves no standing (D15); the admin's actual answer is a separate `Approve`.
+         */
+        ReviewRequestWithProfile: {
+            /** Format: date-time */
+            created: string;
+            display_name: string;
+            email?: string | null;
+            handle: string;
+            /** Format: uuid */
+            id: string;
+            message?: string | null;
+            /** Format: uuid */
+            profile_id: string;
+        };
         /** @description The result of a revoke. `revoked` is `false` when no matching grant existed (idempotent no-op). */
         RevokeOutcome: {
             revoked: boolean;
+        };
+        /** @description Body for `POST /api/access/admin/principals/{id}/revoke`. */
+        RevokePrincipalBody: {
+            /** @description Required. It rides the log and the ledger, and a later review's reviewer needs it (D15). */
+            reason: string;
         };
         /** @description Request body for `POST /api/relationships/{edge_handle}/reweight`. */
         ReweightRelationshipRequest: components["schemas"]["ActInput"] & {
@@ -8338,6 +9474,17 @@ export interface components {
             refusal: components["schemas"]["Refusal"];
             request_url?: string | null;
         };
+        /** @description Instance-wide system settings (singleton row). */
+        SystemSettings: {
+            gating_team_slug?: string | null;
+            /** Format: int32 */
+            id: number;
+            instance_name?: string | null;
+            terms_resource_uri?: string | null;
+            terms_version?: string | null;
+            /** Format: date-time */
+            updated: string;
+        };
         /**
          * @description Request body for `POST /api/teams`.
          *
@@ -8539,6 +9686,20 @@ export interface components {
             /** @description `true` when this call deleted a share; `false` when none existed. */
             unshared: boolean;
         };
+        /** @description Partial-update body for `PATCH /api/access/admin/settings`. */
+        UpdateSettingsRequest: {
+            /**
+             * @description Gating team slug recorded in instance settings. Ownership of it confers no authorization:
+             *     `is_system_admin` reads the principal-governance grant. `None` leaves it unchanged.
+             */
+            gating_team_slug?: string | null;
+            /** @description Human-facing instance name. */
+            instance_name?: string | null;
+            /** @description URI of the terms-of-service resource. */
+            terms_resource_uri?: string | null;
+            /** @description Terms-of-service version label. */
+            terms_version?: string | null;
+        };
         /**
          * @description Server-side vault configuration stored in `kb_profiles.vault_config`.
          *
@@ -8655,6 +9816,906 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    admin_reconcile_auto_join: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The roster pairs added (empty when already converged) and the SAML-mapped teams touched */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconcileAutoJoinOutcome"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_demote: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DemoteAdminRequest"];
+            };
+        };
+        responses: {
+            /** @description System-admin governance grant revoked (idempotent) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_approve_principal: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Profile ID of the principal */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Principal approved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Approval is not a legal transition from the principal's standing */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The principal is already approved, or has a request pending */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_deactivate_principal: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Profile ID of the principal */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Principal deactivated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Deactivation is not a legal transition from the principal's standing */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The transition conflicts with the principal's current standing */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_reactivate_principal: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Profile ID of the principal */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Principal reactivated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Reactivation is not a legal transition from the principal's standing */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The transition conflicts with the principal's current standing */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_revoke_principal: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Profile ID of the principal */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokePrincipalBody"];
+            };
+        };
+        responses: {
+            /** @description Principal's admission revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Revocation is not a legal transition from the principal's standing */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The transition conflicts with the principal's current standing */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_list_profiles: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Filter by admission state: `denied|requested|approved|revoked|deactivated|needs-access|all`.
+                 *     Default `needs-access` — every non-approved state INCLUDING no standing row (the
+                 *     operator's work queue). Case-insensitive.
+                 */
+                standing?: string | null;
+                /**
+                 * @description Case-insensitive LITERAL substring matched over the profile's verified auth-link emails.
+                 *     `%`, `_` and `\` have no wildcard meaning here. When set, each row carries `matched_email`.
+                 */
+                email_contains?: string | null;
+                /**
+                 * @description EXACT, case-insensitive match over verified auth-link emails. When present the route
+                 *     answers with the single matching profile's state card (not a page): the one place a
+                 *     human-controlled address becomes a target UUID. Zero matches → 404; more than one profile
+                 *     verified-owns the address → 404 whose body names the collision. Mutually exclusive with
+                 *     `email_contains`.
+                 */
+                email?: string | null;
+                /** @description Restrict to members of this team, by slug or UUID. */
+                team?: string | null;
+                /** @description Page size. Clamped server-side: default 50, capped at 200. */
+                limit?: number | null;
+                /** @description Page offset. Floor 0, capped at 10000 (depth protection). */
+                offset?: number | null;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A directory page, or — when `email` is given — the one matching profile's state card */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminProfilesListAnswer"];
+                };
+            };
+            /** @description Invalid filter, or both `email` and `email_contains` given */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `email` matched no profile, or more than one */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_show_profile: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Profile ID */
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The principal state card */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminProfileCard"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such profile */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_promote: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromoteAdminRequest"];
+            };
+        };
+        responses: {
+            /** @description Profile promoted; the side-effect team membership row */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamMemberRow"];
+                };
+            };
+            /** @description The profile or team cannot be promoted into */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_list_join_requests: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending join requests, with the requesting profile's identity */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JoinRequestWithProfile"][];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_count_join_requests: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many join requests are pending */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueCount"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_review_join_request: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Join request ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewRequestBody"];
+            };
+        };
+        responses: {
+            /** @description The reviewed join request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JoinRequest"];
+                };
+            };
+            /** @description The decision is not a legal review outcome */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such join request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_list_reviews: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Open reconsideration requests, with the asking principal's identity */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewRequestWithProfile"][];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_count_reviews: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many reconsideration requests are open */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueCount"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_close_review: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description Reconsideration request ID */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloseReviewBody"];
+            };
+        };
+        responses: {
+            /** @description Reconsideration recorded as handled; no standing moved */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such open reconsideration request */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_get_settings: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Full system settings, including the gating team slug */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemSettings"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_update_settings: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Settings after the partial update */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemSettings"];
+                };
+            };
+            /** @description Invalid settings value */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     create_request: {
         parameters: {
             query?: never;
@@ -8855,6 +10916,204 @@ export interface operations {
             };
             /** @description Unauthorized */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_erase_principal: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ErasureExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description The erasure completed (`already_erased` on a repeat) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureExecuteResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_survey_principal_erasure: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ErasureSurveyRequest"];
+            };
+        };
+        responses: {
+            /** @description What the erasure act would do; nothing is recorded or changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureSurveyResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the subject does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_erase_resource: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceErasureExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description The act completed, or was refused and the refusal recorded (`status` says which) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceErasureExecuteResponse"];
+                };
+            };
+            /** @description `also_strike_blobs` names a blob twice, or one the act refuses to strike (the act rolled back; nothing was struck) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unknown field in the body (a caller-supplied `request_reference` is refused, not ignored) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    admin_survey_resource_erasure: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResourceErasureSurveyRequest"];
+            };
+        };
+        responses: {
+            /** @description What the act would do (`plan` is absent when the resource was already erased); nothing is recorded or changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceErasureSurvey"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11038,6 +13297,60 @@ export interface operations {
             };
         };
     };
+    admin_reembed: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReembedRequest"];
+            };
+        };
+        responses: {
+            /** @description What is stale in scope, and the resources enqueued (none on `dry_run`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReembedSummary"];
+                };
+            };
+            /** @description Not exactly one of `resource_id`, `context_id`, `all` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     cursor: {
         parameters: {
             query?: never;
@@ -11886,6 +14199,81 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    admin_rebind_machine_client: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path: {
+                /** @description The machine client whose profile the new client id inherits */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RebindMachineRequest"];
+            };
+        };
+        responses: {
+            /** @description The new machine client, bound to the inherited profile */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineClient"];
+                };
+            };
+            /** @description The source client cannot be rebound (e.g. already revoked) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Caller is not a system admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No such machine client */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description The new `client_id` is already registered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };

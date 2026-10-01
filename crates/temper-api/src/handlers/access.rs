@@ -35,7 +35,7 @@ pub struct CreateReviewBody {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ReviewRequestBody {
     pub status: JoinRequestStatus,
     pub decision_note: Option<String>,
@@ -47,7 +47,7 @@ pub struct ReviewRequestBody {
 /// records that an admin handled it; it grants nothing (D15). A `status` field here would invite
 /// exactly the conflation the table's `COMMENT ON TABLE` warns about — the admin's actual answer is
 /// a separate `POST /api/access/admin/approve`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CloseReviewBody {
     pub decision_note: Option<String>,
 }
@@ -186,14 +186,11 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Publi
 }
 
 // ---------------------------------------------------------------------------
-// Admin endpoints (gated router)
+// Admin endpoints (the admin router — `routes/admin.rs`)
 //
-// These five handlers (`list_pending`, `review_request`, `get_admin_settings`,
-// `update_settings`, `promote_admin`) are DELIBERATELY left without
-// `#[utoipa::path]` annotations: they are an operator-only surface, not part of
-// the documented client API. A library caller requesting access to their own
-// instance uses the four self-service handlers above; the operator surface is
-// intentionally excluded from the OpenAPI spec.
+// The operator surface. Documented in the OpenAPI contract under the `Admin` tag: an admin
+// door is not a secret, and a public repository cannot make it one. What protects it is the
+// gate, not the omission — which is why it is pinned by tests rather than hidden.
 //
 // Their authz is the `&SystemAdmin` proof each dispatches with (admin-authz
 // enclosure, spec §3): the handler mints it once via `require_system_admin` and
@@ -204,6 +201,18 @@ pub async fn get_settings(State(state): State<AppState>) -> ApiResult<Json<Publi
 // ---------------------------------------------------------------------------
 
 /// GET /api/access/admin/requests — list pending join requests (admin only).
+#[utoipa::path(
+    get,
+    operation_id = "admin_list_join_requests",
+    path = "/api/access/admin/requests",
+    tag = "Admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Pending join requests, with the requesting profile's identity", body = Vec<JoinRequestWithProfile>),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+)
+)]
 pub async fn list_pending(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -219,6 +228,18 @@ pub async fn list_pending(
 /// [`list_pending`] without the rows, for `temper warmup`. Same admin proof, so a caller who may
 /// not read the queue still gets a `403` — never a `0`, which would tell them the queue is empty
 /// while refusing to let them see it.
+#[utoipa::path(
+    get,
+    operation_id = "admin_count_join_requests",
+    path = "/api/access/admin/requests/count",
+    tag = "Admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "How many join requests are pending", body = QueueCount),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+)
+)]
 pub async fn count_pending(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -230,6 +251,22 @@ pub async fn count_pending(
 }
 
 /// PATCH /api/access/admin/requests/:id — approve or reject a join request (admin only).
+#[utoipa::path(
+    patch,
+    operation_id = "admin_review_join_request",
+    path = "/api/access/admin/requests/{id}",
+    tag = "Admin",
+    params(("id" = Uuid, Path, description = "Join request ID")),
+    request_body = ReviewRequestBody,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The reviewed join request", body = JoinRequest),
+        (status = 400, description = "The decision is not a legal review outcome", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 404, description = "No such join request", body = ErrorBody),
+)
+)]
 pub async fn review_request(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -251,8 +288,20 @@ pub async fn review_request(
 /// GET /api/access/admin/reviews — list undecided reconsideration requests.
 ///
 /// The read half of the inbox `kb_principal_review_requests` always described itself as and never
-/// had. Same operator-only posture as the join-request queue above: no `#[utoipa::path]`, gate in
-/// the handler.
+/// had. Same operator-only posture as the join-request queue above: the `&SystemAdmin` proof is
+/// minted here and required by the service.
+#[utoipa::path(
+    get,
+    operation_id = "admin_list_reviews",
+    path = "/api/access/admin/reviews",
+    tag = "Admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Open reconsideration requests, with the asking principal's identity", body = Vec<ReviewRequestWithProfile>),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+)
+)]
 pub async fn list_reviews(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -266,6 +315,18 @@ pub async fn list_reviews(
 /// GET /api/access/admin/reviews/count — how many reconsiderations are open (admin only).
 ///
 /// [`list_reviews`] without the rows. Same admin proof, same `403`-not-`0` rule as its neighbour.
+#[utoipa::path(
+    get,
+    operation_id = "admin_count_reviews",
+    path = "/api/access/admin/reviews/count",
+    tag = "Admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "How many reconsideration requests are open", body = QueueCount),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+)
+)]
 pub async fn count_reviews(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -281,6 +342,21 @@ pub async fn count_reviews(
 /// Returns `204`: there is no updated resource worth handing back, because closing changes nothing
 /// the caller can act on further. It moves **no** standing — readmitting a principal is
 /// `POST /api/access/admin/approve`, deliberately a different call.
+#[utoipa::path(
+    patch,
+    operation_id = "admin_close_review",
+    path = "/api/access/admin/reviews/{id}",
+    tag = "Admin",
+    params(("id" = Uuid, Path, description = "Reconsideration request ID")),
+    request_body = CloseReviewBody,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 204, description = "Reconsideration recorded as handled; no standing moved"),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 404, description = "No such open reconsideration request", body = ErrorBody),
+)
+)]
 pub async fn close_review(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -301,6 +377,18 @@ pub async fn close_review(
 ///
 /// Unlike the public `GET /api/access/settings`, this returns `gating_team_slug`
 /// and `updated`, which an admin needs to administer the gate.
+#[utoipa::path(
+    get,
+    operation_id = "admin_get_settings",
+    path = "/api/access/admin/settings",
+    tag = "Admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Full system settings, including the gating team slug", body = SystemSettings),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+)
+)]
 pub async fn get_admin_settings(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -312,6 +400,20 @@ pub async fn get_admin_settings(
 }
 
 /// PATCH /api/access/admin/settings — partial update of system settings (admin only).
+#[utoipa::path(
+    patch,
+    operation_id = "admin_update_settings",
+    path = "/api/access/admin/settings",
+    tag = "Admin",
+    request_body = UpdateSettingsRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Settings after the partial update", body = SystemSettings),
+        (status = 400, description = "Invalid settings value", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+)
+)]
 pub async fn update_settings(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -328,6 +430,20 @@ pub async fn update_settings(
 /// Grants `kb_principal_governance` + `approved` standing (the real admin-ness
 /// under D11). `team_id` omitted ⇒ the configured gating team for the retained
 /// side-effect `owner` row.
+#[utoipa::path(
+    post,
+    operation_id = "admin_promote",
+    path = "/api/access/admin/promote",
+    tag = "Admin",
+    request_body = PromoteAdminRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Profile promoted; the side-effect team membership row", body = TeamMemberRow),
+        (status = 400, description = "The profile or team cannot be promoted into", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+)
+)]
 pub async fn promote_admin(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -345,6 +461,19 @@ pub async fn promote_admin(
 /// `standing_service::apply` (Revoke/Deactivate demote). Unlike its older sibling above, it carries
 /// NO handler-side authz: the gate lives in `access_service::demote_admin` (the F-3 posture the
 /// `audit-handler-authz-drift` tripwire pins). The handler extracts actor + subject and dispatches.
+#[utoipa::path(
+    post,
+    operation_id = "admin_demote",
+    path = "/api/access/admin/demote",
+    tag = "Admin",
+    request_body = DemoteAdminRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "System-admin governance grant revoked (idempotent)"),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+)
+)]
 pub async fn demote_admin(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -356,9 +485,8 @@ pub async fn demote_admin(
 }
 
 // ---------------------------------------------------------------------------
-// The admin standing acts (Task 13) — operator-only, UNDOCUMENTED like their
-// neighbours above (plain `.route()`, no `#[utoipa::path]`, allowlisted in
-// `.github/scripts/check-openapi-routes.sh`).
+// The admin standing acts (Task 13) — operator-only, documented under the `Admin` tag like
+// their neighbours above.
 //
 // Their authz IS the service signature: each dispatches to an `access_service`
 // fn that requires a `&SystemAdmin` proof (admin-authz enclosure, spec §3),
@@ -369,13 +497,28 @@ pub async fn demote_admin(
 // ---------------------------------------------------------------------------
 
 /// Body for `POST /api/access/admin/principals/{id}/revoke`.
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct RevokePrincipalBody {
     /// Required. It rides the log and the ledger, and a later review's reviewer needs it (D15).
     pub reason: String,
 }
 
 /// POST /api/access/admin/principals/:id/approve — admit a principal directly (admin only).
+#[utoipa::path(
+    post,
+    operation_id = "admin_approve_principal",
+    path = "/api/access/admin/principals/{id}/approve",
+    tag = "Admin",
+    params(("id" = Uuid, Path, description = "Profile ID of the principal")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Principal approved"),
+        (status = 400, description = "Approval is not a legal transition from the principal's standing", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 409, description = "The principal is already approved, or has a request pending", body = ErrorBody),
+)
+)]
 pub async fn approve_principal(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -390,6 +533,18 @@ pub async fn approve_principal(
 /// standing-approved population (admin only). Returns the (team, profile) pairs added plus
 /// the touched teams that also carry SAML group mappings (whose new native rows pre-empt
 /// IdP role assertions); an empty `added` means the instance was already converged.
+#[utoipa::path(
+    post,
+    operation_id = "admin_reconcile_auto_join",
+    path = "/api/access/admin/auto-join/reconcile",
+    tag = "Admin",
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The roster pairs added (empty when already converged) and the SAML-mapped teams touched", body = ReconcileAutoJoinOutcome),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+)
+)]
 pub async fn reconcile_auto_join(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -400,6 +555,22 @@ pub async fn reconcile_auto_join(
 }
 
 /// POST /api/access/admin/principals/:id/revoke — revoke a principal's admission (admin only).
+#[utoipa::path(
+    post,
+    operation_id = "admin_revoke_principal",
+    path = "/api/access/admin/principals/{id}/revoke",
+    tag = "Admin",
+    params(("id" = Uuid, Path, description = "Profile ID of the principal")),
+    request_body = RevokePrincipalBody,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Principal's admission revoked"),
+        (status = 400, description = "Revocation is not a legal transition from the principal's standing", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 409, description = "The transition conflicts with the principal's current standing", body = ErrorBody),
+)
+)]
 pub async fn revoke_principal(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -418,6 +589,21 @@ pub async fn revoke_principal(
 }
 
 /// POST /api/access/admin/principals/:id/deactivate — deactivate a principal (admin only).
+#[utoipa::path(
+    post,
+    operation_id = "admin_deactivate_principal",
+    path = "/api/access/admin/principals/{id}/deactivate",
+    tag = "Admin",
+    params(("id" = Uuid, Path, description = "Profile ID of the principal")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Principal deactivated"),
+        (status = 400, description = "Deactivation is not a legal transition from the principal's standing", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 409, description = "The transition conflicts with the principal's current standing", body = ErrorBody),
+)
+)]
 pub async fn deactivate_principal(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -429,6 +615,21 @@ pub async fn deactivate_principal(
 }
 
 /// POST /api/access/admin/principals/:id/reactivate — restore a deactivated principal (admin only).
+#[utoipa::path(
+    post,
+    operation_id = "admin_reactivate_principal",
+    path = "/api/access/admin/principals/{id}/reactivate",
+    tag = "Admin",
+    params(("id" = Uuid, Path, description = "Profile ID of the principal")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Principal reactivated"),
+        (status = 400, description = "Reactivation is not a legal transition from the principal's standing", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 403, description = "Caller is not a system admin", body = ErrorBody),
+        (status = 409, description = "The transition conflicts with the principal's current standing", body = ErrorBody),
+)
+)]
 pub async fn reactivate_principal(
     State(state): State<AppState>,
     auth: AuthUser,

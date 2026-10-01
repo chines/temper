@@ -207,6 +207,7 @@ const API_VERSION: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../
         (name = "Auditor", description = "Citation auditor dispatch — coverage sweep + per-cogmap job fan-out"),
         (name = "Reblocking", description = "Corpus re-blocking — bounded, resumable, per-row-gated re-block steps (survey, act, re-survey)"),
         (name = "Slack Link", description = "Slack account-link disconnect — self-serve and admin"),
+        (name = "Admin", description = "Operator surface — every route here requires the caller to be a system admin (the access-gate queues and standing acts, settings and governance, the profile directory, erasure, re-embed, machine-client rebind)"),
     ),
     info(
         title = "Temper Cloud API",
@@ -485,21 +486,41 @@ mod tests {
         assert!(json.contains("/api/cogmaps/{id}/graph/slice"));
         assert!(json.contains("/api/graph/elements/{kind}/{id}/trail"));
 
-        // Verify the operator / internal surfaces are ABSENT from the contract.
-        // These are mounted with plain `.route()` (admin) or on sub-routers that
-        // `openapi_spec()` deliberately does not merge (internal, embed drain).
-        // Check the actual path keys, not a raw-JSON substring: `/api/embed/dispatch`
-        // appears verbatim inside a component schema's doc-comment description, so a
-        // `json.contains` check would spuriously match it.
-        for absent in [
+        // Verify the system-admin surface is PRESENT: an admin door is documented, not hidden
+        // (`routes/admin.rs`). Path keys, not raw-JSON substrings, for the reason below.
+        for present in [
             "/api/access/admin/promote",
+            "/api/access/admin/demote",
             "/api/access/admin/requests",
             "/api/access/admin/requests/{id}",
             "/api/access/admin/reviews",
             "/api/access/admin/reviews/{id}",
             "/api/access/admin/settings",
+            "/api/access/admin/profiles",
+            "/api/access/admin/profiles/{profile_id}",
+            "/api/access/admin/principals/{id}/approve",
+            "/api/access/admin/auto-join/reconcile",
+            "/api/admin/erasure",
+            "/api/admin/resources/erasure",
+            "/api/embed/admin/reembed",
+            "/api/machine-clients/{id}/rebind",
+        ] {
+            assert!(
+                spec.paths.paths.contains_key(present),
+                "admin path {present} must be in the contract",
+            );
+        }
+
+        // Verify the shared-secret / signature-gated internal surfaces are ABSENT: no bearer
+        // reaches them, so there is no client to document them for. They live on sub-routers
+        // that `openapi_spec()` deliberately does not merge (internal, embed drain).
+        // Check the actual path keys, not a raw-JSON substring: `/api/embed/dispatch`
+        // appears verbatim inside a component schema's doc-comment description, so a
+        // `json.contains` check would spuriously match it.
+        for absent in [
             "/internal/saml/reconcile",
             "/api/embed/dispatch",
+            "/api/erasure/drain",
         ] {
             assert!(
                 !spec.paths.paths.contains_key(absent),

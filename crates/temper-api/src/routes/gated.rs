@@ -1,7 +1,10 @@
 //! Authenticated AND system-access-gated — default-deny for all data routes.
-//! Documented, except the operator-only `/api/access/admin/*` surface which is
-//! mounted with plain `.route()` (no `#[utoipa::path]`) so it stays out of the
-//! public contract.
+//!
+//! The routes whose ONLY gate is the `&SystemAdmin` proof are not here: they are the admin
+//! group (`admin.rs`), same tier, isolated so the operator surface reads as one set. What stays
+//! here is gated on the caller's own reach — including the operator-adjacent families below
+//! (the admin ledger, machine clients, connections, subscriptions) whose gate is
+//! `is_system_admin OR <a scoped role>`, which a non-admin team owner or actor also passes.
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -10,7 +13,7 @@ use crate::handlers;
 use temper_services::state::AppState;
 
 pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
-    use axum::routing::{get, patch, post};
+    use axum::routing::{get, post};
 
     OpenApiRouter::new()
         .routes(routes!(
@@ -62,10 +65,11 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::resources::read_block))
         // Corpus adoption — one bounded, resumable, per-row-gated re-block step per call,
-        // dispatched to the Backend's `reblock_resources` command. Documented (unlike the
-        // admin-enclosed `/api/embed/admin/reembed` trigger): the gate is the backend seam —
-        // the deployment-wide arm is SystemAdmin-checked there, the resource/context arms ride
-        // the caller's own visibility — and the contract is the receipt.
+        // dispatched to the Backend's `reblock_resources` command. Here rather than in the admin
+        // group (unlike the admin-enclosed `/api/embed/admin/reembed` trigger): the gate is the
+        // backend seam — the deployment-wide arm is SystemAdmin-checked there, the
+        // resource/context arms ride the caller's own visibility — and the contract is the
+        // receipt.
         .routes(routes!(handlers::reblock::reblock))
         .routes(routes!(handlers::reassign::reassign_resource))
         .routes(routes!(handlers::edges::list))
@@ -189,130 +193,22 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::schema::describe_open_meta))
         .routes(routes!(handlers::search::search))
         .merge(super::query::query_routes())
-        .routes(routes!(handlers::slack_disconnect::admin_disconnect))
-        // Operator-only re-embed trigger: enqueue embed jobs for chunks whose vector was produced by
-        // a model that is no longer the one we embed with. The per-minute drain does the work; this is
-        // only the trigger. Admin-gated on the caller's own identity, so an operator uses their normal
-        // login rather than holding the drain's deploy secret.
-        .route("/api/embed/admin/reembed", post(handlers::embed::reembed))
-        // Operator-only access-gate admin surface — deliberately UNDOCUMENTED.
-        // These handlers carry no `#[utoipa::path]`; plain `.route()` mounts them
-        // without adding them to the OpenAPI contract.
-        .route(
-            "/api/access/admin/requests",
-            get(handlers::access::list_pending),
-        )
-        // The counting siblings of the two queue reads. Static `/count` beats the `{id}`
-        // pattern in the router, and they are GET while `{id}` is PATCH, so neither shadows
-        // the other. Same undocumented posture as the lists they count.
-        .route(
-            "/api/access/admin/requests/count",
-            get(handlers::access::count_pending),
-        )
-        .route(
-            "/api/access/admin/requests/{id}",
-            patch(handlers::access::review_request),
-        )
-        // Same posture, same reason: the D15 reconsideration inbox is read and closed by an
-        // operator, never by a library caller administering their own access.
-        .route(
-            "/api/access/admin/reviews",
-            get(handlers::access::list_reviews),
-        )
-        .route(
-            "/api/access/admin/reviews/count",
-            get(handlers::access::count_reviews),
-        )
-        .route(
-            "/api/access/admin/reviews/{id}",
-            patch(handlers::access::close_review),
-        )
-        .route(
-            "/api/access/admin/settings",
-            get(handlers::access::get_admin_settings).patch(handlers::access::update_settings),
-        )
-        .route(
-            "/api/access/admin/promote",
-            post(handlers::access::promote_admin),
-        )
-        .route(
-            "/api/access/admin/demote",
-            post(handlers::access::demote_admin),
-        )
-        // The admin standing acts (Task 13). Same operator-only convention as their neighbours:
-        // plain `.route()`, out of the OpenAPI contract, allowlisted in
-        // `.github/scripts/check-openapi-routes.sh`. The admin gate is in each handler.
-        .route(
-            "/api/access/admin/principals/{id}/approve",
-            post(handlers::access::approve_principal),
-        )
-        .route(
-            "/api/access/admin/principals/{id}/revoke",
-            post(handlers::access::revoke_principal),
-        )
-        .route(
-            "/api/access/admin/principals/{id}/deactivate",
-            post(handlers::access::deactivate_principal),
-        )
-        .route(
-            "/api/access/admin/principals/{id}/reactivate",
-            post(handlers::access::reactivate_principal),
-        )
-        // The auto-join roster repair: converge every `auto_join_role` team to the
-        // standing-approved population and report what it added. Same operator-only
-        // convention: plain `.route()`, out of the OpenAPI contract, allowlisted.
-        .route(
-            "/api/access/admin/auto-join/reconcile",
-            post(handlers::access::reconcile_auto_join),
-        )
-        // The operator directory (admin-operator-directory spec §5/§6). Same operator-only
-        // convention as every neighbour above: plain `.route()`, out of the OpenAPI contract,
-        // allowlisted in `.github/scripts/check-openapi-routes.sh`. Both handlers mint the
-        // sealed `&SystemAdmin` here and dispatch immediately — the gate is the service
-        // signature, and it runs before any existence lookup, so absence never leaks to a
-        // non-admin. `?email=` on the list route is an identity-resolution act (exact,
-        // ambiguity-refusing) that answers a state card, not a page.
-        .route(
-            "/api/access/admin/profiles",
-            get(handlers::admin_directory::list_profiles),
-        )
-        .route(
-            "/api/access/admin/profiles/{profile_id}",
-            get(handlers::admin_directory::show_profile),
-        )
-        // The admin ledger's read surface — operator-only, so plain `.route()` and OUT of the
-        // OpenAPI contract like its neighbours above. Authorization is in
-        // `admin_ledger_service`, which gates per act family rather than with a prelude, and
-        // denies with 404 so a refusal discloses nothing about the subject.
+        // The admin ledger's read surface — plain `.route()` and OUT of the OpenAPI contract.
+        // Not in the admin group despite its path: `list_by_actor` is self-gating (an actor reads
+        // their own acts) and `list_by_subject` dispatches per act family, so a non-admin can be
+        // answered. Authorization is in `admin_ledger_service`, which gates per act family rather
+        // than with a prelude, and denies with 404 so a refusal discloses nothing about the
+        // subject.
         .route("/api/admin/ledger", get(handlers::admin_ledger::list))
-        // The erasure act's doors (task 01a0577c Beat 4; the survey is task 01a09628 item 2).
-        // Same operator-only posture as `/api/admin/ledger`: plain `.route()`, out of the
-        // contract, allowlisted. Each handler mints the sealed `&SystemAdmin` proof before it
-        // dispatches (the services take it), and a caller who is not a system admin is rejected
-        // there: 404, never 403, one telemetry line, and no ledger event of any kind (ruled
-        // 2026-09-30).
-        .route("/api/admin/erasure", post(handlers::erasure::execute))
-        .route("/api/admin/erasure/survey", post(handlers::erasure::survey))
-        // The resource-erasure pair: plain `.route()`, allowlisted, the same wire gate over
-        // `resource_erasure_service`. The 404 means a rejected caller learns nothing about the
-        // RESOURCE (not whether it exists, not whether it was erased). The doors themselves are
-        // discoverable; the 404 does not hide them.
-        .route(
-            "/api/admin/resources/erasure",
-            post(handlers::resource_erasure::execute),
-        )
-        .route(
-            "/api/admin/resources/erasure/survey",
-            post(handlers::resource_erasure::survey),
-        )
-        // Machine-principal registration (G3 Phase A). Mounted with plain `.route()`, like
-        // `/api/access/admin/*` above, so it stays OUT of the OpenAPI contract. Its paths are
-        // allowlisted in `.github/scripts/check-openapi-routes.sh`.
+        // Machine-principal registration (G3 Phase A). Mounted with plain `.route()`, so it stays
+        // OUT of the OpenAPI contract. Its paths are allowlisted in
+        // `.github/scripts/check-openapi-routes.sh`.
         //
-        // NOT admin-only, despite sitting among the admin mounts. The gate is
+        // NOT admin-only. The gate is
         // `is_system_admin OR owner of the machine's owning team` (`machine_authz::authorize`),
         // so any authenticated profile that owns any team can reach `provision`, `issue`, and
-        // `apply_reach`. Only `rebind` is admin-only (`machine_registration_service::rebind`).
+        // `apply_reach`. Only `rebind` is admin-only (`machine_registration_service::rebind`), and
+        // it is mounted by the admin group (`admin.rs`), not here.
         //
         // The gate lives in the SERVICES, not in these handlers — the handlers are gate-free by
         // design, as `handlers::machine_clients`' module doc explains. Treat it as load-bearing,
@@ -327,10 +223,6 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         .route(
             "/api/machine-clients/{id}",
             get(handlers::machine_clients::get).delete(handlers::machine_clients::revoke),
-        )
-        .route(
-            "/api/machine-clients/{id}/rebind",
-            post(handlers::machine_clients::rebind),
         )
         .route(
             "/api/machine-clients/issue",

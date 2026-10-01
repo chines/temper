@@ -1,0 +1,86 @@
+//! The system-admin surface: every route whose ONLY authorization is the sealed `&SystemAdmin`
+//! proof. Same middleware tier as `gated_routes` (system access, then auth), and documented
+//! under the `Admin` tag like any other route.
+//!
+//! **Membership rule.** A route belongs here when its handler mints `&SystemAdmin` via
+//! `require_system_admin` (or `require_erasure_operator`, its 404-rendering wrapper)
+//! unconditionally, before dispatch, and the service it calls requires that proof in its
+//! signature. A route whose gate is `is_system_admin OR <a scoped role>` — the admin ledger, the
+//! machine-client / connection / subscription families, `reblock`'s deployment-wide arm — is NOT
+//! admin-only: a team owner or the actor themself reaches it too, so it stays in `gated_routes`.
+//! The path is not the test: `/api/machine-clients/{id}/rebind` lives here, apart from its
+//! owner-gated siblings, because it alone requires the proof.
+//!
+//! **Why documented.** These doors are not secret — the repository is public, and the CLI and
+//! any OpenAPI client with an admin's bearer use them. What protects them is the proof the
+//! service signature demands, which runs before any lookup, and the tests that pin it; an
+//! omission from the contract protected nothing and left them the least-described routes in the
+//! API. The routes that belong out of the contract are the ones no bearer can reach: the
+//! shared-secret crons and HMAC-signed internal calls (see `embed_internal.rs` / `internal.rs`).
+//! (The scoped operator families still mounted plain in `gated.rs` are a documentation gap, not
+//! that category.)
+//!
+//! Group isolation is also what keeps this set auditable: `audit-route-auth.sh` pins the row,
+//! and a reviewer can read the whole operator surface in one file.
+
+use utoipa_axum::router::OpenApiRouter;
+use utoipa_axum::routes;
+
+use crate::handlers;
+use temper_services::state::AppState;
+
+pub(super) fn admin_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        // The access gate's join-request queue. The counting sibling is static `/count`, which
+        // beats the `{id}` pattern in the router; it is GET while `{id}` is PATCH, so neither
+        // shadows the other.
+        .routes(routes!(handlers::access::list_pending))
+        .routes(routes!(handlers::access::count_pending))
+        .routes(routes!(handlers::access::review_request))
+        // The D15 reconsideration inbox — read and closed by an operator, never by a library
+        // caller administering their own access.
+        .routes(routes!(handlers::access::list_reviews))
+        .routes(routes!(handlers::access::count_reviews))
+        .routes(routes!(handlers::access::close_review))
+        // Full system settings (the gating slug the public `GET /api/access/settings` withholds).
+        .routes(routes!(
+            handlers::access::get_admin_settings,
+            handlers::access::update_settings
+        ))
+        // Governance: mint and revoke the system-admin grant.
+        .routes(routes!(handlers::access::promote_admin))
+        .routes(routes!(handlers::access::demote_admin))
+        // The admin standing acts (Task 13).
+        .routes(routes!(handlers::access::approve_principal))
+        .routes(routes!(handlers::access::revoke_principal))
+        .routes(routes!(handlers::access::deactivate_principal))
+        .routes(routes!(handlers::access::reactivate_principal))
+        // The auto-join roster repair: converge every `auto_join_role` team to the
+        // standing-approved population and report what it added.
+        .routes(routes!(handlers::access::reconcile_auto_join))
+        // The operator directory (admin-operator-directory spec §5/§6). The proof is minted
+        // before any existence lookup, so absence never leaks to a non-admin. `?email=` on the
+        // list route is an identity-resolution act (exact, ambiguity-refusing) that answers a
+        // state card, not a page.
+        .routes(routes!(handlers::admin_directory::list_profiles))
+        .routes(routes!(handlers::admin_directory::show_profile))
+        // The admin arm of Slack-link disconnect — the repair path for an orphaned grant. The
+        // self-serve arm (`disconnect_me`) is on the auth-only router.
+        .routes(routes!(handlers::slack_disconnect::admin_disconnect))
+        // Re-embed trigger: enqueue embed jobs for chunks whose vector came from a model we no
+        // longer embed with. The per-minute drain does the work; this is only the trigger, gated
+        // on the operator's own login rather than the drain's deploy secret.
+        .routes(routes!(handlers::embed::reembed))
+        // The erasure doors (principal and resource), each with its read-only survey. A caller
+        // who is not a system admin is answered 404, never 403, before any lookup, with one
+        // telemetry line and no ledger event (ruled 2026-09-30) — the 404 protects the SUBJECT;
+        // the doors themselves are documented.
+        .routes(routes!(handlers::erasure::execute))
+        .routes(routes!(handlers::erasure::survey))
+        .routes(routes!(handlers::resource_erasure::execute))
+        .routes(routes!(handlers::resource_erasure::survey))
+        // Machine-client rebind (G3 B2). Its siblings under `/api/machine-clients` are gated on
+        // `is_system_admin OR owner of the owning team` and stay in `gated_routes`; rebind alone
+        // requires the proof, because team ownership cannot bound the reach a rebind inherits.
+        .routes(routes!(handlers::machine_clients::rebind))
+}

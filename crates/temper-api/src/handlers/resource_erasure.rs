@@ -18,8 +18,7 @@
 //! `request_reference` is refused at the door (axum's `Json` answers a well-formed body with an
 //! unknown field as 422) instead of being silently ignored.
 //!
-//! Both mounted plain (`.route()`), out of the OpenAPI contract; allowlisted in
-//! `.github/scripts/check-openapi-routes.sh`.
+//! Both documented under the `Admin` tag (`routes/admin.rs`).
 
 use axum::extract::State;
 use axum::Json;
@@ -27,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use temper_core::types::ids::{BlobId, EdgeId, ResourceId};
-use temper_services::error::ApiResult;
+use temper_services::error::{ApiResult, ErrorBody};
 use temper_services::services::resource_erasure_service::{
     self, ResourceErasureOutcome, ResourceErasureRequest, ResourceErasureSurvey,
 };
@@ -41,14 +40,14 @@ use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
 
 /// The survey door's request: the resource and nothing else (a survey requests nothing).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct ResourceErasureSurveyRequest {
     pub resource: Uuid,
 }
 
 /// The execute door's request. `deny_unknown_fields`: the act's request reference is minted by
 /// the service, so a caller that sends one is refused, not ignored.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceErasureExecuteRequest {
     pub resource: Uuid,
@@ -59,7 +58,7 @@ pub struct ResourceErasureExecuteRequest {
 /// What the execute door's act did: a completion and a refusal are different answers, so the
 /// response is a tagged enum. A refusal here is an operator-facing one (`charter_resource`,
 /// `already_erased`); a caller who is not a system admin never reaches the act.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ResourceErasureExecuteResponse {
     Completed {
@@ -81,6 +80,21 @@ pub enum ResourceErasureExecuteResponse {
 }
 
 /// `POST /api/admin/resources/erasure` — the operator's execute door.
+#[utoipa::path(
+    post,
+    operation_id = "admin_erase_resource",
+    path = "/api/admin/resources/erasure",
+    tag = "Admin",
+    request_body = ResourceErasureExecuteRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "The act completed, or was refused and the refusal recorded (`status` says which)", body = ResourceErasureExecuteResponse),
+        (status = 400, description = "`also_strike_blobs` names a blob twice, or one the act refuses to strike (the act rolled back; nothing was struck)", body = ErrorBody),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),
+        (status = 422, description = "Unknown field in the body (a caller-supplied `request_reference` is refused, not ignored)", body = ErrorBody),
+    )
+)]
 pub async fn execute(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -138,6 +152,19 @@ pub async fn execute(
 /// who is not a system admin with the same 404 as execute and records nothing; an unknown id past
 /// the gate is a 404 too. The service's survey types serialize as-is (`Serialize` derived on
 /// them), so the door mirrors nothing field by field.
+#[utoipa::path(
+    post,
+    operation_id = "admin_survey_resource_erasure",
+    path = "/api/admin/resources/erasure/survey",
+    tag = "Admin",
+    request_body = ResourceErasureSurveyRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "What the act would do (`plan` is absent when the resource was already erased); nothing is recorded or changed", body = ResourceErasureSurvey),
+        (status = 401, description = "Authentication required", body = ErrorBody),
+        (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),
+    )
+)]
 pub async fn survey(
     State(state): State<AppState>,
     auth: AuthUser,
