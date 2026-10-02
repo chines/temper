@@ -45,9 +45,10 @@
 //! lock at all (the delete door's `FOR UPDATE`). It binds nothing; the door still floors inside its
 //! transaction.
 //!
-//! **A transaction that lost a race answers `409`.** A deadlock (`40P01`) or serialization failure
-//! (`40001`) inside a floored write is contention, not a fault: `is_contention` is the one
-//! classifier, and every error this module raises passes through it.
+//! **A transaction that lost a race is the incumbent `500`.** A deadlock (`40P01`) or
+//! serialization failure (`40001`) inside a floored write answers as every database fault does:
+//! `500 INTERNAL_ERROR`, logged at error level, which every client already treats as transient and
+//! retries. A `409` would collide with "already exists" in the shipped clients (ruled 2026-10-01).
 //!
 //! **A refusal rolls back before it is answered.** `rollback_with` ends the transaction a floor
 //! (or any in-transaction gate) refused, so the row lock is released before the door answers
@@ -170,32 +171,9 @@ async fn erased_or_forbidden(
     }
 }
 
-/// Bridge a database error into `TemperError`: contention ([`is_contention`]) is
-/// [`contention_conflict`]'s retryable `409`, anything else the `500` `db_backend`'s `api_err` gives.
+/// Bridge a database error into `TemperError`: the `500` `db_backend`'s `api_err` gives.
 fn floor_err(e: sqlx::Error) -> TemperError {
-    if is_contention(&e) {
-        contention_conflict()
-    } else {
-        TemperError::Api(e.to_string())
-    }
-}
-
-/// Did this statement lose a race with a concurrent transaction? SQLSTATE `40001`
-/// (`serialization_failure`) or `40P01` (`deadlock_detected`): Postgres aborted the transaction so
-/// another could proceed, and the same request, retried, can succeed. The one classifier for both
-/// the floored write doors and the SERIALIZABLE reconcile/genesis commits (`db_backend`'s
-/// `map_commit_err`, which mapped `40001` alone before this).
-pub(crate) fn is_contention(e: &sqlx::Error) -> bool {
-    matches!(
-        e,
-        sqlx::Error::Database(db) if matches!(db.code().as_deref(), Some("40001" | "40P01"))
-    )
-}
-
-/// The answer to a write transaction that lost a race ([`is_contention`]): `409 Conflict`,
-/// retryable — never the `500` a fault is.
-pub(crate) fn contention_conflict() -> TemperError {
-    TemperError::Conflict("the write conflicted with a concurrent write; retry".to_string())
+    TemperError::Api(e.to_string())
 }
 
 /// End `tx` — refused by a floor or another in-transaction gate — with an explicit `ROLLBACK`,

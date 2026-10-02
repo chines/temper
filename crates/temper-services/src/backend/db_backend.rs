@@ -68,24 +68,12 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
 }
 
-/// Bridge an error raised inside a floored write transaction: a statement that lost a race
-/// (`write_floor::is_contention` — a deadlock `40P01` or serialization failure `40001`, found
-/// anywhere in the source chain) is `write_floor::contention_conflict`'s retryable `409`; anything
-/// else is [`api_err`]'s `500`. Narrower than `api_err` on purpose: `api_err` takes any `Display`
-/// (strings included) across the whole backend and cannot see a SQLSTATE; this takes a typed
-/// error and is used on the write transactions' lock-taking statements and commits, and as the
-/// fallback of the substrate write mappers ([`write_err`], [`conflict_if_unique_violation`],
-/// [`finalize_err`]).
+/// Bridge an error raised inside a floored write transaction, or by a substrate write mapper's
+/// fallback ([`write_err`], [`conflict_if_unique_violation`], [`finalize_err`]): [`api_err`]'s
+/// `500`. A statement that lost a race (a deadlock or a serialization failure) is a fault like any
+/// other database error — every client already retries a `500` (ruled 2026-10-01).
 fn tx_err<E: Into<anyhow::Error>>(e: E) -> TemperError {
-    let e: anyhow::Error = e.into();
-    if e.chain().any(|cause| {
-        cause
-            .downcast_ref::<sqlx::Error>()
-            .is_some_and(write_floor::is_contention)
-    }) {
-        return write_floor::contention_conflict();
-    }
-    api_err(e)
+    api_err(e.into())
 }
 
 /// Map a substrate write error, TYPING the addressable refusals before the generic
@@ -745,6 +733,28 @@ struct ReconcileCtx {
 }
 
 impl DbBackend {
+    /// Reconcile's authority, decided once: a map in the admin-only regime (the reserved L0 kernel,
+    /// or a map joined to the gating team — `cogmap_write_requires_admin`, which nobody authors by
+    /// design) requires a system admin (the bare-id spelling of `require_system_admin`, as the
+    /// reblock seam's deployment-wide arm asks it — no middleware sits above this seam); every
+    /// other map requires authorship (`check_cogmap_authorable`), a system admin included (ruled
+    /// 2026-10-01). Fail-CLOSED on L0: with gating unconfigured `is_system_admin` is false for
+    /// everyone, so the kernel is immutable until an operator configures gating.
+    ///
+    /// The one definition `audit-elevation-claims.sh` fingerprints as the `reconcile_regime` gate.
+    /// `pub` so the regime's own witnesses (`cogmap_authz_test`) reach it without a manifest.
+    pub async fn authorize_reconcile(&self, cogmap: CogmapId) -> Result<(), TemperError> {
+        if crate::services::access_service::cogmap_write_requires_admin(&self.pool, cogmap)
+            .await
+            .map_err(TemperError::from)?
+        {
+            crate::auth::require_system_admin_by_id(&self.pool, self.profile_id).await?;
+            Ok(())
+        } else {
+            self.check_cogmap_authorable(uuid::Uuid::from(cogmap)).await
+        }
+    }
+
     /// `profile_id` MUST be middleware-resolved (the HTTP handlers pass the authenticated
     /// caller's own id) or the CLI operator's — the type carries no proof of that, which is
     /// the Class E residue this constructor accepts: the bare id is the caller's own identity,
@@ -3545,17 +3555,7 @@ impl Backend for DbBackend {
         let cogmap_uuid = uuid::Uuid::from(cmd.cogmap_id);
         let cogmap = CogmapId::from(cogmap_uuid);
 
-        // The regime, decided once, here: a map in the admin-only regime requires a system admin
-        // (the bare-id spelling of `require_system_admin`, as the reblock seam's deployment-wide
-        // arm asks it — no middleware sits above this seam); every other map requires authorship.
-        if crate::services::access_service::cogmap_write_requires_admin(&self.pool, cogmap)
-            .await
-            .map_err(TemperError::from)?
-        {
-            crate::auth::require_system_admin_by_id(&self.pool, self.profile_id).await?;
-        } else {
-            self.check_cogmap_authorable(cogmap_uuid).await?;
-        }
+        self.authorize_reconcile(cogmap).await?;
 
         // The system actor: every kernel mutation fires under (owner = system profile, emitter = system
         // entity) — the L0 birth migration's actor.
@@ -5102,14 +5102,15 @@ impl DbBackend {
     }
 }
 
-/// Map a `tx.commit()` error: a transaction that lost a race (`write_floor::is_contention` — a
-/// SERIALIZABLE serialization failure `40001`, or a deadlock `40P01`) is a concurrent-reconcile
-/// conflict → retryable [`TemperError::Conflict`]; any other DB error is a 500 ([`api_err`]).
+/// Map a `tx.commit()` error: a SERIALIZABLE serialization failure (SQLSTATE `40001`) is a concurrent-
+/// reconcile conflict → retryable [`TemperError::Conflict`]; any other DB error is a 500 ([`api_err`]).
 fn map_commit_err(e: sqlx::Error) -> TemperError {
-    if write_floor::is_contention(&e) {
-        return TemperError::Conflict(
-            "reconcile conflicted with a concurrent run; retry".to_string(),
-        );
+    if let sqlx::Error::Database(db) = &e {
+        if db.code().as_deref() == Some("40001") {
+            return TemperError::Conflict(
+                "reconcile conflicted with a concurrent run; retry".to_string(),
+            );
+        }
     }
     api_err(e)
 }

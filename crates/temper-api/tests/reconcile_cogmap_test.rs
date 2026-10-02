@@ -83,12 +83,13 @@ async fn system_profile(pool: &PgPool) -> Uuid {
         .expect("system profile must exist")
 }
 
-/// A backend for the reconcile command. `reconcile_cognitive_map` resolves the system actor itself and
-/// ignores `self.profile_id`, but we seed it with the system profile for principled construction.
+/// A backend for the reconcile command, as the system profile. `reconcile_cognitive_map` fires every
+/// mutation as the system actor, but it authorizes `self.profile_id` (`authorize_reconcile`): a system
+/// admin for L0 and gating-team maps, authorship for every other map.
 async fn backend(pool: &PgPool) -> DbBackend {
     let sys = system_profile(pool).await;
     // D11: in a migration-only test DB the bootseed that grants the system principal governance +
-    // approved standing has not run, so grant it here — reconcile is a system-admin-gated act.
+    // approved standing has not run, so grant it here — reconcile of L0 requires a system admin.
     common::fixtures::make_test_admin(pool, sys).await;
     DbBackend::new(pool.clone(), ProfileId::from(sys))
 }

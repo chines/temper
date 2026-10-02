@@ -254,7 +254,8 @@ pub(crate) async fn profile_can_grant(
 
 /// Is `team_id` the configured gating/root team? An unconfigured system (`gating_team_slug` NULL)
 /// has no gating team ⇒ `false`. Used by the bind gate's escalation guard: binding a map to the
-/// gating team flips it into the `require_cogmap_write_admin` regime, so it stays admin-only.
+/// gating team flips it into the admin-only regime ([`cogmap_write_requires_admin`]), so it stays
+/// admin-only.
 pub(crate) async fn is_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
     let ok = sqlx::query_scalar!(
         "SELECT EXISTS( \
@@ -509,39 +510,13 @@ pub async fn revoke_capability(
 
 /// The reserved L0 kernel cognitive map (`20260625000001_l0_kernel_cogmap.sql`). Its write gate is
 /// fail-CLOSED and independent of `gating_team_slug`: the kernel is immutable until an operator
-/// intentionally configures gating + promotes an admin. See [`require_cogmap_write_admin`].
+/// intentionally configures gating + promotes an admin. See [`cogmap_write_requires_admin`].
 const L0_KERNEL_COGMAP: CogmapId =
     CogmapId(Uuid::from_u128(0x00000000_0000_0000_0005_000000000001));
 
-/// Structural write-gate. A write requires `is_system_admin` when EITHER:
-/// - the target is the reserved **L0 kernel** map (unconditionally — independent of
-///   `gating_team_slug`), OR
-/// - the target cogmap is joined to the gating (root) team.
-///
-/// Otherwise the write is ungated here (returns `Ok`) — its own access rules apply elsewhere.
-///
-/// The L0 special-case is **fail-CLOSED**: when gating is unconfigured (`gating_team_slug` NULL, the
-/// canonical-seed default), the root-join EXISTS finds nothing AND `is_system_admin` is false for
-/// everyone — so L0 is immutable (denied to all) until an operator configures gating. Without the
-/// unconditional L0 branch the gate would be fail-OPEN (any authed user could rewrite the kernel out
-/// of the box), because a NULL `gating_team_slug` makes the root-join branch return `Ok` for everyone.
-pub async fn require_cogmap_write_admin(
-    pool: &PgPool,
-    authed: &AuthenticatedProfile,
-    cogmap_id: CogmapId,
-) -> ApiResult<()> {
-    if !cogmap_write_requires_admin(pool, cogmap_id).await? {
-        return Ok(()); // gate doesn't apply to non-reserved, non-root-team cogmaps
-    }
-    if is_system_admin(pool, ProfileId::from(authed.profile().id)).await? {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
-}
-
-/// The **structural** half of [`require_cogmap_write_admin`], caller-independent: does this cogmap
-/// sit in the admin-only regime at all (reserved L0 kernel, or joined to the gating team)?
+/// Caller-independent: does this cogmap sit in the admin-only regime at all (reserved L0 kernel, or
+/// joined to the gating team)? Reconcile's authority (`DbBackend::authorize_reconcile`) and
+/// `can_administer_grant` both consult it.
 ///
 /// Extracted so `can_administer_grant` can consult the SAME condition without either restating the
 /// query — a second copy of the policy is a copy that drifts from the gate it exists to mirror — or

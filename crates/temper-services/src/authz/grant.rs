@@ -44,7 +44,7 @@ impl ScopedAuthority for GrantAuthority {
             });
         }
 
-        // Structural escalation guard (plan Task 5b.4). `require_cogmap_write_admin` keeps the
+        // Structural escalation guard (plan Task 5b.4). The admin-only regime (`cogmap_write_requires_admin`) keeps the
         // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never
         // consulted it — so a non-admin `can_grant` holder could mint `can_write` on the kernel,
         // reaching by the grant axis exactly what the write axis forbids. `machine_authz`'s own

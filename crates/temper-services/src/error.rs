@@ -363,11 +363,6 @@ impl From<sqlx::Error> for ApiError {
             sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("23505") => {
                 ApiError::Conflict("Resource already exists".to_string())
             }
-            // A write transaction that lost a race (serialization failure or deadlock) is a
-            // retryable `409`, never a `500` fault — the one classifier the write floor uses.
-            _ if crate::backend::write_floor::is_contention(&err) => {
-                ApiError::from(crate::backend::write_floor::contention_conflict())
-            }
             _ => {
                 // Postgres embeds the offending value in several error classes
                 // (`invalid input syntax for type uuid: "<value>"`), and this codebase

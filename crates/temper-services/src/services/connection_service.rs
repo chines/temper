@@ -1983,7 +1983,7 @@ mod tests {
     /// that a decision rather than an oversight.
     ///
     /// The two sibling two-sided gates both refuse it: `cogmap_service::can_bind` (a binding to the
-    /// gating team IS the `require_cogmap_write_admin` switch, and the same gate serves *unbind*)
+    /// gating team IS the admin-only-regime switch, `cogmap_write_requires_admin`, and the same gate serves *unbind*)
     /// and `context_service::can_share` (which also gates `reassign`, a transfer of ownership that
     /// `context_reassign`'s plpgsql independently forbids). `contain_target_team` has no equivalent
     /// reason: a reach grant writes one read-only `kb_access_grants` row over the caller's OWN

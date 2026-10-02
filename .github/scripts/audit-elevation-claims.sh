@@ -125,7 +125,9 @@ fingerprint() {
 # do not red claims bound to the gate that happens to live in it.
 #
 # The `fn` gates are named here because each was READ, not because it matched a pattern:
-# `require_cogmap_write_admin` is the one whose no-op branch made four cogmap surfaces false, and
+# `reconcile_regime` (`DbBackend::authorize_reconcile` + the structural `cogmap_write_requires_admin`)
+# is the gate whose no-op branch once made four cogmap surfaces false — it replaced the deleted
+# `require_cogmap_write_admin` when reconcile's authority moved into the backend (2026-10-01), and
 # `require_manage_on_team` is the bar three `admin` subcommands were said to exceed.
 read -r -d '' GATES <<'EOF' || true
 audit_gate|file:crates/temper-services/src/authz/audit_gate.rs
@@ -137,7 +139,7 @@ read_gates|file:crates/temper-services/src/authz/read_gates.rs
 ledger_subject|block:fn:readable_event_types:crates/temper-services/src/services/admin_ledger_service.rs
 subscription|file:crates/temper-services/src/authz/subscription.rs
 two_sided|file:crates/temper-services/src/authz/two_sided.rs
-require_cogmap_write_admin|block:fn:require_cogmap_write_admin:crates/temper-services/src/services/access_service.rs
+reconcile_regime|block:fn:authorize_reconcile:crates/temper-services/src/backend/db_backend.rs;block:fn:cogmap_write_requires_admin:crates/temper-services/src/services/access_service.rs
 is_system_admin|block:fn:is_system_admin:crates/temper-services/src/services/access_service.rs
 require_manage_on_team|block:fn:require_manage_on_team:crates/temper-services/src/services/team_service.rs
 can_manage|block:fn:can_manage:crates/temper-services/src/services/team_service.rs
@@ -209,7 +211,7 @@ claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
-claim crates/temper-api/src/handlers/cognitive_maps.rs 4 require_cogmap_write_admin
+claim crates/temper-api/src/handlers/cognitive_maps.rs 4 reconcile_regime
 claim crates/temper-api/src/handlers/connections.rs 19 connection,machine,require_manage_on_team,can_manage
 claim crates/temper-api/src/handlers/embed.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/erasure.rs 6 is_system_admin
@@ -231,17 +233,17 @@ claim crates/temper-cli/src/commands/admin_machine.rs 3 machine
 claim crates/temper-cli/src/commands/admin_saml.rs 1 -
 claim crates/temper-cli/src/commands/admin_slack.rs 1 -
 claim crates/temper-cli/src/commands/admin_subscription.rs 2 subscription
-claim crates/temper-cli/src/commands/cogmap.rs 3 require_cogmap_write_admin
+claim crates/temper-cli/src/commands/cogmap.rs 3 reconcile_regime
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
 claim crates/temper-mcp/src/service.rs 3 -
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
-claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 require_cogmap_write_admin
+claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 reconcile_regime
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
-claim crates/temper-services/src/services/access_service.rs 5 is_system_admin
-claim crates/temper-services/src/services/cogmap_service.rs 2 require_cogmap_write_admin
+claim crates/temper-services/src/services/access_service.rs 6 is_system_admin
+claim crates/temper-services/src/services/cogmap_service.rs 2 reconcile_regime
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
-claim crates/temper-services/src/services/connection_service.rs 9 connection
+claim crates/temper-services/src/services/connection_service.rs 10 connection
 claim crates/temper-services/src/services/context_service.rs 14 context_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
@@ -257,11 +259,11 @@ gate connection 1281bf5040ff
 gate context_admin 6bd5aa70ab69
 gate grant 38fca1c55861
 gate machine 358b8ebb066d
+gate reconcile_regime 0ee7e4e11553
 gate read_gates 5b394645d054
 gate ledger_subject 595564c89c9c
 gate subscription efe0d95990a8
 gate two_sided 4fb1fb73d559
-gate require_cogmap_write_admin 0e739e3f803f
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e

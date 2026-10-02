@@ -39,8 +39,7 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   else keeps `404`); a candidate erased under a running batch is a `denied` row. A segmented ingest
   replaying an idempotency key onto a since-deleted resource gets `403` where it got `404`. A
   principal with no emitter to resolve (a read-only machine client) is refused by the gate (`403`)
-  on create and on these doors, where it got `500`, and a write that loses a race with a concurrent
-  write answers `409` (retryable) where it answered `500`. The relationship doors (`.../retype`,
+  on create and on these doors, where it got `500`. The relationship doors (`.../retype`,
   `.../reweight`, `.../fold`, `POST` and `DELETE` on `.../facets`) check the source resource the
   same way; an erased or deleted target keeps its `404`, and an edge that touched a since-erased
   resource was folded by the erasure and keeps answering `404`. `POST /api/resources/{id}/reassign`

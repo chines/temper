@@ -2406,3 +2406,96 @@ async fn every_write_door_completes_on_a_single_connection_pool(pool: PgPool) {
         );
     }
 }
+
+/// FAILS IF any of the doors outside `doors()` holds its write transaction open while acquiring a
+/// second pool connection — the same hold-and-wait the table witness pins, for the edge-mutate
+/// doors (`begin_edge_mutation`, the keyed-facet validation), a goal-set `PATCH` (the goal lock,
+/// the goal folds and the in-transaction assert), single-resource reassign, and blob relate. Each is
+/// driven by the owner on a one-connection pool against live rows; any non-`500` answer proves the
+/// door completed on one connection. The bite: resolve the emitter on `&self.pool` inside
+/// `begin_edge_mutation`'s transaction (or `reassign_resource`'s / `relate_blob`'s) — that door
+/// answers `500` here.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_remaining_write_doors_complete_on_a_single_connection_pool(pool: PgPool) {
+    let one = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(3))
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .expect("a one-connection pool on the test database");
+    let app = blob_app(one).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let (heir, _) = caller(&app.pool, "heir").await;
+
+    let mut probes: Vec<(String, u16, Value)> = Vec::new();
+
+    for door_name in edge_mutate_doors(Uuid::nil()).into_iter().map(|d| d.name) {
+        let source = ingest(&app, &owner, own_context).await;
+        let target = ingest(&app, &owner, own_context).await;
+        let edge = assert_edge(&app, &owner, source, target).await;
+        let door = edge_mutate_doors(edge)
+            .into_iter()
+            .find(|d| d.name == door_name)
+            .expect("the same door, addressed at a fresh edge");
+        let (status, body) = send(&app, &owner, &door).await;
+        probes.push((door.name.to_string(), status, body));
+    }
+
+    let resource = ingest(&app, &owner, own_context).await;
+    let goal = ingest(&app, &owner, own_context).await;
+    let (status, body) = call(
+        &app,
+        &owner,
+        Method::PATCH,
+        format!("/api/resources/{resource}"),
+        Some(json!({ "title": "goal-set on one connection", "goal": goal })),
+    )
+    .await;
+    probes.push((
+        "PATCH /api/resources/{id} (goal set)".to_string(),
+        status,
+        body,
+    ));
+
+    let resource = ingest(&app, &owner, own_context).await;
+    let (status, body) = call(
+        &app,
+        &owner,
+        Method::POST,
+        format!("/api/resources/{resource}/reassign"),
+        Some(json!({ "to_profile_id": heir.profile })),
+    )
+    .await;
+    probes.push((
+        "POST /api/resources/{id}/reassign".to_string(),
+        status,
+        body,
+    ));
+
+    let blob = commit_blob(&app, &owner, own_context).await;
+    let peer = ingest(&app, &owner, own_context).await;
+    let (status, body) = call(
+        &app,
+        &owner,
+        Method::POST,
+        format!("/api/blobs/{blob}/relations"),
+        Some(json!({
+            "direction": "blob_as_source",
+            "peer_table": "kb_resources",
+            "peer_id": peer,
+            "edge_kind": "express",
+            "polarity": "forward",
+            "label": "one-connection",
+            "weight": 1.0,
+        })),
+    )
+    .await;
+    probes.push(("POST /api/blobs/{id}/relations".to_string(), status, body));
+
+    for (name, status, body) in probes {
+        assert_ne!(
+            status, 500,
+            "{name}: a write door must complete on a one-connection pool (hold-and-wait); body: {body}"
+        );
+    }
+}

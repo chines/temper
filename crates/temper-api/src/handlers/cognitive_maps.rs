@@ -1,4 +1,6 @@
-//! `PUT /api/cognitive-maps/{id}` — admin-gated, idempotent cognitive-map content reconcile.
+//! `PUT /api/cognitive-maps/{id}` — idempotent cognitive-map content reconcile, gated by regime in the
+//! backend (`DbBackend::authorize_reconcile`): a system admin for L0 and gating-team maps, authorship
+//! for every other map.
 //!
 //! The request body is a PRE-EMBEDDED desired-state manifest (the operator CLI embeds client-side). The
 //! handler dispatches ONE operations command through the `Backend` trait, whose reconcile owns the
