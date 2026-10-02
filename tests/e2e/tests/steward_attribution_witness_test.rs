@@ -14,8 +14,9 @@
 //!    fact the family's attribution rides; the ledger half of that trusted path (a
 //!    relayed write reads back `<handle>@mcp`) is family-independent and is pinned once,
 //!    in `search_query_attribution_witness_test.rs`.
-//! 2. **An advance writes no ledger row.** There is nothing for attribution to attach to
-//!    today. If a future change makes the advance emit an event, this pin goes red, and
+//! 2. **An advance writes no ledger row** — neither its cursor UPDATE nor its completion of
+//!    the active steward job (the test opens one, so that branch runs). There is nothing for
+//!    attribution to attach to today. If a future change makes the advance emit an event, this pin goes red, and
 //!    the change must then answer the attribution question with a witness of its own.
 //!
 //! The bite, probe-proven at authoring: refuse the carrier in `relay_trust`'s honor arm
@@ -30,6 +31,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use uuid::Uuid;
 
 use common::tracing_layer::TestTracingLayer;
+use temper_core::types::workflow_job::{DispatchType, Persona};
 
 /// A cogmap the harness principal can read and author, joined to a team that owns a
 /// context with one event in the cogmap's ingest window. Answers `(cogmap, event)`.
@@ -72,16 +74,7 @@ async fn authorable_map_with_one_event(pool: &PgPool) -> (Uuid, Uuid) {
         .execute(pool)
         .await
         .expect("team joins the map");
-    sqlx::query(
-        "INSERT INTO kb_access_grants \
-           (subject_table, subject_id, principal_table, principal_id, can_read, can_write, granted_by_profile_id) \
-         VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, $2)",
-    )
-    .bind(cogmap)
-    .bind(principal)
-    .execute(pool)
-    .await
-    .expect("write grant");
+    common::grant_cogmap_write(pool, cogmap, principal).await;
     let ctx: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) \
          VALUES ('kb_teams', $1, 'steward-witness', 'Steward witness') RETURNING id",
@@ -148,23 +141,32 @@ async fn the_familys_acts_cross_the_trusted_path(pool: PgPool) {
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let events = captured.lock().unwrap();
-    let trusted_count = events
-        .iter()
-        .filter(|e| {
-            e.fields
-                .get("counter")
-                .map(|c| c.contains("relayed_surface_trusted"))
-                .unwrap_or(false)
-        })
-        .count();
-    assert!(
-        trusted_count >= 2,
-        "both acts' carriers were honored, not degraded: {trusted_count} trusted events in {events:?}"
+    let counted = |name: &str| {
+        events
+            .iter()
+            .filter(|e| {
+                e.fields
+                    .get("counter")
+                    .map(|c| c.contains(name))
+                    .unwrap_or(false)
+            })
+            .count()
+    };
+    // Exactly the two acts' hops, both honored: the harness's own requests carry no
+    // carrier, and the relay client makes no extra request, so a retried or degraded hop
+    // cannot hide behind a looser count.
+    assert_eq!(
+        (
+            counted("relayed_surface_trusted"),
+            counted("relayed_surface_degraded")
+        ),
+        (2, 0),
+        "both acts' carriers were honored and none degraded: (trusted, degraded)"
     );
 }
 
-/// An advance through the door lands (the ack names the stored watermark) and writes no
-/// `kb_events` row — there is no family row for attribution to attach to. A change that
+/// An advance through the door lands (the ack names the stored watermark), completes the
+/// active steward job, and across both of those writes emits no `kb_events` row — there is no family row for attribution to attach to. A change that
 /// makes the advance emit must replace this pin with a ledger witness reading `@mcp`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_advance_writes_no_ledger_row(pool: PgPool) {
@@ -172,6 +174,18 @@ async fn an_advance_writes_no_ledger_row(pool: PgPool) {
     let svc = app.mcp_relay_service(app.pool.clone()).await;
     let parts = app.relay_parts();
     let (cogmap, event) = authorable_map_with_one_event(&app.pool).await;
+
+    // An active steward job, so the advance's second write — completing it — runs for real
+    // rather than as the no-op it is when nothing is in flight.
+    let job = temper_services::services::workflow_job_service::enqueue(
+        &app.pool,
+        cogmap,
+        Persona::Steward.as_str(),
+        DispatchType::Steward.as_str(),
+    )
+    .await
+    .expect("enqueue")
+    .expect("a fresh map has no job in flight");
 
     let before = event_count(&app.pool).await;
     let res = temper_mcp::tools::steward::steward_advance_watermark(
@@ -187,6 +201,15 @@ async fn an_advance_writes_no_ledger_row(pool: PgPool) {
             .expect("the part is the tool's JSON response");
     assert_eq!(ack["watermark"], json!(event), "the advance landed: {ack}");
     let after = event_count(&app.pool).await;
+    let status: String = sqlx::query_scalar("SELECT status FROM kb_workflow_jobs WHERE id = $1")
+        .bind(job)
+        .fetch_one(&app.pool)
+        .await
+        .expect("job status");
+    assert_eq!(
+        status, "done",
+        "the advance completed the active steward job"
+    );
 
     assert_eq!(
         after, before,

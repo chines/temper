@@ -228,20 +228,6 @@ async fn add_event(pool: &PgPool, entity: Uuid, type_name: &str, ctx: Uuid) -> U
     .expect("event")
 }
 
-async fn grant_cogmap_write(pool: &PgPool, cogmap: Uuid, profile: Uuid) {
-    // Write implies read (the kb_access_grants monotonic check): grant both.
-    sqlx::query(
-        "INSERT INTO kb_access_grants \
-           (subject_table, subject_id, principal_table, principal_id, can_read, can_write, granted_by_profile_id) \
-         VALUES ('kb_cogmaps', $1, 'kb_profiles', $2, true, true, $2)",
-    )
-    .bind(cogmap)
-    .bind(profile)
-    .execute(pool)
-    .await
-    .expect("write grant");
-}
-
 /// The two steward cursors as stored — read back after a refusal to prove the refusal
 /// wrote nothing (a fresh cogmap's are both NULL; a write would settle the fingerprint).
 async fn cursors(pool: &PgPool, cogmap: Uuid) -> (Option<Uuid>, Option<String>) {
@@ -425,7 +411,7 @@ async fn advance_unreadable_cogmap_refuses_not_found(pool: PgPool) {
 async fn advance_to_an_event_outside_the_window_refuses_with_the_second_not_found(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
     let s = seed(&app.pool).await;
-    grant_cogmap_write(&app.pool, s.cogmap, s.principal).await;
+    common::grant_cogmap_write(&app.pool, s.cogmap, s.principal).await;
     // An event anchored to the principal's personal default context — no team the
     // cogmap is joined to owns or shares it, so it is outside the window.
     let personal_ctx: Uuid = sqlx::query_scalar(
@@ -464,7 +450,7 @@ async fn advance_to_an_event_outside_the_window_refuses_with_the_second_not_foun
 async fn advance_acks_what_it_stored_and_the_delta_shrinks(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
     let s = seed(&app.pool).await;
-    grant_cogmap_write(&app.pool, s.cogmap, s.principal).await;
+    common::grant_cogmap_write(&app.pool, s.cogmap, s.principal).await;
     add_event(&app.pool, s.entity, "resource_created", s.ctx).await;
     let e2 = add_event(&app.pool, s.entity, "resource_created", s.ctx).await;
     let e3 = add_event(&app.pool, s.entity, "relationship_asserted", s.ctx).await;
@@ -507,7 +493,7 @@ async fn advance_acks_what_it_stored_and_the_delta_shrinks(pool: PgPool) {
 async fn a_boundary_only_advance_holds_the_watermark(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
     let s = seed(&app.pool).await;
-    grant_cogmap_write(&app.pool, s.cogmap, s.principal).await;
+    common::grant_cogmap_write(&app.pool, s.cogmap, s.principal).await;
     let e1 = add_event(&app.pool, s.entity, "resource_created", s.ctx).await;
 
     run_advance(
@@ -535,7 +521,7 @@ async fn a_boundary_only_advance_holds_the_watermark(pool: PgPool) {
 async fn a_supplied_fingerprint_is_stored_as_supplied(pool: PgPool) {
     let (app, svc, parts) = harness(pool).await;
     let s = seed(&app.pool).await;
-    grant_cogmap_write(&app.pool, s.cogmap, s.principal).await;
+    common::grant_cogmap_write(&app.pool, s.cogmap, s.principal).await;
 
     let ack = one_text(
         &run_advance(

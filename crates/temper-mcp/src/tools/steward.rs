@@ -14,7 +14,7 @@
 //! The advance's `origin` is no longer this tool's to stamp: the route takes it from the
 //! request's resolved surface, which the relay's trusted carrier makes `@mcp`.
 //!
-//! # Declared parity deltas (per the register's G3c delta format)
+//! # Declared parity delta (per the register's G3c delta format)
 //!
 //! - **NotFound prefix drops**: the direct map prefixed `{action}: ` on both tools' NotFound
 //!   arms (the delta's unreadable/absent cogmap; the advance's cogmap exit and its
