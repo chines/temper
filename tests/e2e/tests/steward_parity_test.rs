@@ -242,6 +242,18 @@ async fn grant_cogmap_write(pool: &PgPool, cogmap: Uuid, profile: Uuid) {
     .expect("write grant");
 }
 
+/// The two steward cursors as stored — read back after a refusal to prove the refusal
+/// wrote nothing (a fresh cogmap's are both NULL; a write would settle the fingerprint).
+async fn cursors(pool: &PgPool, cogmap: Uuid) -> (Option<Uuid>, Option<String>) {
+    sqlx::query_as(
+        "SELECT steward_watermark_event_id, steward_boundary_fingerprint FROM kb_cogmaps WHERE id = $1",
+    )
+    .bind(cogmap)
+    .fetch_one(pool)
+    .await
+    .expect("cursors")
+}
+
 // ── steward_ingest_delta ───────────────────────────────────────────────────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -369,6 +381,11 @@ async fn advance_readable_but_not_authorable_refuses_with_the_disclosing_403(poo
             s.cogmap
         )
     );
+    assert_eq!(
+        cursors(&app.pool, s.cogmap).await,
+        (None, None),
+        "the refusal wrote nothing — the gate runs before the UPDATE"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -385,6 +402,23 @@ async fn advance_unreadable_cogmap_refuses_not_found(pool: PgPool) {
     .expect_err("unreadable refuses");
     assert_eq!(code_of(&err), -32602, "{err:?}");
     assert_eq!(err.message, format!("cognitive map {unreadable} not found"));
+
+    // An absent map answers the same face, modulo the id the caller supplied — no
+    // existence oracle on the write path either.
+    let absent = Uuid::now_v7();
+    let absent_err = run_advance(
+        &svc,
+        &parts,
+        json!({ "cogmap": absent.to_string(), "event_id": Uuid::now_v7() }),
+    )
+    .await
+    .expect_err("absent refuses");
+    assert_eq!(code_of(&absent_err), code_of(&err), "{absent_err:?}");
+    assert_eq!(
+        absent_err.message,
+        format!("cognitive map {absent} not found"),
+        "unreadable and absent are one face"
+    );
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -418,6 +452,11 @@ async fn advance_to_an_event_outside_the_window_refuses_with_the_second_not_foun
             s.cogmap
         ),
         "the window exit, distinct from the cogmap exit"
+    );
+    assert_eq!(
+        cursors(&app.pool, s.cogmap).await,
+        (None, None),
+        "the refusal wrote nothing — the window check runs before the UPDATE"
     );
 }
 
