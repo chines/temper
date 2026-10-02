@@ -37,9 +37,9 @@ pub async fn reset_schema(pool: &sqlx::PgPool) {
     // on this pre-auto-join baseline. It changes only `cogmap_authorable_by_profile` (cogmap WRITE) — an
     // axis this scenario never probes (its write checks are `can_modify_resource` on resources, S6) — and
     // is exercised on the full `MIGRATOR` by the temper-api + e2e tiers.
-    pool.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    pool.execute("DROP SCHEMA IF EXISTS sensitivity CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         .await
-        .expect("drop/recreate public schema");
+        .expect("drop sensitivity, recreate public schema");
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     let mut migrations: Vec<String> = std::fs::read_dir(format!("{root}/migrations"))
         .expect("read migrations dir")
