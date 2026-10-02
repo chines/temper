@@ -166,8 +166,9 @@ pub async fn bind_team(
 
 /// Unbind a cognitive map from a team (delete the `kb_team_cogmaps` row).
 ///
-/// Auth before writes: admin-only. No-op safe — `unbound: false` when no binding
-/// existed.
+/// Auth before writes: the same two-sided gate as [`bind_team`] — system-admin, OR a team manager
+/// (owner/maintainer) who administers the map, on a non-gating team. No-op safe — `unbound: false`
+/// when no binding existed.
 pub async fn unbind_team(
     pool: &PgPool,
     authed: &AuthenticatedProfile,
