@@ -60,10 +60,9 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   schemas, no longer carry `propagated_to_clients` (`20261002000020`); no event carrying it exists.
   Every door that can answer `410 RESOURCE_ERASED` declares it in the contract, and
   `POST /api/resources/{id}/finalize` declares the `409` and `422` it answers; the SDKs regenerate.
-  The operations that take authorship as query parameters declare them as typed, optional query
-  parameters (`DELETE /api/relationships/{edge_handle}/facets/{property_id}` declared them in the
-  path); `PUT /api/cognitive-maps/{id}` declares its `400` and `401`, and append and finalize their
-  `401`.
+  `PUT /api/cognitive-maps/{id}` declares its `400` and `401`, and append and finalize their `401`.
+  Every authored write refuses an over-long authorship field with `400`, naming the field and the
+  limit: `reasoning` and `rationale` at most 16384 bytes, `persona` and `model` at most 256.
   temper-client reads a `410` carrying `RESOURCE_ERASED` as a typed erasure, a block read included;
   every other `410` stays gone. The CLI reports the erasure under code `RESOURCE_ERASED`, and
   `resource delete`, `update` and `annotate` remove the local projected copy of the resource they
@@ -73,7 +72,8 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   Who observes: the owner or a grant holder of an erased resource; a caller whose goal link is
   refused; a team admin reassigning or removing a departing member; the owner or a system admin
   administering grants on a deleted resource; a caller reconciling a cognitive map; MCP and CLI
-  users meeting an erased or unknown id. User-visible: yes. Release relevance: signal-only.
+  users meeting an erased or unknown id; a caller reassigning an id it has no authority over; an
+  agent sending an over-long authorship field. User-visible: yes. Release relevance: signal-only.
 pr: self
 classes: additive,behavioral
 surfaces: http,mcp,clients,cli-stdout,schema

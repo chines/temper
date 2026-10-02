@@ -16,10 +16,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Annotated
 
 from pydantic import Field, StrictStr, field_validator
-from typing import Optional
+from typing import Any, Optional
 from typing_extensions import Annotated
 from uuid import UUID
-from temper.generated.models.confidence_band import ConfidenceBand
 from temper.generated.models.edge_facet_set_request import EdgeFacetSetRequest
 from temper.generated.models.edge_facets_response import EdgeFacetsResponse
 from temper.generated.models.facet_ack import FacetAck
@@ -614,13 +613,13 @@ class FacetsApi:
         self,
         edge_handle: Annotated[UUID, Field(description="Relationship edge handle")],
         property_id: Annotated[UUID, Field(description="Facet row id to retract")],
-        invocation_id: Annotated[Optional[UUID], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
-        correlation_id: Annotated[Optional[UUID], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
-        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")] = None,
-        confidence: Annotated[Optional[ConfidenceBand], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
-        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")] = None,
-        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")] = None,
-        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")] = None,
+        invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")],
+        correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")],
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
+        confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")],
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")],
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")],
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -643,19 +642,19 @@ class FacetsApi:
         :type edge_handle: UUID
         :param property_id: Facet row id to retract (required)
         :type property_id: UUID
-        :param invocation_id: The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.
+        :param invocation_id: The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz. (required)
         :type invocation_id: UUID
-        :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+        :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship. (required)
         :type correlation_id: UUID
-        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`.
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type reasoning: str
-        :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set.
+        :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set. (required)
         :type confidence: ConfidenceBand
-        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`.
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type rationale: str
-        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`.
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type persona: str
-        :param model: The model that authored the act. Authorship field — requires `confidence`.
+        :param model: The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -721,13 +720,13 @@ class FacetsApi:
         self,
         edge_handle: Annotated[UUID, Field(description="Relationship edge handle")],
         property_id: Annotated[UUID, Field(description="Facet row id to retract")],
-        invocation_id: Annotated[Optional[UUID], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
-        correlation_id: Annotated[Optional[UUID], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
-        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")] = None,
-        confidence: Annotated[Optional[ConfidenceBand], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
-        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")] = None,
-        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")] = None,
-        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")] = None,
+        invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")],
+        correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")],
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
+        confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")],
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")],
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")],
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -750,19 +749,19 @@ class FacetsApi:
         :type edge_handle: UUID
         :param property_id: Facet row id to retract (required)
         :type property_id: UUID
-        :param invocation_id: The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.
+        :param invocation_id: The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz. (required)
         :type invocation_id: UUID
-        :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+        :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship. (required)
         :type correlation_id: UUID
-        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`.
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type reasoning: str
-        :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set.
+        :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set. (required)
         :type confidence: ConfidenceBand
-        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`.
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type rationale: str
-        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`.
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type persona: str
-        :param model: The model that authored the act. Authorship field — requires `confidence`.
+        :param model: The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -828,13 +827,13 @@ class FacetsApi:
         self,
         edge_handle: Annotated[UUID, Field(description="Relationship edge handle")],
         property_id: Annotated[UUID, Field(description="Facet row id to retract")],
-        invocation_id: Annotated[Optional[UUID], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
-        correlation_id: Annotated[Optional[UUID], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
-        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")] = None,
-        confidence: Annotated[Optional[ConfidenceBand], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
-        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")] = None,
-        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")] = None,
-        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")] = None,
+        invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")],
+        correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")],
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
+        confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")],
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")],
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")],
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -857,19 +856,19 @@ class FacetsApi:
         :type edge_handle: UUID
         :param property_id: Facet row id to retract (required)
         :type property_id: UUID
-        :param invocation_id: The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.
+        :param invocation_id: The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz. (required)
         :type invocation_id: UUID
-        :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+        :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship. (required)
         :type correlation_id: UUID
-        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`.
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type reasoning: str
-        :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set.
+        :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set. (required)
         :type confidence: ConfidenceBand
-        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`.
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type rationale: str
-        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`.
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type persona: str
-        :param model: The model that authored the act. Authorship field — requires `confidence`.
+        :param model: The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -963,35 +962,21 @@ class FacetsApi:
             _path_params['edge_handle'] = edge_handle
         if property_id is not None:
             _path_params['property_id'] = property_id
-        # process the query parameters
         if invocation_id is not None:
-            
-            _query_params.append(('invocation_id', invocation_id))
-            
+            _path_params['invocation_id'] = invocation_id
         if correlation_id is not None:
-            
-            _query_params.append(('correlation_id', correlation_id))
-            
+            _path_params['correlation_id'] = correlation_id
         if reasoning is not None:
-            
-            _query_params.append(('reasoning', reasoning))
-            
+            _path_params['reasoning'] = reasoning
         if confidence is not None:
-            
-            _query_params.append(('confidence', confidence.value))
-            
+            _path_params['confidence'] = confidence.value
         if rationale is not None:
-            
-            _query_params.append(('rationale', rationale))
-            
+            _path_params['rationale'] = rationale
         if persona is not None:
-            
-            _query_params.append(('persona', persona))
-            
+            _path_params['persona'] = persona
         if model is not None:
-            
-            _query_params.append(('model', model))
-            
+            _path_params['model'] = model
+        # process the query parameters
         # process the header parameters
         if x_temper_surface is not None:
             _header_params['X-Temper-Surface'] = x_temper_surface
