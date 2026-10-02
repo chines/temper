@@ -94,3 +94,60 @@ async fn a_non_root_cogmap_requires_authorship(pool: PgPool) {
         "a non-author must be refused on a map outside the admin-only regime, got {denied:?}"
     );
 }
+
+/// Genesis a map as `creator` (not L0, joined to no team). Returns its id.
+async fn genesis_map(pool: &PgPool, creator: Uuid, name: &str) -> Uuid {
+    use temper_workflow::operations::{Backend, CreateCognitiveMap, Surface};
+    as_profile(pool, creator)
+        .create_cognitive_map(CreateCognitiveMap {
+            request: temper_core::types::reconcile::CreateCogmapRequest {
+                cogmap_id: None,
+                telos_resource_id: None,
+                name: name.to_string(),
+                telos_title: format!("{name} telos"),
+                telos: None,
+            },
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .expect("genesis a map")
+        .value
+        .cogmap_id
+}
+
+/// FAILS IF joining a map to the gating team does not put it in the admin-only regime. A non-admin
+/// who holds a WRITE grant — authorship, which admits it on an unjoined map (the control below) — is
+/// refused on a non-L0 map joined to the gating team, so the refusal is the regime's, not a missing
+/// grant's. The bite: make `access_service::cogmap_write_requires_admin` answer false for every map
+/// but L0 — the joined map then falls to authorship and the grant admits it.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_gating_team_map_refuses_a_non_admin_author(pool: PgPool) {
+    set_gating_team(&pool).await;
+    let creator = admin_profile(&pool, "creator@example.com").await;
+    let author = common::fixtures::create_test_profile(&pool, "author@example.com").await;
+
+    let unjoined = genesis_map(&pool, creator, "Unjoined map").await;
+    common::fixtures::grant_cogmap_write(&pool, unjoined, author).await;
+    as_profile(&pool, author)
+        .authorize_reconcile(CogmapId::from(unjoined))
+        .await
+        .expect("control: a write grant admits its holder on a map outside the admin-only regime");
+
+    let joined = genesis_map(&pool, creator, "Gating-team map").await;
+    sqlx::query(
+        "INSERT INTO kb_team_cogmaps (cogmap_id, team_id) \
+         SELECT $1, id FROM kb_teams WHERE slug = 'temper-system'",
+    )
+    .bind(joined)
+    .execute(&pool)
+    .await
+    .expect("join the map to the gating team");
+    common::fixtures::grant_cogmap_write(&pool, joined, author).await;
+    let denied = as_profile(&pool, author)
+        .authorize_reconcile(CogmapId::from(joined))
+        .await;
+    assert!(
+        matches!(denied, Err(TemperError::Forbidden)),
+        "a non-admin author is refused on a gating-team map, got {denied:?}"
+    );
+}

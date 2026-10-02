@@ -2615,8 +2615,8 @@ async fn every_write_door_completes_on_a_single_connection_pool(pool: PgPool) {
 /// second pool connection — the same hold-and-wait the table witness pins, for the edge-mutate
 /// doors (`begin_edge_mutation`, the keyed-facet validation), a goal-set `PATCH` (the goal lock,
 /// the goal folds and the in-transaction assert), single-resource reassign, and blob relate. Each is
-/// driven by the owner on a one-connection pool against live rows; any non-`500` answer proves the
-/// door completed on one connection. The bite: resolve the emitter on `&self.pool` inside
+/// driven by the owner on a one-connection pool against live rows, so each must answer `2xx` — a
+/// door refusing before its transaction opened would prove nothing. The bite: resolve the emitter on `&self.pool` inside
 /// `begin_edge_mutation`'s transaction (or `reassign_resource`'s / `relate_blob`'s) — that door
 /// answers `500` here.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -2637,10 +2637,24 @@ async fn the_remaining_write_doors_complete_on_a_single_connection_pool(pool: Pg
         let source = ingest(&app, &owner, own_context).await;
         let target = ingest(&app, &owner, own_context).await;
         let edge = assert_edge(&app, &owner, source, target).await;
-        let door = edge_mutate_doors(edge)
+        let mut door = edge_mutate_doors(edge)
             .into_iter()
             .find(|d| d.name == door_name)
             .expect("the same door, addressed at a fresh edge");
+        if door.method == Method::DELETE {
+            // The retract must address a live facet, or it answers 404 before its transaction.
+            let (status, ack) = call(
+                &app,
+                &owner,
+                Method::POST,
+                format!("/api/relationships/{edge}/facets"),
+                Some(json!({ "values": { "summary": "to retract" } })),
+            )
+            .await;
+            assert_eq!(status, 200, "precondition: a facet to retract; body: {ack}");
+            let property = ack["property_ids"][0].as_str().expect("a property id");
+            door.path = format!("/api/relationships/{edge}/facets/{property}");
+        }
         let (status, body) = send(&app, &owner, &door).await;
         probes.push((door.name.to_string(), status, body));
     }
@@ -2696,10 +2710,13 @@ async fn the_remaining_write_doors_complete_on_a_single_connection_pool(pool: Pg
     .await;
     probes.push(("POST /api/blobs/{id}/relations".to_string(), status, body));
 
+    // Every probe is the owner acting on live rows, so each must SUCCEED: a refusal before the
+    // door's transaction opens would answer non-500 without exercising the hold-and-wait at all.
     for (name, status, body) in probes {
-        assert_ne!(
-            status, 500,
-            "{name}: a write door must complete on a one-connection pool (hold-and-wait); body: {body}"
+        assert!(
+            (200..300).contains(&status),
+            "{name}: a write door must complete on a one-connection pool (hold-and-wait); \
+             status {status}, body: {body}"
         );
     }
 }
