@@ -39,6 +39,10 @@
 #   * Discriminators spelled `*_kind` (kb_block_provenance.source_kind,
 #     kb_citation_audits.source_kind). Both tables are already reached through block_id, so nothing
 #     is missed today; a new `*_kind` reference into kb_resources would be.
+#   * Schemas other than `public`. sensitivity.findings points at resources (target_table,
+#     target_id, resource_id) with no foreign key, and holds pointers and categories only, never
+#     content: its own test pins that column set. The sweep's manifest covers `public` alone, so a
+#     prose column in another schema would be outside both files.
 #
 # FORMAT (line-oriented; `#` comments and blank lines ignored)
 #   [tables]                                  section marker; cut 2 adds [payload] (D9's payload half)
