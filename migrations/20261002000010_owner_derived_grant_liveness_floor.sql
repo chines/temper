@@ -68,7 +68,7 @@ kb_cogmaps: read and write through cogmap_readable_by_profile / cogmap_authorabl
 WHY no delete arm for cogmaps or contexts: neither has an ownership floor comparable to kb_resource_homes.owner_profile_id -- a cogmap has no owner column, and context ownership is a different relation -- so a delete arm for either is a design question about that subject type. They answer false on the ELSE arm, as does every other subject kind and action.';
 
 SELECT declare_migration(
-    20261001000010,
+    20261002000010,
     'additive',
     'CREATE OR REPLACE on the STABLE derived_access_profile(uuid,text,text,uuid): the kb_resources grant arm gains an is_active semi-join (EXISTS on kb_resources r WHERE r.id = p_subject_id AND r.is_active); the delete arm (blob custody) is unchanged. Signature, return type and every answer on a live resource are unchanged; the floor fires only on a soft-deleted or erased resource, where can() already refuses an explicit grant (20260902000010). A binary without this change already renders a false can() as its existing refusal. The COMMENT is restated in present truth. No table, column, constraint, grant or data changes.'
 );

@@ -57,7 +57,7 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   block keeps its `410` `BlockRead`). `PUT /api/cognitive-maps/{id}` (reconcile) requires
   authorship of the map; the L0 kernel and maps joined to the gating team keep requiring a system
   admin. The `principal_erased` and `resource_erased` ledger payloads, and their registered payload
-  schemas, no longer carry `propagated_to_clients` (`20261001000020`); no event carrying it exists.
+  schemas, no longer carry `propagated_to_clients` (`20261002000020`); no event carrying it exists.
   Every door that can answer `410 RESOURCE_ERASED` declares it in the contract, and
   `POST /api/resources/{id}/finalize` declares the `409` and `422` it answers; the SDKs regenerate.
   The operations that take authorship as query parameters declare them as typed, optional query

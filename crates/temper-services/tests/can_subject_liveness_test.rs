@@ -362,7 +362,7 @@ async fn derived(pool: &sqlx::PgPool, profile: Uuid, action: &str, resource: Uui
 }
 
 /// The owner's derived `grant` closes on a tombstone; `delete` does not (migration
-/// `20261001000010`). `grant` answers only a live resource, as `read` and `write` already do
+/// `20261002000010`). `grant` answers only a live resource, as `read` and `write` already do
 /// through their predicates: kb_resource_homes keeps its row when the resource is soft-deleted, so
 /// ownership alone would keep it open. `delete` is blob custody and stays with the owner: a soft
 /// delete folds no edge, and a floored `delete` would leave a blob related to the tombstone
@@ -370,7 +370,7 @@ async fn derived(pool: &sqlx::PgPool, profile: Uuid, action: &str, resource: Uui
 ///
 /// FAILS IF `grant` answers a dead resource, or `delete` stops answering its owner there. The
 /// bites: drop the `AND EXISTS (... r.is_active)` conjunct from the `grant` arm in
-/// `20261001000010` (the grant assertions fail), or add it to the `delete` arm (the custody
+/// `20261002000010` (the grant assertions fail), or add it to the `delete` arm (the custody
 /// assertion fails) — each through `derived_access_profile` and through `can()`.
 #[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
 async fn the_owners_derived_grant_closes_on_a_tombstone_and_delete_custody_stays(

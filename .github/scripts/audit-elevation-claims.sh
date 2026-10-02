@@ -202,7 +202,7 @@ current_gates() {
 #
 # REVIEWED 2026-10-01 (resource erasure 2c, Step 3) — `grant` f1de797e6695 -> 38fca1c55861. The gate
 # NARROWED: `GrantAuthority::resolve`'s system-admin arm now refuses a dead `kb_resources` subject
-# (tombstone or erased husk), and the owner's derived grant arm floors on liveness (20261001000010).
+# (tombstone or erased husk), and the owner's derived grant arm floors on liveness (20261002000010).
 # Re-read against the claims bound to `grant` (admin_ledger.rs, openapi.rs): a system admin's ledger
 # read short-circuits on is_system_admin before can_administer_grant, so "a system admin reads all
 # of them" holds; "a caller who may administer grants on the subject reads its grant acts" holds,

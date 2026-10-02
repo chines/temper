@@ -519,7 +519,7 @@ END;
 $$;
 
 SELECT declare_migration(
-    20261001000020,
+    20261002000020,
     'additive',
     'Re-registers the principal_erased and resource_erased payload_schemas without the propagated_to_clients property (never required; neither schema sets additionalProperties, so every payload valid before stays valid), and CREATE OR REPLACEs principal_erasure_execute and resource_erasure_execute with the same signatures and return shapes, their completion payloads no longer writing the key. A binary without this change reads a payload lacking the key through serde(default); no reader consults it. No table, column, constraint, grant or COMMENT changes.'
 );

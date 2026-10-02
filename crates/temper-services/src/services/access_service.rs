@@ -370,7 +370,7 @@ pub(crate) async fn delete_grant(
 /// refusal unchanged. Only the uniform `Forbidden` is classified — a husk is refused on every
 /// authority arm (the delegated arm by `can()`: its explicit branch's subject-liveness floor,
 /// migration `20260902000010`, and the owner's derived `grant` arm's, migration
-/// `20261001000010`; the admin arm by `GrantAuthority::resolve`'s), so that is the answer a husk
+/// `20261002000010`; the admin arm by `GrantAuthority::resolve`'s), so that is the answer a husk
 /// arrives as. Any other subject kind, and any other refusal, passes through. Runs on the deny path
 /// only, so an admitted grant pays nothing.
 async fn erased_or_refused(

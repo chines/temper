@@ -38,7 +38,7 @@
 //!   hold;
 //! * the owner is refused grant administration on a dead resource: revoke on a tombstone `403`,
 //!   on a husk `410`, and an all-false grant on a tombstone `403` (the owner's derived `grant`
-//!   arm floors on liveness, migration `20261001000010`);
+//!   arm floors on liveness, migration `20261002000010`);
 //! * `remove_member`'s residual warning and the team handoff count live resources only;
 //! * a create that replays its idempotency key onto a resource since erased or deleted: a
 //!   segmented begin answers the owner `410` (erased) or `403` (deleted) from the ingestion
@@ -378,7 +378,7 @@ fn doors(resource: Uuid) -> Vec<Door> {
         },
         // The resource as a grant SUBJECT. Every arm refuses a dead subject (`can()`'s
         // subject-liveness floor on the explicit branch, `20260902000010`; the owner's derived
-        // `grant` arm, `20261001000010`; the admin arm's own floor), and so does the door's
+        // `grant` arm, `20261002000010`; the admin arm's own floor), and so does the door's
         // in-transaction subject floor; the door classifies the refusal. `kb_access_grants`
         // carries no FK on `principal_id`, and the refusal precedes the insert.
         Door {
@@ -1715,7 +1715,7 @@ async fn revoke_as(
     .await
 }
 
-/// The owner's derived `grant` arm (`derived_access_profile`, migration `20261001000010`) answers a
+/// The owner's derived `grant` arm (`derived_access_profile`, migration `20261002000010`) answers a
 /// live resource only, so the owner may not administer grants on a tombstone or a husk:
 ///
 /// * revoke on a live resource: admitted (`200`) — the precondition that the owner arm is live;
@@ -1727,7 +1727,7 @@ async fn revoke_as(
 /// FAILS IF the owner is admitted on a dead resource. Two layers hold each refusal — the derived
 /// arm (authority) and the door's in-transaction subject floor — so the bite takes both: revert
 /// the `AND EXISTS (SELECT 1 FROM kb_resources r WHERE r.id = p_subject_id AND r.is_active)`
-/// conjunct on the `grant` arm in `20261001000010` AND delete the `grant_subject_floor_in_tx(..)`
+/// conjunct on the `grant` arm in `20261002000010` AND delete the `grant_subject_floor_in_tx(..)`
 /// calls in `access_service`: the tombstone revoke and the all-false grant then answer `200`. The
 /// arm alone is bitten by `can_subject_liveness_test.rs`'s
 /// `the_owners_derived_grant_and_delete_close_on_a_tombstone`.
