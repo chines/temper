@@ -291,7 +291,8 @@ pub struct ClaimedAnchorJob {
 /// It names where to look and how much to read, and nothing about what was found: no resource id,
 /// hash, category or count. **No cursor either.** A watermark on an append-only surface is the id of
 /// the last row read, a row from some tenant's content, so it lives in the sweep's guarded store and
-/// the tick reads it there (ruled 2026-10-02, amending spec D8's `{surface, cursor_from, budget}`). That absence is what makes the unscoped system claim safe.
+/// the tick reads it there (ruled 2026-10-02, amending spec D8's `{surface, cursor_from, budget}`).
+/// That absence is what makes the unscoped system claim safe.
 /// `20260724000130` narrowed the cogmap claim because `claim_audit` disclosed cross-tenant ids in its
 /// payload, and a payload with no ids in it has nothing to steal. The table holds the same line
 /// structurally: `ck_workflow_jobs_sensitivity_work_order` admits exactly these two keys. A field
@@ -302,7 +303,7 @@ pub struct ClaimedAnchorJob {
 pub struct SensitivityJobPayload {
     /// The scan-manifest key of the surface this tick reads, `<table>.<column>`.
     pub surface: String,
-    /// The row budget for this tick.
+    /// The row budget for this tick, 1 to 100000 (`ck_workflow_jobs_sensitivity_work_order`).
     pub budget: i32,
 }
 

@@ -51,8 +51,12 @@
 -- The VALUES are held too, not only the keys. If the keys alone were fixed, any jsonb could sit
 -- under them, including the content the sweep exists to find; the security review enqueued an SSN
 -- as a budget. So:
---   * surface is a `<table>.<column>` identifier;
---   * budget is a non-negative integer that fits an int.
+--   * surface is a `kb_<table>.<column>` identifier. Every scan-manifest surface is a kb_ table, so
+--     the prefix narrows what can travel without refusing a real surface. It is still a shape, not
+--     membership: `kb_jane.doe` passes. Checking the value against the manifest needs the guarded
+--     store, and lands with it (build order 3a PR B);
+--   * budget is a row count from 1 to 100000. Six digits cannot carry a nine-digit identifier, and
+--     a re-review showed an SSN with its dashes stripped passing the earlier int-sized bound.
 --
 -- No cursor travels in the payload. That is a ruling (2026-10-02), amending the spec's
 -- {surface, cursor_from, budget}. On every append-only surface, a watermark is the v7 id of the last
@@ -96,9 +100,12 @@ ALTER TABLE kb_workflow_jobs
     );
 
 -- The key set is checked in both directions. `?&` requires each key to be present, and subtracting
--- the three must leave an empty object; an array also fails that second test. Each value is then
--- held to its shape (see 3 above). `->>` of a jsonb number is its text form, so the budget pattern
--- also refuses fractions, exponents and negatives. Nine digits keeps it inside an int.
+-- the two must leave an empty object; an array also fails that second test. Each value is then held
+-- to its shape (see 3 above). `->>` of a jsonb number is its normalised text form, so the digit
+-- pattern refuses fractions and negatives, and it guards the cast that follows it. Postgres does not
+-- guarantee the evaluation order of AND, so the cast sits in a CASE, which it does honour. jsonb
+-- normalises `1e2` to `100` before the CHECK sees it, which is harmless: the stored form is the plain
+-- integer.
 ALTER TABLE kb_workflow_jobs
     ADD CONSTRAINT ck_workflow_jobs_sensitivity_work_order
     CHECK (
@@ -108,9 +115,12 @@ ALTER TABLE kb_workflow_jobs
             AND payload ?& ARRAY['surface', 'budget']
             AND payload - ARRAY['surface', 'budget'] = '{}'::jsonb
             AND jsonb_typeof(payload -> 'surface') = 'string'
-            AND payload ->> 'surface' ~ '^[a-z][a-z0-9_]{0,62}\.[a-z][a-z0-9_]{0,62}$'
+            AND payload ->> 'surface' ~ '^kb_[a-z0-9_]{1,60}\.[a-z][a-z0-9_]{0,62}$'
             AND jsonb_typeof(payload -> 'budget') = 'number'
-            AND payload ->> 'budget' ~ '^[0-9]{1,9}$'
+            AND CASE WHEN payload ->> 'budget' ~ '^[0-9]{1,6}$'
+                     THEN (payload ->> 'budget')::int BETWEEN 1 AND 100000
+                     ELSE false
+                END
         )
     );
 

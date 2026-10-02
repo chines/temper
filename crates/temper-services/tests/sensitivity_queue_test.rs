@@ -370,12 +370,40 @@ async fn content_under_a_legitimate_key_is_refused(pool: PgPool) {
         ("budget", json!(-1)),
         ("budget", json!(1.5)),
         ("budget", json!(10_000_000_000_i64)),
+        // An SSN with its dashes stripped: inside an int, outside a tick budget.
+        ("budget", json!(123_456_789)),
+        ("budget", json!(100_001)),
+        ("budget", json!(0)),
+        // Shaped like `x.y` but no kb_ table: the re-review's probe.
+        ("surface", json!("jane.doe")),
     ] {
         let mut payload = serde_json::to_value(work_order()).unwrap();
         payload[key] = value;
         assert_refused_as_a_work_order(&pool, payload).await;
     }
     assert_eq!(jobs_for(&pool, persona()).await, 0);
+}
+
+/// The budget bound is inclusive at both ends, so tightening it cannot quietly refuse a real tick.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_budget_bounds_admit_one_and_one_hundred_thousand(pool: PgPool) {
+    for budget in [1, 100_000] {
+        let order = SensitivityJobPayload {
+            surface: "kb_resources.title".into(),
+            budget,
+        };
+        enqueue_system(&pool, persona(), dispatch(), &order)
+            .await
+            .unwrap_or_else(|e| panic!("{budget}: {e}"))
+            .expect("the slot is free");
+        let claimed = claim_system::<SensitivityJobPayload>(&pool, persona(), dispatch(), 1, 600)
+            .await
+            .unwrap();
+        assert_eq!(claimed[0].payload, order);
+        complete_system(&pool, claimed[0].id, persona(), dispatch())
+            .await
+            .unwrap();
+    }
 }
 
 /// The ruling of 2026-10-02: no cursor travels in the payload. On an append-only surface a
