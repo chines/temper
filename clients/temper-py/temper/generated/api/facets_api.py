@@ -615,11 +615,11 @@ class FacetsApi:
         property_id: Annotated[UUID, Field(description="Facet row id to retract")],
         invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")],
         correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")],
-        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")],
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
         confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")],
-        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")],
-        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")],
-        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")],
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")],
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")],
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -646,15 +646,15 @@ class FacetsApi:
         :type invocation_id: UUID
         :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship. (required)
         :type correlation_id: UUID
-        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. (required)
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type reasoning: str
         :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set. (required)
         :type confidence: ConfidenceBand
-        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. (required)
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type rationale: str
-        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. (required)
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type persona: str
-        :param model: The model that authored the act. Authorship field — requires `confidence`. (required)
+        :param model: The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -702,6 +702,7 @@ class FacetsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -721,11 +722,11 @@ class FacetsApi:
         property_id: Annotated[UUID, Field(description="Facet row id to retract")],
         invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")],
         correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")],
-        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")],
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
         confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")],
-        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")],
-        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")],
-        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")],
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")],
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")],
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -752,15 +753,15 @@ class FacetsApi:
         :type invocation_id: UUID
         :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship. (required)
         :type correlation_id: UUID
-        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. (required)
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type reasoning: str
         :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set. (required)
         :type confidence: ConfidenceBand
-        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. (required)
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type rationale: str
-        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. (required)
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type persona: str
-        :param model: The model that authored the act. Authorship field — requires `confidence`. (required)
+        :param model: The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -808,6 +809,7 @@ class FacetsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -827,11 +829,11 @@ class FacetsApi:
         property_id: Annotated[UUID, Field(description="Facet row id to retract")],
         invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")],
         correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")],
-        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")],
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
         confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")],
-        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")],
-        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")],
-        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")],
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")],
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")],
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")],
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -858,15 +860,15 @@ class FacetsApi:
         :type invocation_id: UUID
         :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship. (required)
         :type correlation_id: UUID
-        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. (required)
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type reasoning: str
         :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set. (required)
         :type confidence: ConfidenceBand
-        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. (required)
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes. (required)
         :type rationale: str
-        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. (required)
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type persona: str
-        :param model: The model that authored the act. Authorship field — requires `confidence`. (required)
+        :param model: The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes. (required)
         :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -914,6 +916,7 @@ class FacetsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1080,6 +1083,7 @@ class FacetsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1159,6 +1163,7 @@ class FacetsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1238,6 +1243,7 @@ class FacetsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1391,6 +1397,7 @@ class FacetsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1465,6 +1472,7 @@ class FacetsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1539,6 +1547,7 @@ class FacetsApi:
             '401': "ErrorBody",
             '403': "ErrorBody",
             '404': "ErrorBody",
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

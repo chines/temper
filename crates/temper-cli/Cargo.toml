@@ -56,6 +56,9 @@ uuid = { version = "1", features = ["serde", "v7"] }
 validator = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]
+# Builds the stub router `show_cache`'s tests drive through `TemperClient::in_process_with_token`
+# — the same in-process door temper-client's own tests use, so no socket and no mock server.
+axum = "0.8"
 # Splits an advertised command string the way a user's shell would, so the
 # access-gate test can hand clap the exact argv the user would have typed.
 shlex = "1"

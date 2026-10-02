@@ -1,8 +1,11 @@
-//! `PUT /api/cognitive-maps/{id}` — admin-gated, idempotent cognitive-map content reconcile.
+//! `PUT /api/cognitive-maps/{id}` — idempotent cognitive-map content reconcile, gated by regime in the
+//! backend (`DbBackend::authorize_reconcile`): a system admin for L0 and gating-team maps, authorship
+//! for every other map.
 //!
 //! The request body is a PRE-EMBEDDED desired-state manifest (the operator CLI embeds client-side). The
-//! handler enforces the root-team-cogmap write gate (Auth before writes), then dispatches ONE operations
-//! command through the `Backend` trait — it never calls services or `sqlx::query!` directly for the write.
+//! handler dispatches ONE operations command through the `Backend` trait, whose reconcile owns the
+//! write gate (Auth before writes: the map's regime, decided once) — it never calls services or
+//! `sqlx::query!` directly for the write.
 //!
 //! Also exposes `GET /api/cognitive-maps/{id}/shape` — the service-direct surface-tier region read.
 
@@ -52,7 +55,9 @@ pub struct ShapeQuery {
     request_body = ReconcileCogmapRequest,
     responses(
         (status = 200, description = "Reconcile applied", body = ReconcileOutcome),
-        (status = 403, description = "Caller is not a system admin for this root-team map"),
+        (status = 400, description = "The manifest or the act is invalid: it fails the pre-flight (an edge naming an unknown target), names an unknown edge kind or polarity, or carries malformed authorship fields", body = temper_services::error::ErrorBody),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Caller does not author this map, or is not a system admin for an L0 or root-team map", body = temper_services::error::ErrorBody),
         (status = 409, description = "A reconcile is already in progress on this map"),
     )
 )]
@@ -64,9 +69,8 @@ pub async fn reconcile(
     Query(act_in): Query<temper_core::types::authorship::ActInput>,
     Json(request): Json<ReconcileCogmapRequest>,
 ) -> ApiResult<Json<ReconcileOutcome>> {
-    // Auth before writes (Global Constraints): the root-team-cogmap write gate.
-    access_service::require_cogmap_write_admin(&state.pool, &auth.0, CogmapId::from(cogmap_id))
-        .await?;
+    // Auth before writes lives in the backend, which decides the map's regime once (admin-only
+    // map → system admin; any other → authorship) — see `DbBackend::reconcile_cognitive_map`.
 
     // The manifest body stays pure; authorship rides query params (reconcile uses only
     // `act.authorship` — its invocation is server-minted). Reassembled here, validated once.

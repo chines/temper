@@ -3172,7 +3172,7 @@
           {
             "name": "reasoning",
             "in": "query",
-            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
             "required": false,
             "schema": {
               "type": [
@@ -3200,7 +3200,7 @@
           {
             "name": "rationale",
             "in": "query",
-            "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
             "required": false,
             "schema": {
               "type": [
@@ -3212,7 +3212,7 @@
           {
             "name": "persona",
             "in": "query",
-            "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
             "required": false,
             "schema": {
               "type": [
@@ -3224,7 +3224,7 @@
           {
             "name": "model",
             "in": "query",
-            "description": "The model that authored the act. Authorship field — requires `confidence`.",
+            "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
             "required": false,
             "schema": {
               "type": [
@@ -3818,7 +3818,7 @@
           {
             "name": "reasoning",
             "in": "query",
-            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
             "required": false,
             "schema": {
               "type": [
@@ -3846,7 +3846,7 @@
           {
             "name": "rationale",
             "in": "query",
-            "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
             "required": false,
             "schema": {
               "type": [
@@ -3858,7 +3858,7 @@
           {
             "name": "persona",
             "in": "query",
-            "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
             "required": false,
             "schema": {
               "type": [
@@ -3870,7 +3870,7 @@
           {
             "name": "model",
             "in": "query",
-            "description": "The model that authored the act. Authorship field — requires `confidence`.",
+            "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
             "required": false,
             "schema": {
               "type": [
@@ -3901,8 +3901,35 @@
               }
             }
           },
+          "400": {
+            "description": "The manifest or the act is invalid: it fails the pre-flight (an edge naming an unknown target), names an unknown edge kind or polarity, or carries malformed authorship fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "Caller is not a system admin for this root-team map"
+            "description": "Caller does not author this map, or is not a system admin for an L0 or root-team map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "409": {
             "description": "A reconcile is already in progress on this map"
@@ -6842,6 +6869,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7628,8 +7665,28 @@
           "400": {
             "description": "Invalid payload"
           },
+          "403": {
+            "description": "Caller cannot author into the home context or cognitive map; or a segmented idempotent replay names a resource the caller can no longer modify (e.g. since deleted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "Context not found"
+            "description": "Context not found; or a one-shot idempotent replay names a resource that has since been deleted (or erased, to a caller who never held it)"
+          },
+          "410": {
+            "description": "An idempotent replay names a resource that has since been erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404 (one-shot) or 403 (segmented)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -7698,8 +7755,28 @@
           "400": {
             "description": "Invalid payload"
           },
+          "403": {
+            "description": "Caller cannot modify this resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Resource not found"
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9074,6 +9151,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The source resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. An erased target is never a 410: it answers 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9237,6 +9324,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9326,7 +9423,7 @@
           {
             "name": "reasoning",
             "in": "path",
-            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
             "required": true,
             "schema": {
               "type": [
@@ -9354,7 +9451,7 @@
           {
             "name": "rationale",
             "in": "path",
-            "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
             "required": true,
             "schema": {
               "type": [
@@ -9366,7 +9463,7 @@
           {
             "name": "persona",
             "in": "path",
-            "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
             "required": true,
             "schema": {
               "type": [
@@ -9378,7 +9475,7 @@
           {
             "name": "model",
             "in": "path",
-            "description": "The model that authored the act. Authorship field — requires `confidence`.",
+            "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
             "required": true,
             "schema": {
               "type": [
@@ -9421,6 +9518,16 @@
           },
           "404": {
             "description": "No live facet row with that id on this relationship",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -9532,6 +9639,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9636,6 +9753,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -9733,6 +9860,16 @@
           },
           "404": {
             "description": "Relationship not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The relationship's source resource was erased while this request was in flight (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403. Reachable only when an erasure commits during the request: the erasure folds every relationship touching the resource, so a later request answers 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -10057,8 +10194,18 @@
               }
             }
           },
+          "403": {
+            "description": "Caller can read the context but cannot author into it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "Context not visible to profile",
+            "description": "Context not visible to profile; or an idempotent replay names a resource that has since been deleted (or erased, to a caller who never held it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10069,6 +10216,16 @@
           },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "An idempotent replay names a resource that has since been erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -10161,6 +10318,16 @@
           },
           "404": {
             "description": "The addressed resource does not exist or is not visible to the caller (resource scope only — context scope never answers 404; see the 200 description)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The addressed resource was erased (code RESOURCE_ERASED; resource scope only); answered only to a caller who held standing on it, everyone else gets 404. A candidate erased under a running batch is a `denied` row inside the 200, never a 410",
             "content": {
               "application/json": {
                 "schema": {
@@ -10332,7 +10499,7 @@
           {
             "name": "reasoning",
             "in": "query",
-            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.",
             "required": false,
             "schema": {
               "type": [
@@ -10360,7 +10527,7 @@
           {
             "name": "rationale",
             "in": "query",
-            "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes.",
             "required": false,
             "schema": {
               "type": [
@@ -10372,7 +10539,7 @@
           {
             "name": "persona",
             "in": "query",
-            "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes.",
             "required": false,
             "schema": {
               "type": [
@@ -10384,7 +10551,7 @@
           {
             "name": "model",
             "in": "query",
-            "description": "The model that authored the act. Authorship field — requires `confidence`.",
+            "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.",
             "required": false,
             "schema": {
               "type": [
@@ -10427,6 +10594,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
             "content": {
               "application/json": {
                 "schema": {
@@ -10514,6 +10691,16 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
             "content": {
               "application/json": {
                 "schema": {
@@ -10715,6 +10902,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -10908,8 +11105,28 @@
           "400": {
             "description": "Invalid chunks_packed"
           },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
             "description": "Caller cannot modify this resource"
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -10941,7 +11158,7 @@
           "Resources"
         ],
         "summary": "Read one content block by address (the three-state resolution)",
-        "description": "The defined-dangling-state design: `200` the block is live (identity, chunk identities,\nprovenance), `410 Gone` the block is folded (the envelope carries its attribution history\nand its gated successor dispositions), `404` absent. No redirect — successor names ride as\ndata inside the gated envelope, never as a Location the caller may not be authorized to\nfollow.",
+        "description": "The defined-dangling-state design: `200` the block is live (identity, chunk identities,\nprovenance), `410 Gone` the block is folded (the envelope carries its attribution history\nand its gated successor dispositions), `404` absent. A home resource that was erased\nanswers `410` under the error envelope (`RESOURCE_ERASED`) to a caller who held it, and\n`404` to everyone else. No redirect — successor names ride as\ndata inside the gated envelope, never as a Location the caller may not be authorized to\nfollow.",
         "operationId": "read_block",
         "parameters": [
           {
@@ -10987,7 +11204,7 @@
             }
           },
           "404": {
-            "description": "No such block (or not visible — indistinguishable, denying existence)",
+            "description": "No such block (or its home resource is not visible, or was erased and the caller never held it — indistinguishable, denying existence)",
             "content": {
               "application/json": {
                 "schema": {
@@ -10997,7 +11214,7 @@
             }
           },
           "410": {
-            "description": "The block is folded: state envelope with disposition and successors",
+            "description": "The block is folded: state envelope with disposition and successors (body: BlockRead). Also answered when the block's home resource was erased (code RESOURCE_ERASED, body: ErrorBody) — only to a caller who held standing on that resource; everyone else gets 404",
             "content": {
               "application/json": {
                 "schema": {
@@ -11619,10 +11836,50 @@
             "description": "Segmented ingest finalized"
           },
           "400": {
-            "description": "Landed block count or body hash mismatch"
+            "description": "The path id is not a UUID, or the request body is not syntactically valid JSON (the extractor's plain-text rejection). A landed block count or body hash mismatch is the 409, never a 400"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "403": {
             "description": "Caller cannot modify this resource"
+          },
+          "409": {
+            "description": "The landed block count or the body hash does not match what the caller declared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The stored bytes do not match the declared content hash (code CONTENT_INTEGRITY); not resumable — discard and re-upload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -11707,6 +11964,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -11767,6 +12034,16 @@
           },
           "403": {
             "description": "Caller may not administer grants on this resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
             "content": {
               "application/json": {
                 "schema": {
@@ -12022,6 +12299,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -12186,6 +12473,16 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -12251,11 +12548,31 @@
               }
             }
           },
+          "400": {
+            "description": "The caller owns the resource, but it is homed in a cognitive map (map interiors are not reassignable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "Forbidden (not owner, or admin reach not satisfied)"
+            "description": "Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403"
           },
           "404": {
-            "description": "Resource has no home / not found"
+            "description": "Not answered: an unknown id answers 403, as a resource the caller has no authority over"
+          },
+          "410": {
+            "description": "The resource was erased (code RESOURCE_ERASED); answered to a caller with authority who also holds the erased resource (its owner, or an admin with reach who holds a read grant on it); everyone else gets 403",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -13989,28 +14306,28 @@
               "string",
               "null"
             ],
-            "description": "The model that authored the act. Authorship field — requires `confidence`."
+            "description": "The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes."
           },
           "persona": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The persona/role the author acted as. Authorship field — requires `confidence`."
+            "description": "The persona/role the author acted as. Authorship field — requires `confidence`. At most 256\nbytes."
           },
           "rationale": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Structured rationale for the act. Authorship field — requires `confidence`."
+            "description": "Structured rationale for the act. Authorship field — requires `confidence`. At most 16384\nbytes."
           },
           "reasoning": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`."
+            "description": "Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes."
           }
         }
       },

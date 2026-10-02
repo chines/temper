@@ -107,7 +107,9 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BlocksResponse",
             '400': None,
+            '401': "ErrorBody",
             '403': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -183,7 +185,9 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BlocksResponse",
             '400': None,
+            '401': "ErrorBody",
             '403': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -259,7 +263,9 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BlocksResponse",
             '400': None,
+            '401': "ErrorBody",
             '403': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -410,7 +416,9 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "IngestCreateResponse",
             '400': None,
+            '403': "ErrorBody",
             '404': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -482,7 +490,9 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "IngestCreateResponse",
             '400': None,
+            '403': "ErrorBody",
             '404': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -554,7 +564,9 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "IngestCreateResponse",
             '400': None,
+            '403': "ErrorBody",
             '404': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -706,7 +718,11 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '401': "ErrorBody",
             '403': None,
+            '409': "ErrorBody",
+            '410': "ErrorBody",
+            '422': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -782,7 +798,11 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '401': "ErrorBody",
             '403': None,
+            '409': "ErrorBody",
+            '410': "ErrorBody",
+            '422': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -858,7 +878,11 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '401': "ErrorBody",
             '403': None,
+            '409': "ErrorBody",
+            '410': "ErrorBody",
+            '422': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -905,6 +929,13 @@ class IngestApi:
             _body_params = finalize_payload
 
 
+        # set the HTTP header `Accept`
+        if 'Accept' not in _header_params:
+            _header_params['Accept'] = self.api_client.select_header_accept(
+                [
+                    'application/json'
+                ]
+            )
 
         # set the HTTP header `Content-Type`
         if _content_type:
@@ -1282,7 +1313,9 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceView",
             '400': None,
+            '403': "ErrorBody",
             '404': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1358,7 +1391,9 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceView",
             '400': None,
+            '403': "ErrorBody",
             '404': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,
@@ -1434,7 +1469,9 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "ResourceView",
             '400': None,
+            '403': "ErrorBody",
             '404': None,
+            '410': "ErrorBody",
         }
         response_data = self.api_client.call_api(
             *_param,

@@ -13,8 +13,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::backend::write_floor;
 use crate::error::{ApiError, ApiResult};
 use crate::services::team_service::{can_manage, role_on_team};
+use temper_core::error::TemperError;
 use temper_core::types::ids::ProfileId;
 
 /// A resource's home owner + the anchor table it's homed under.
@@ -23,16 +25,15 @@ struct HomeRow {
     anchor_table: String,
 }
 
-async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<HomeRow> {
-    sqlx::query_as!(
+async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<Option<HomeRow>> {
+    Ok(sqlx::query_as!(
         HomeRow,
         "SELECT owner_profile_id AS owner, anchor_table \
            FROM kb_resource_homes WHERE resource_id = $1",
         resource,
     )
     .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| ApiError::NotFound("resource not found".to_string()))
+    .await?)
 }
 
 /// Is there a team T where caller manages T, `resource` is homed in a context shared
@@ -81,17 +82,32 @@ async fn admin_reach(
 /// OR team-admin over a team the resource is scoped to, to a member of that team.
 /// Reassigning to the current owner is an idempotent no-op. Cogmap-homed resources
 /// are rejected (map interiors are not personally owned).
+///
+/// Authority is decided FIRST, and an id with no home is refused exactly as an existing resource
+/// the caller has no authority over: `403`, the same body. Nothing the door answers before the
+/// authority check may depend on the id — otherwise the status says whether the id is a resource,
+/// and what kind of home it has, to any caller.
 pub async fn reassign_resource(
     pool: &PgPool,
     caller: ProfileId,
     resource_id: Uuid,
     to_profile_id: Uuid,
 ) -> ApiResult<()> {
-    let home = home_of(pool, resource_id).await?;
+    // Auth before writes: current owner, or an admin with reach over the resource+target. An
+    // unknown id has no owner and no reach, so it is refused like any other resource.
+    let Some(home) = home_of(pool, resource_id).await? else {
+        return Err(ApiError::Forbidden);
+    };
+    let authorized =
+        home.owner == *caller || admin_reach(pool, caller, resource_id, to_profile_id).await?;
+    if !authorized {
+        return Err(ApiError::Forbidden);
+    }
 
     // Only context-homed resources are reassignable. The owner path would otherwise
     // let a cogmap-node owner flip it — guard here for BOTH paths (the admin path's
-    // reach query already excludes non-context homes structurally).
+    // reach query already excludes non-context homes structurally, so only an owner
+    // reaches this refusal).
     if home.anchor_table != "kb_contexts" {
         return Err(ApiError::BadRequest(
             "cannot reassign a cogmap-homed resource; map interiors are not personally owned"
@@ -99,11 +115,21 @@ pub async fn reassign_resource(
         ));
     }
 
-    // Auth before writes: current owner, or an admin with reach over the resource+target.
-    let authorized =
-        home.owner == *caller || admin_reach(pool, caller, resource_id, to_profile_id).await?;
-    if !authorized {
-        return Err(ApiError::Forbidden);
+    // The liveness floor (resource erasure spec D13; plan 2c, controller ruling 5), at the head of
+    // the reassign's own transaction: the resource must be live, under the `FOR KEY SHARE` row
+    // lock the erasure act's `FOR UPDATE` conflicts with, held until the reassign commits. Liveness
+    // only — the authority stays the gate above. A refusal is classified as every write floor's
+    // is: 410 `RESOURCE_ERASED` to a holder of an erased husk, 403 otherwise (a tombstone always
+    // 403). It runs ahead of the no-op return so a husk is never answered `200`.
+    let mut tx = pool.begin().await?;
+    if let Err(refusal) = write_floor::liveness_floor_in_tx(
+        &mut tx,
+        caller,
+        temper_substrate::ids::ResourceId::from(resource_id),
+    )
+    .await
+    {
+        return Err(write_floor::rollback_with(tx, ApiError::from(refusal)).await);
     }
     if home.owner == to_profile_id {
         return Ok(()); // idempotent no-op
@@ -111,12 +137,15 @@ pub async fn reassign_resource(
 
     // The owner path admits any target; verify it's a real profile so a bad UUID is a
     // clean 400 rather than an FK-violation 500 in the projector. (The admin path's
-    // membership join already guarantees existence, but this covers both uniformly.)
+    // membership join already guarantees existence, but this covers both uniformly.) This and the
+    // emitter below run on the reassign's own transaction, never the pool: the transaction already
+    // holds a pool connection, and a second acquire while it is open is how concurrent writers
+    // stall the pool.
     let to_exists = sqlx::query_scalar!(
         r#"SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE id = $1) AS "e!: bool""#,
         to_profile_id,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
     if !to_exists {
         return Err(ApiError::BadRequest(
@@ -124,11 +153,11 @@ pub async fn reassign_resource(
         ));
     }
 
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    temper_substrate::writes::reassign_resource_with(
-        pool,
+    temper_substrate::writes::reassign_resource_in_tx(
+        &mut tx,
         temper_substrate::ids::ResourceId::from(resource_id),
         home.owner.into(),
         to_profile_id.into(),
@@ -137,6 +166,7 @@ pub async fn reassign_resource(
     )
     .await
     .map_err(|e| ApiError::Internal(e.to_string()))?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -151,10 +181,12 @@ pub struct ScopedOwnedRow {
     pub context_ref: String,
 }
 
-/// Resources owned by `profile_id` and homed in a *live* context shared to `team_id`.
-/// A retired context drops out of this scope, so the bulk handoff and `remove_member`'s
-/// residual surfacing both stop counting it. Witness:
-/// `bulk_excludes_a_retired_contexts_resources`.
+/// *Live* resources owned by `profile_id` and homed in a *live* context shared to `team_id`.
+/// A retired context drops out of this scope, and so does a soft-deleted or erased resource
+/// (`kb_resources.is_active`), so the bulk handoff and `remove_member`'s residual surfacing
+/// both stop counting either and agree on what is left to hand off. Witnesses:
+/// `bulk_excludes_a_retired_contexts_resources`, and in `resource_husk_write_test.rs`
+/// `remove_member_and_team_reassign_leave_out_a_husk_and_a_tombstone`.
 ///
 /// Ordered by `(context slug, resource_id)` for stable output only — consumers
 /// that group by context MUST key on `context_id` (a slug is unique only per-owner,
@@ -176,6 +208,7 @@ pub async fn team_scoped_owned(
         FROM kb_team_contexts tc
         JOIN kb_resource_homes h
           ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id
+        JOIN kb_resources r ON r.id = h.resource_id AND r.is_active
         JOIN kb_contexts c ON c.id = tc.context_id AND c.is_active
         LEFT JOIN kb_teams    t ON c.owner_table = 'kb_teams'    AND t.id = c.owner_id
         LEFT JOIN kb_profiles p ON c.owner_table = 'kb_profiles' AND p.id = c.owner_id
@@ -198,9 +231,11 @@ pub async fn team_scoped_owned(
         .collect())
 }
 
-/// Bulk-reassign, from `from_profile_id` to `to_profile_id`, every resource owned by
+/// Bulk-reassign, from `from_profile_id` to `to_profile_id`, every LIVE resource owned by
 /// `from` and homed in a context shared to `team_id`. Auth: caller manages the team AND
-/// `to` is a member of it. One transaction; returns the reassigned resource ids.
+/// `to` is a member of it. One transaction; returns the reassigned resource ids. A tombstoned or
+/// erased resource is outside the scope; one tombstoned or erased after the scope read fails the
+/// liveness floor, is skipped, and is not among them.
 pub async fn reassign_team_resources(
     pool: &PgPool,
     caller: ProfileId,
@@ -252,10 +287,22 @@ pub async fn reassign_team_resources(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
     let mut tx = pool.begin().await?;
+    let mut reassigned = Vec::with_capacity(targets.len());
     for &rid in &targets {
+        let resource = temper_substrate::ids::ResourceId::from(rid);
+        // The liveness floor per resource (controller ruling 5), in the run's transaction, ahead
+        // of its write. `team_scoped_owned` enumerates live resources only, so the floor refuses
+        // one erased or deleted after the scope read. It is SKIPPED — left with its owner and
+        // absent from the returned ids — never a whole-run failure. Only the floor's two refusals
+        // skip; a fault aborts the run as before.
+        match write_floor::liveness_floor_in_tx(&mut tx, caller, resource).await {
+            Ok(()) => {}
+            Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => continue,
+            Err(e) => return Err(e.into()),
+        }
         temper_substrate::writes::reassign_resource_in_tx(
             &mut tx,
-            temper_substrate::ids::ResourceId::from(rid),
+            resource,
             from_profile_id.into(),
             to_profile_id.into(),
             emitter,
@@ -263,9 +310,10 @@ pub async fn reassign_team_resources(
         )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
+        reassigned.push(rid);
     }
     tx.commit().await?;
-    Ok(targets)
+    Ok(reassigned)
 }
 
 #[cfg(all(test, feature = "test-db"))]
@@ -501,6 +549,30 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    /// FAILS IF the door answers a caller without authority differently by what the id is. An
+    /// unknown id, another's context-homed resource and another's cogmap-homed resource each refuse
+    /// the stranger the same `Forbidden` — no status names whether the id is a resource or what
+    /// kind of home it has. The bite: read the home with a `NotFound` for a missing row, or run the
+    /// cogmap-home `BadRequest` ahead of the authority check, in `reassign_resource`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_stranger_is_refused_alike_whatever_the_id_is(pool: PgPool) {
+        let alice = mk_profile(&pool, "alice").await;
+        let mallory = mk_profile(&pool, "mallory").await;
+        let ctx = mk_context(&pool, "c", alice).await;
+        let in_context = mk_homed_resource(&pool, ctx, alice).await;
+        let in_cogmap = mk_cogmap_homed_resource(&pool, alice).await;
+        for (what, id) in [
+            ("an unknown id", Uuid::now_v7()),
+            ("another's context-homed resource", in_context),
+            ("another's cogmap-homed resource", in_cogmap),
+        ] {
+            let err = reassign_resource(&pool, mallory, id, *mallory)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ApiError::Forbidden), "{what}: {err:?}");
+        }
     }
 
     #[sqlx::test(migrations = "../../migrations")]

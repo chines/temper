@@ -15,11 +15,6 @@
         }
       ]
     },
-    "propagated_to_clients": {
-      "description": "The propagation fact, DISTINCT from the server fact (erasure spec, payload\nrequirements): this event records \"gone from the server\"; `false` must never read as\n\"gone from the clients\". `false` until the propagation protocol exists (D3) — the\nfield reserves the fact; the wire task specifies its vocabulary.",
-      "type": "boolean",
-      "default": false
-    },
     "redacted_hashes": {
       "description": "The redacted set (D2): bare sha256 hex, exactly as `content_hash` carries it — the key\nevery reader already shares and no trail join-key shape can match.",
       "type": "array",

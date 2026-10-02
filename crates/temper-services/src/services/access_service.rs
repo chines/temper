@@ -10,10 +10,12 @@
 
 use sqlx::PgPool;
 use temper_substrate::ids::EntityId;
-use temper_substrate::payloads::RefTarget;
+use temper_substrate::payloads::{AnchorTable, RefTarget};
 use uuid::Uuid;
 
 use crate::auth::{AuthenticatedProfile, SystemAdmin};
+use crate::backend::substrate_read::husk_held_by;
+use crate::backend::write_floor;
 // In scope so `GrantAuthority::resolve` — the grant-administration gate, which lives as this
 // enum's `ScopedAuthority` impl in `authz/grant.rs` — is callable here.
 use crate::authz::{Principal, ScopedAuthority};
@@ -28,7 +30,7 @@ use temper_core::types::admin::UpdateSettingsRequest;
 use temper_core::types::cognitive_maps::{
     GrantCapabilityRequest, GrantOutcome, RevokeCapabilityRequest, RevokeOutcome,
 };
-use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
 use temper_core::types::team::{TeamMemberRow, TeamRole};
 
 use crate::error::{ApiError, ApiResult};
@@ -252,7 +254,8 @@ pub(crate) async fn profile_can_grant(
 
 /// Is `team_id` the configured gating/root team? An unconfigured system (`gating_team_slug` NULL)
 /// has no gating team ⇒ `false`. Used by the bind gate's escalation guard: binding a map to the
-/// gating team flips it into the `require_cogmap_write_admin` regime, so it stays admin-only.
+/// gating team flips it into the admin-only regime ([`cogmap_write_requires_admin`]), so it stays
+/// admin-only.
 pub(crate) async fn is_gating_team(pool: &PgPool, team_id: Uuid) -> ApiResult<bool> {
     let ok = sqlx::query_scalar!(
         "SELECT EXISTS( \
@@ -360,6 +363,55 @@ pub(crate) async fn delete_grant(
     .await?)
 }
 
+/// The grant doors' refusal on a `kb_resources` subject, classified as every resource write door's
+/// is (resource erasure plan 2c, ruling 1): [`ApiError::ResourceErased`] (`410 RESOURCE_ERASED`)
+/// when the subject is an erased husk `caller` holds standing on (`resource_husk_held_by`,
+/// migration `20260930000060`, through the one probe `substrate_read::husk_held_by`), else the
+/// refusal unchanged. Only the uniform `Forbidden` is classified — a husk is refused on every
+/// authority arm (the delegated arm by `can()`: its explicit branch's subject-liveness floor,
+/// migration `20260902000010`, and the owner's derived `grant` arm's, migration
+/// `20261002000010`; the admin arm by `GrantAuthority::resolve`'s), so that is the answer a husk
+/// arrives as. Any other subject kind, and any other refusal, passes through. Runs on the deny path
+/// only, so an admitted grant pays nothing.
+async fn erased_or_refused(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject: RefTarget,
+    refusal: ApiError,
+) -> ApiError {
+    if subject.kind != AnchorTable::Resources || !matches!(refusal, ApiError::Forbidden) {
+        return refusal;
+    }
+    let id = ResourceId::from(subject.id);
+    match husk_held_by(pool, caller, id).await {
+        Ok(true) => ApiError::ResourceErased(id),
+        Ok(false) => refusal,
+        Err(e) => ApiError::from(e),
+    }
+}
+
+/// The grant doors' subject floor, inside the grant write's own transaction (resource erasure
+/// spec D13: a write that races the erasure act lands before it or refuses after it). A
+/// `kb_resources` subject is locked `FOR KEY SHARE` and must be live, through the write floor's
+/// liveness check ([`write_floor::liveness_floor_in_tx`]), which classifies a refusal exactly as
+/// [`erased_or_refused`] does: `410 RESOURCE_ERASED` to a holder of an erased husk, else `403`.
+/// The authority gate ran before this on the pool and refuses a dead subject on every arm; this
+/// floor is what holds the subject live until the grant row commits, so an act that commits
+/// while the door waits on the lock refuses the grant rather than leaving it on the husk. Every
+/// other subject kind passes unlocked.
+async fn grant_subject_floor_in_tx(
+    conn: &mut sqlx::PgConnection,
+    caller: ProfileId,
+    subject: RefTarget,
+) -> ApiResult<()> {
+    if subject.kind != AnchorTable::Resources {
+        return Ok(());
+    }
+    write_floor::liveness_floor_in_tx(conn, caller, ResourceId::from(subject.id))
+        .await
+        .map_err(ApiError::from)
+}
+
 /// Mint/update one access grant. Auth before write: `can_administer_grant`. The DB coherence CHECK
 /// (`write|delete|grant ⇒ read`) is the integrity backstop. Idempotent upsert — `granted=false` when
 /// the row already existed and was updated in place.
@@ -376,13 +428,24 @@ pub async fn grant_capability(
     let subject = crate::authz::wire_subject(&req.subject_table, req.subject_id)
         .ok_or(ApiError::Forbidden)?;
     let proof =
-        authorize_capability_grant(pool, Principal::Proof(authed), subject, req.into()).await?;
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        match authorize_capability_grant(pool, Principal::Proof(authed), subject, req.into()).await
+        {
+            Ok(proof) => proof,
+            Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
+        };
+    // The subject floor at the head of the grant write's own transaction; its lock holds until
+    // the grant row commits, and a refusal rolls the transaction back before it is answered. The
+    // emitter is resolved only after it admits, on the same transaction — never the pool, which a
+    // transaction already holding a connection would wait on for a second.
+    let mut tx = pool.begin().await?;
+    if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
+        return Err(write_floor::rollback_with(tx, refusal).await);
+    }
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut conn = pool.acquire().await?;
     let granted = insert_grant(
-        &mut conn,
+        &mut tx,
         // The subject travels in the warrant. `req.subject_table`/`req.subject_id` are NOT passed
         // alongside it — they are what `wire_subject` typed into `subject` above, which is what the
         // proof was minted over.
@@ -399,6 +462,7 @@ pub async fn grant_capability(
         emitter,
     )
     .await?;
+    tx.commit().await?;
     Ok(GrantOutcome { granted })
 }
 
@@ -417,13 +481,22 @@ pub async fn revoke_capability(
     // its warrant. Deliberately NOT `authorize_capability_grant`: that adds attenuation, and
     // attenuating a revocation is what would make a grant unwithdrawable.
     let proof =
-        crate::authz::authorize::<GrantAuthority>(pool, Principal::Proof(authed), subject).await?;
-    let emitter = temper_substrate::writes::resolve_emitter(pool, caller, "web")
+        match crate::authz::authorize::<GrantAuthority>(pool, Principal::Proof(authed), subject)
+            .await
+        {
+            Ok(proof) => proof,
+            Err(refusal) => return Err(erased_or_refused(pool, caller, subject, refusal).await),
+        };
+    // The subject floor at the head of the revoke's own transaction (see `grant_capability`).
+    let mut tx = pool.begin().await?;
+    if let Err(refusal) = grant_subject_floor_in_tx(&mut tx, caller, subject).await {
+        return Err(write_floor::rollback_with(tx, refusal).await);
+    }
+    let emitter = temper_substrate::writes::resolve_emitter(&mut *tx, caller, "web")
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let mut conn = pool.acquire().await?;
     let revoked = delete_grant(
-        &mut conn,
+        &mut tx,
         &crate::authz::RevokeWarrant::Administered(&proof),
         &req.principal_table,
         req.principal_id,
@@ -431,44 +504,19 @@ pub async fn revoke_capability(
         emitter,
     )
     .await?;
+    tx.commit().await?;
     Ok(RevokeOutcome { revoked })
 }
 
 /// The reserved L0 kernel cognitive map (`20260625000001_l0_kernel_cogmap.sql`). Its write gate is
 /// fail-CLOSED and independent of `gating_team_slug`: the kernel is immutable until an operator
-/// intentionally configures gating + promotes an admin. See [`require_cogmap_write_admin`].
+/// intentionally configures gating + promotes an admin. See [`cogmap_write_requires_admin`].
 const L0_KERNEL_COGMAP: CogmapId =
     CogmapId(Uuid::from_u128(0x00000000_0000_0000_0005_000000000001));
 
-/// Structural write-gate. A write requires `is_system_admin` when EITHER:
-/// - the target is the reserved **L0 kernel** map (unconditionally — independent of
-///   `gating_team_slug`), OR
-/// - the target cogmap is joined to the gating (root) team.
-///
-/// Otherwise the write is ungated here (returns `Ok`) — its own access rules apply elsewhere.
-///
-/// The L0 special-case is **fail-CLOSED**: when gating is unconfigured (`gating_team_slug` NULL, the
-/// canonical-seed default), the root-join EXISTS finds nothing AND `is_system_admin` is false for
-/// everyone — so L0 is immutable (denied to all) until an operator configures gating. Without the
-/// unconditional L0 branch the gate would be fail-OPEN (any authed user could rewrite the kernel out
-/// of the box), because a NULL `gating_team_slug` makes the root-join branch return `Ok` for everyone.
-pub async fn require_cogmap_write_admin(
-    pool: &PgPool,
-    authed: &AuthenticatedProfile,
-    cogmap_id: CogmapId,
-) -> ApiResult<()> {
-    if !cogmap_write_requires_admin(pool, cogmap_id).await? {
-        return Ok(()); // gate doesn't apply to non-reserved, non-root-team cogmaps
-    }
-    if is_system_admin(pool, ProfileId::from(authed.profile().id)).await? {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden)
-    }
-}
-
-/// The **structural** half of [`require_cogmap_write_admin`], caller-independent: does this cogmap
-/// sit in the admin-only regime at all (reserved L0 kernel, or joined to the gating team)?
+/// Caller-independent: does this cogmap sit in the admin-only regime at all (reserved L0 kernel, or
+/// joined to the gating team)? Reconcile's authority (`DbBackend::authorize_reconcile`) and
+/// `can_administer_grant` both consult it.
 ///
 /// Extracted so `can_administer_grant` can consult the SAME condition without either restating the
 /// query — a second copy of the policy is a copy that drifts from the gate it exists to mirror — or

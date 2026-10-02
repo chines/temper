@@ -9,12 +9,14 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ids::CogmapId;
+use temper_core::error::TemperError;
+use temper_core::types::ids::{CogmapId, ProfileId, ResourceId};
 use temper_substrate::payloads::{AnchorTable, RefTarget};
 
 use super::{
     Authorized, ConnectionAuthority, ConnectionControlAuthority, Principal, ScopedAuthority,
 };
+use crate::backend::write_floor;
 use crate::error::{ApiError, ApiResult};
 use crate::services::access_service::{
     cogmap_write_requires_admin, is_system_admin, profile_can_grant, GrantAuthority,
@@ -28,10 +30,21 @@ impl ScopedAuthority for GrantAuthority {
     async fn resolve(pool: &PgPool, caller: Principal<'_>, subject: RefTarget) -> ApiResult<Self> {
         let caller = caller.profile_id();
         if is_system_admin(pool, caller).await? {
-            return Ok(GrantAuthority::SystemAdmin);
+            // The subject-liveness floor the delegated arm carries inside `can()` (migration
+            // `20260902000010`: "both profile branches answer a tombstoned subject identically")
+            // applies to the admin arm too, so an admin cannot administer grants on a tombstoned
+            // or erased resource. A dead subject resolves `None`, the same answer the delegated
+            // arm gives it; the grant doors classify that refusal (410 to a husk holder, else 403).
+            // A resource subject's admin therefore pays one more query than the arm's comment
+            // above promises; every other subject kind is unchanged.
+            return Ok(if admin_subject_is_live(pool, caller, subject).await? {
+                GrantAuthority::SystemAdmin
+            } else {
+                GrantAuthority::None
+            });
         }
 
-        // Structural escalation guard (plan Task 5b.4). `require_cogmap_write_admin` keeps the
+        // Structural escalation guard (plan Task 5b.4). The admin-only regime (`cogmap_write_requires_admin`) keeps the
         // reserved L0 kernel and gating-team-joined maps admin-only, but the grant path never
         // consulted it — so a non-admin `can_grant` holder could mint `can_write` on the kernel,
         // reaching by the grant axis exactly what the write axis forbids. `machine_authz`'s own
@@ -59,6 +72,31 @@ impl ScopedAuthority for GrantAuthority {
 
     fn denial() -> ApiError {
         ApiError::Forbidden
+    }
+}
+
+/// The admin arm's subject-liveness floor. A `kb_resources` subject must be live
+/// (`kb_resources.is_active`), asked through the write floor's own liveness check
+/// ([`write_floor::liveness_floor_in_tx`], the one the reassign doors call) rather than a restated
+/// predicate. Either of that floor's refusals — a tombstone or an erased husk — reads "not live";
+/// its classification is the door's to render, not this authority's. On a bare pool connection
+/// the floor's row lock is released at once: this is an authority probe, not a write's floor.
+///
+/// Other subject kinds pass. `can()`'s floor (migration `20260902000010`) also covers
+/// `kb_contexts`; extending the admin arm to a retired context is not this change's ruling.
+async fn admin_subject_is_live(
+    pool: &PgPool,
+    caller: ProfileId,
+    subject: RefTarget,
+) -> ApiResult<bool> {
+    if subject.kind != AnchorTable::Resources {
+        return Ok(true);
+    }
+    let mut conn = pool.acquire().await?;
+    match write_floor::liveness_floor_in_tx(&mut conn, caller, ResourceId::from(subject.id)).await {
+        Ok(()) => Ok(true),
+        Err(TemperError::Forbidden | TemperError::ResourceErased(_)) => Ok(false),
+        Err(e) => Err(e.into()),
     }
 }
 

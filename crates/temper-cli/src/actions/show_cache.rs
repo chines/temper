@@ -16,6 +16,11 @@
 //!
 //! Offline degradation: on any network error, fall back to "render local
 //! with a warn" if a local file exists, otherwise surface the error.
+//!
+//! Erasure: when the server answers that the resource was ERASED, the local
+//! file is removed and the erasure surfaces as the error. No other answer
+//! removes it — a not-found may be a soft delete, a move, or a resource the
+//! caller can no longer read.
 
 use std::fs;
 use std::path::Path;
@@ -78,7 +83,39 @@ pub async fn fetch(params: ShowCacheParams<'_>) -> Result<ShowCacheResult> {
                 Err(err)
             }
         }
+        // Erased is the one answer that licenses dropping the local copy: the content is gone
+        // for good, and the server said so to a caller who held it. A `NotFound` never does —
+        // it may be a soft delete, a move, or a resource this caller can no longer read (spec
+        // §8) — so it falls through to the arm below with the file untouched. The erasure
+        // licenses removing the file only when it names the resource this read addressed: the id
+        // is parsed from the server's sentence, and a 410 naming any other resource is not about
+        // this file — the error still propagates, the file stays.
+        Err(err @ TemperError::ResourceErased(erased)) => {
+            if erased == params.resource_id {
+                remove_erased_local_copy(params.local_path);
+            }
+            Err(err)
+        }
         Err(err) => Err(err),
+    }
+}
+
+/// Remove the local projection of a resource the server reported erased, and say so.
+///
+/// The erasure itself still propagates to the caller as the error — this reports only the
+/// local half, so a removal that fails is a warning beside that error, never a replacement for
+/// it. An already-absent file is nothing to remove and nothing to say.
+fn remove_erased_local_copy(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => output::warning(format!(
+            "resource was erased: removed the local copy at {}",
+            path.display()
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => output::warning(format!(
+            "resource was erased, but its local copy at {} could not be removed: {e}",
+            path.display()
+        )),
     }
 }
 
@@ -253,6 +290,153 @@ mod tests {
             .expect("future-mtime file should be treated as fresh");
 
         assert_eq!(result, "future");
+    }
+
+    // --- the remote tier's error ladder: erased drops the file, nothing else does ---
+
+    /// A client whose every request is answered by `status` + `body`, through the in-process
+    /// door — the server's half is a fixed answer, so the test is about what `fetch` does with it.
+    fn client_answering(status: axum::http::StatusCode, body: String) -> TemperClient {
+        let app = axum::Router::new().fallback(axum::routing::any(move || {
+            let body = body.clone();
+            std::future::ready((status, body))
+        }));
+        TemperClient::in_process_with_token(
+            app,
+            temper_workflow::operations::Surface::CliCloud,
+            "tok".to_owned(),
+            std::sync::Arc::new(temper_client::auth::MemoryTokenStore::empty()),
+        )
+        .expect("in-process client builds")
+    }
+
+    fn local_copy() -> NamedTempFile {
+        let file = NamedTempFile::new().expect("tempfile");
+        std::fs::write(file.path(), "---\ntemper-id: x\n---\n\nlocal body\n").expect("write");
+        file
+    }
+
+    /// The server says erased: the local copy is removed AND the erasure reaches the caller as
+    /// the error — never a silent success, never the stale copy rendered. FAILS IF the erased
+    /// arm in `fetch` is removed (the file survives).
+    #[tokio::test]
+    async fn an_erased_answer_removes_the_local_copy_and_reports_the_erasure() {
+        let id = ResourceId::from(uuid::Uuid::now_v7());
+        let body = serde_json::json!({"error": {
+            "code": temper_core::error::RESOURCE_ERASED_CODE,
+            "message": TemperError::ResourceErased(id).to_string(),
+        }})
+        .to_string();
+        let client = client_answering(axum::http::StatusCode::GONE, body);
+        let file = local_copy();
+
+        let result = fetch(ShowCacheParams {
+            client: &client,
+            resource_id: id,
+            local_path: file.path(),
+            debounce: Duration::ZERO,
+        })
+        .await;
+
+        assert!(
+            matches!(result, Err(TemperError::ResourceErased(got)) if got == id),
+            "got {result:?}"
+        );
+        assert!(
+            !file.path().exists(),
+            "the erased resource's local copy survived"
+        );
+    }
+
+    /// An erasure naming a DIFFERENT resource than the one addressed is not about this file: the
+    /// error still reaches the caller, and the local copy stays. FAILS IF the removal keys on the
+    /// erased variant alone, without comparing its id to `params.resource_id` (the file is removed).
+    #[tokio::test]
+    async fn an_erased_answer_naming_another_resource_keeps_the_local_copy() {
+        let addressed = ResourceId::from(uuid::Uuid::now_v7());
+        let other = ResourceId::from(uuid::Uuid::now_v7());
+        let body = serde_json::json!({"error": {
+            "code": temper_core::error::RESOURCE_ERASED_CODE,
+            "message": TemperError::ResourceErased(other).to_string(),
+        }})
+        .to_string();
+        let client = client_answering(axum::http::StatusCode::GONE, body);
+        let file = local_copy();
+
+        let result = fetch(ShowCacheParams {
+            client: &client,
+            resource_id: addressed,
+            local_path: file.path(),
+            debounce: Duration::ZERO,
+        })
+        .await;
+
+        assert!(
+            matches!(result, Err(TemperError::ResourceErased(got)) if got == other),
+            "the erasure still propagates: got {result:?}"
+        );
+        assert!(
+            file.path().exists(),
+            "an erasure naming another resource removed this one's local copy"
+        );
+    }
+
+    /// A 404 is not an erasure — it may be a soft delete, a move, or an unreadable resource
+    /// (spec §8) — so the file stays. FAILS IF the removal keys on "any 4xx" rather than the
+    /// erased variant.
+    #[tokio::test]
+    async fn a_not_found_answer_keeps_the_local_copy() {
+        let body = r#"{"error":{"code":"NOT_FOUND","message":"resource not found"}}"#.to_owned();
+        let client = client_answering(axum::http::StatusCode::NOT_FOUND, body);
+        let file = local_copy();
+
+        let result = fetch(ShowCacheParams {
+            client: &client,
+            resource_id: ResourceId::from(uuid::Uuid::now_v7()),
+            local_path: file.path(),
+            debounce: Duration::ZERO,
+        })
+        .await;
+
+        assert!(result.is_err(), "a 404 must not render as success");
+        assert!(file.path().exists(), "a not-found removed the local copy");
+    }
+
+    /// A server that cannot be reached keeps today's offline fallback: the local copy renders,
+    /// and is still there. FAILS IF the network arm is folded into the erased one.
+    #[tokio::test]
+    async fn a_network_error_keeps_and_renders_the_local_copy() {
+        // A loopback port nothing listens on: bind, read the port, release it.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind loopback")
+            .local_addr()
+            .expect("local addr")
+            .port();
+        let client = TemperClient::with_token(
+            &format!("http://127.0.0.1:{port}"),
+            None,
+            temper_workflow::operations::Surface::CliCloud,
+            "tok".to_owned(),
+            std::sync::Arc::new(temper_client::auth::MemoryTokenStore::empty()),
+        )
+        .expect("loopback http validates");
+        let file = local_copy();
+
+        let result = fetch(ShowCacheParams {
+            client: &client,
+            resource_id: ResourceId::from(uuid::Uuid::now_v7()),
+            local_path: file.path(),
+            debounce: Duration::ZERO,
+        })
+        .await
+        .expect("an unreachable server falls back to the local copy");
+
+        assert_eq!(result.source, FreshnessTier::OfflineFallback);
+        assert!(result.content.contains("local body"));
+        assert!(
+            file.path().exists(),
+            "a network error removed the local copy"
+        );
     }
 
     fn test_resource_row() -> ResourceView {

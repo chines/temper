@@ -111,6 +111,7 @@ pub async fn get_artifact(
             // 200-text posture flips to an error with the server's own sentence
             // (declared in the module header).
             ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+            ClientError::ResourceErased { id } => crate::tools::resources::erased_error(id),
             other => map_err(other, "get_data_artifact"),
         })?;
 
@@ -280,6 +281,7 @@ fn parse_artifact_ref(s: &str) -> Result<DataArtifactId, rmcp::ErrorData> {
 fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
         ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::ResourceErased { id } => crate::tools::resources::erased_error(id),
         ClientError::Server {
             status: 400,
             message,

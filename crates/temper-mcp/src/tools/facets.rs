@@ -91,6 +91,7 @@ fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
         // each not-found with "{action}: ", a prefix the door does not re-apply —
         // the kind (invalid_params) and the gate are identical.
         ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::ResourceErased { id } => crate::tools::resources::erased_error(id),
         ClientError::Server {
             status: 400,
             message,

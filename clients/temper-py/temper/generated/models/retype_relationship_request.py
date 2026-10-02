@@ -34,10 +34,10 @@ class RetypeRelationshipRequest(BaseModel):
     confidence: Optional[ConfidenceBand] = Field(default=None, description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")
     correlation_id: Optional[UUID] = Field(default=None, description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")
     invocation_id: Optional[UUID] = Field(default=None, description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")
-    model: Optional[StrictStr] = Field(default=None, description="The model that authored the act. Authorship field — requires `confidence`.")
-    persona: Optional[StrictStr] = Field(default=None, description="The persona/role the author acted as. Authorship field — requires `confidence`.")
-    rationale: Optional[StrictStr] = Field(default=None, description="Structured rationale for the act. Authorship field — requires `confidence`.")
-    reasoning: Optional[StrictStr] = Field(default=None, description="Free-text reasoning for the act. Authorship field — requires `confidence`.")
+    model: Optional[StrictStr] = Field(default=None, description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")
+    persona: Optional[StrictStr] = Field(default=None, description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")
+    rationale: Optional[StrictStr] = Field(default=None, description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")
+    reasoning: Optional[StrictStr] = Field(default=None, description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")
     edge_kind: EdgeKind
     polarity: Polarity
     __properties: ClassVar[List[str]] = ["confidence", "correlation_id", "invocation_id", "model", "persona", "rationale", "reasoning", "edge_kind", "polarity"]

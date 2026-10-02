@@ -176,11 +176,11 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [String] :invocation_id The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
     # @option opts [String] :correlation_id The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
-    # @option opts [String] :reasoning Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [String] :reasoning Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
     # @option opts [ConfidenceBand] :confidence Graded self-assessed confidence band. Required whenever any other authorship field is set.
-    # @option opts [String] :rationale Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;.
-    # @option opts [String] :persona The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;.
-    # @option opts [String] :model The model that authored the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [String] :rationale Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
+    # @option opts [String] :persona The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
+    # @option opts [String] :model The model that authored the act. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [DeleteResponse]
     def delete_resource(id, opts = {})
@@ -193,11 +193,11 @@ module Temper::Generated
     # @param [Hash] opts the optional parameters
     # @option opts [String] :invocation_id The invocation this act is correlated under (&#x60;kb_events.invocation_id&#x60;). Optional — a correlation aid, never a substitute for authn/authz.
     # @option opts [String] :correlation_id The act-grain thread this write belongs to (&#x60;kb_events.correlation_id&#x60;). Optional, caller- minted, provenance-only. Rides independently of &#x60;invocation_id&#x60; and of authorship.
-    # @option opts [String] :reasoning Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [String] :reasoning Free-text reasoning for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
     # @option opts [ConfidenceBand] :confidence Graded self-assessed confidence band. Required whenever any other authorship field is set.
-    # @option opts [String] :rationale Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;.
-    # @option opts [String] :persona The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;.
-    # @option opts [String] :model The model that authored the act. Authorship field — requires &#x60;confidence&#x60;.
+    # @option opts [String] :rationale Structured rationale for the act. Authorship field — requires &#x60;confidence&#x60;. At most 16384 bytes.
+    # @option opts [String] :persona The persona/role the author acted as. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
+    # @option opts [String] :model The model that authored the act. Authorship field — requires &#x60;confidence&#x60;. At most 256 bytes.
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
     # @return [Array<(DeleteResponse, Integer, Hash)>] DeleteResponse data, response status code and response headers
     def delete_resource_with_http_info(id, opts = {})
@@ -870,7 +870,7 @@ module Temper::Generated
     end
 
     # Read one content block by address (the three-state resolution)
-    # The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
+    # The defined-dangling-state design: `200` the block is live (identity, chunk identities, provenance), `410 Gone` the block is folded (the envelope carries its attribution history and its gated successor dispositions), `404` absent. A home resource that was erased answers `410` under the error envelope (`RESOURCE_ERASED`) to a caller who held it, and `404` to everyone else. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
     # @param id [String] Resource ID
     # @param block_id [String] Content block ID
     # @param [Hash] opts the optional parameters
@@ -882,7 +882,7 @@ module Temper::Generated
     end
 
     # Read one content block by address (the three-state resolution)
-    # The defined-dangling-state design: &#x60;200&#x60; the block is live (identity, chunk identities, provenance), &#x60;410 Gone&#x60; the block is folded (the envelope carries its attribution history and its gated successor dispositions), &#x60;404&#x60; absent. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
+    # The defined-dangling-state design: &#x60;200&#x60; the block is live (identity, chunk identities, provenance), &#x60;410 Gone&#x60; the block is folded (the envelope carries its attribution history and its gated successor dispositions), &#x60;404&#x60; absent. A home resource that was erased answers &#x60;410&#x60; under the error envelope (&#x60;RESOURCE_ERASED&#x60;) to a caller who held it, and &#x60;404&#x60; to everyone else. No redirect — successor names ride as data inside the gated envelope, never as a Location the caller may not be authorized to follow.
     # @param id [String] Resource ID
     # @param block_id [String] Content block ID
     # @param [Hash] opts the optional parameters

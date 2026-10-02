@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::middleware::auth::AuthUser;
 use crate::middleware::surface::RequestSurface;
 use temper_services::backend::DbBackend;
-use temper_services::error::{ApiError, ApiResult};
+use temper_services::error::{ApiError, ApiResult, ErrorBody};
 use temper_services::state::AppState;
 
 use temper_core::types::ids::ResourceId;
@@ -36,7 +36,9 @@ use temper_workflow::operations::Backend;
     responses(
         (status = 200, description = "Segment landed (or already landed — idempotent); currently-landed set returned", body = BlocksResponse),
         (status = 400, description = "Invalid chunks_packed"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Caller cannot modify this resource"),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn append_block_handler(
@@ -65,8 +67,12 @@ pub async fn append_block_handler(
     request_body = FinalizePayload,
     responses(
         (status = 204, description = "Segmented ingest finalized"),
-        (status = 400, description = "Landed block count or body hash mismatch"),
+        (status = 400, description = "The path id is not a UUID, or the request body is not syntactically valid JSON (the extractor's plain-text rejection). A landed block count or body hash mismatch is the 409, never a 400"),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Caller cannot modify this resource"),
+        (status = 409, description = "The landed block count or the body hash does not match what the caller declared", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
+        (status = 422, description = "The stored bytes do not match the declared content hash (code CONTENT_INTEGRITY); not resumable — discard and re-upload", body = ErrorBody),
     )
 )]
 pub async fn finalize_handler(
