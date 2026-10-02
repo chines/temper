@@ -87,6 +87,12 @@ pub enum Persona {
     /// same single-flight reason: a reconcile job must be able to be in flight over an anchor
     /// that already has a region job.
     Shape,
+    /// The sensitivity sweep (sensitivity-sweep spec D8): finds personal data that landed in the
+    /// corpus by accident. The first SYSTEM-scoped persona: its jobs carry no anchor, because the
+    /// sweep is system-wide by nature. A leak in one team's content is not that team's to find
+    /// first (spec F5). `ck_workflow_jobs_one_scope` names this persona by its string, so the
+    /// string is pinned (`20261001213010_workflow_jobs_system_scope.sql`).
+    Sensitivity,
 }
 
 impl Persona {
@@ -98,6 +104,7 @@ impl Persona {
             Persona::Auditor => "auditor",
             Persona::Region => "region",
             Persona::Shape => "shape",
+            Persona::Sensitivity => "sensitivity",
         }
     }
 }
@@ -124,6 +131,9 @@ pub enum DispatchType {
     /// a reconcile job; the worker verdicts pre-existing artifacts by running `jsonschema`
     /// validation against the shape in force.
     ShapeReconcile,
+    /// One sensitivity-sweep tick over one surface (sensitivity-sweep spec D8). The job is a work
+    /// order, [`SensitivityJobPayload`], and never a result.
+    SensitivitySweep,
 }
 
 impl DispatchType {
@@ -135,6 +145,7 @@ impl DispatchType {
             DispatchType::CitationAudit => "citation-audit",
             DispatchType::Materialize => "materialize",
             DispatchType::ShapeReconcile => "shape-reconcile",
+            DispatchType::SensitivitySweep => "sensitivity-sweep",
         }
     }
 }
@@ -274,6 +285,41 @@ pub struct ClaimedAnchorJob {
     pub attempts: i32,
 }
 
+/// The payload a sensitivity job carries: a **work order**, never a result (sensitivity-sweep spec
+/// D8, constraint 1).
+///
+/// It names where to look and how much to read, and nothing about what was found: no resource id,
+/// hash, category or count. **No cursor either.** A watermark on an append-only surface is the id of
+/// the last row read, a row from some tenant's content, so it lives in the sweep's guarded store and
+/// the tick reads it there (ruled 2026-10-02, amending spec D8's `{surface, cursor_from, budget}`).
+/// That absence is what makes the unscoped system claim safe.
+/// `20260724000130` narrowed the cogmap claim because `claim_audit` disclosed cross-tenant ids in its
+/// payload, and a payload with no ids in it has nothing to steal. The table holds the same line
+/// structurally: `ck_workflow_jobs_sensitivity_work_order` admits exactly these two keys. A field
+/// added here without amending that constraint fails at the first enqueue, which is the intended
+/// order of events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SensitivityJobPayload {
+    /// The scan-manifest key of the surface this tick reads, `<table>.<column>`.
+    pub surface: String,
+    /// The row budget for this tick, 1 to 100000 (`ck_workflow_jobs_sensitivity_work_order`).
+    pub budget: i32,
+}
+
+/// A system-scoped job claimed for dispatch: the anchorless twin of [`ClaimedJob`],
+/// [`ClaimedEmbedJob`] and [`ClaimedAnchorJob`]. It has no scope to carry, so the job id is its only
+/// handle, and the id is what `workflow_job_complete_system` completes by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedSystemJob<P> {
+    /// The queue row id, and the only way to complete the job.
+    pub id: Uuid,
+    /// The work order, parsed at the boundary.
+    pub payload: P,
+    /// How many times this job has now been claimed (1 on first dispatch).
+    pub attempts: i32,
+}
+
 #[cfg(test)]
 mod cap_tests {
     use super::*;
@@ -302,5 +348,33 @@ mod cap_tests {
         assert_eq!(clamp_auditor_cap(Some(7)), 7);
         assert_eq!(clamp_auditor_cap(Some(500)), 500);
         assert_eq!(clamp_auditor_cap(None), DEFAULT_AUDITOR_DISPATCH_CAP as i32);
+    }
+}
+
+#[cfg(test)]
+mod sensitivity_payload_tests {
+    use super::*;
+
+    /// The keys must match `ck_workflow_jobs_sensitivity_work_order` exactly.
+    #[test]
+    fn the_work_order_serializes_exactly_the_two_keys_the_table_admits() {
+        let v = serde_json::to_value(SensitivityJobPayload {
+            surface: "kb_resources.title".into(),
+            budget: 10,
+        })
+        .unwrap();
+        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["budget", "surface"]);
+    }
+
+    /// `deny_unknown_fields`: a worker reading a payload with a field it does not know refuses it,
+    /// rather than ignoring what might be a leak.
+    #[test]
+    fn a_work_order_with_an_extra_field_does_not_parse() {
+        let v = serde_json::json!({
+            "surface": "kb_resources.title", "budget": 10, "cursor_from": "x"
+        });
+        assert!(serde_json::from_value::<SensitivityJobPayload>(v).is_err());
     }
 }

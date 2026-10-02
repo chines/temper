@@ -10,7 +10,7 @@ use temper_core::types::auditor::{AuditJobPayload, ClaimedAuditJob};
 use temper_core::types::home::HomeAnchor;
 use temper_core::types::ids::{CogmapId, ContextId, CorrelationId, ProfileId};
 use temper_core::types::workflow_job::{
-    AnchorJobPayload, ClaimedAnchorJob, ClaimedEmbedJob, ClaimedJob,
+    AnchorJobPayload, ClaimedAnchorJob, ClaimedEmbedJob, ClaimedJob, ClaimedSystemJob,
 };
 
 /// Enqueue a payload-less job for `(cogmap, persona, dispatch_type)`. Returns `Some(id)` when a new
@@ -404,6 +404,102 @@ pub async fn complete_anchor(
         r#"SELECT workflow_job_complete_anchor($1, $2, $3, $4) AS "id: Uuid""#,
         cogmap,
         context,
+        persona,
+        dispatch_type,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Enqueue a system-scoped job for `(persona, dispatch_type)`, carrying `payload`. This is the
+/// anchorless twin of [`enqueue_anchor`] and [`enqueue_resource`]. Returns `Some(id)` when a new
+/// row was created, and `None` when one is already in flight for the tuple
+/// (`uq_workflow_jobs_in_flight_system`).
+///
+/// Only the system personas named in `ck_workflow_jobs_one_scope` may write an anchorless row.
+/// Any other persona is refused by the table, by design: for the anchored families an anchorless
+/// row means a NULL was passed by mistake.
+pub async fn enqueue_system<P: serde::Serialize>(
+    pool: &PgPool,
+    persona: &str,
+    dispatch_type: &str,
+    payload: &P,
+) -> ApiResult<Option<Uuid>> {
+    let payload = serde_json::to_value(payload).map_err(|e| ApiError::Internal(e.to_string()))?;
+    let id = sqlx::query_scalar!(
+        r#"SELECT workflow_job_enqueue_system($1, $2, $3) AS "id: Uuid""#,
+        persona,
+        dispatch_type,
+        payload,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Claim up to `limit` claimable system-scoped jobs, leasing each for `lease_seconds`. This is the
+/// anchorless twin of [`claim_anchor`]. The payload is parsed into `P` here, at the boundary.
+///
+/// A payload that will not deserialize escalates rather than being skipped, for the reason
+/// [`claim_anchor`] gives: a silently dropped job leaves no trace, and the reaper re-drives it once
+/// the lease expires.
+pub async fn claim_system<P: serde::de::DeserializeOwned>(
+    pool: &PgPool,
+    persona: &str,
+    dispatch_type: &str,
+    limit: i32,
+    lease_seconds: i32,
+) -> ApiResult<Vec<ClaimedSystemJob<P>>> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id AS "id!: Uuid", attempts AS "attempts!: i32",
+               payload AS "payload!: serde_json::Value"
+          FROM workflow_job_claim_system($1, $2, $3, $4)
+        "#,
+        persona,
+        dispatch_type,
+        limit,
+        lease_seconds,
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| {
+            // serde's message quotes the offending value, and a system job is one whose payload
+            // must never carry content into a log. So the category goes in the error and the
+            // value never does.
+            let payload = serde_json::from_value(r.payload).map_err(|e| {
+                ApiError::Internal(format!(
+                    "workflow job {} carries an unreadable system payload ({:?} error)",
+                    r.id,
+                    e.classify()
+                ))
+            })?;
+            Ok(ClaimedSystemJob {
+                id: r.id,
+                payload,
+                attempts: r.attempts,
+            })
+        })
+        .collect()
+}
+
+/// Transition one in-progress system-scoped job to done, **by job id**. Returns the id if the job
+/// was in progress under this tuple. A pending job is not completed: that would cancel work never
+/// dispatched, the narrowing `workflow_job_complete_claimed` made for the same reason.
+///
+/// The id is the only handle an anchorless job has. Every incumbent completer matches on its
+/// anchor, and `NULL = NULL` is never true, so none of them can complete this job.
+pub async fn complete_system(
+    pool: &PgPool,
+    job: Uuid,
+    persona: &str,
+    dispatch_type: &str,
+) -> ApiResult<Option<Uuid>> {
+    let id = sqlx::query_scalar!(
+        r#"SELECT workflow_job_complete_system($1, $2, $3) AS "id: Uuid""#,
+        job,
         persona,
         dispatch_type,
     )
