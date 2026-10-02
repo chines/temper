@@ -44,7 +44,9 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   same way; an erased or deleted target keeps its `404`, and an edge that touched a since-erased
   resource was folded by the erasure and keeps answering `404`. `POST /api/resources/{id}/reassign`
   refuses a deleted or erased resource (`403`, or `410` to the owner of an erased one) where it moved
-  it; `POST /api/teams/{id}/reassign` and `DELETE /api/teams/{id}/members/{profile_id}`'s
+  it, and decides authority before anything about the id: an unknown id answers `403` where it
+  answered `404`, and a cognitive-map-homed resource's `400` (now declared) answers only its owner,
+  where every caller got it; `POST /api/teams/{id}/reassign` and `DELETE /api/teams/{id}/members/{profile_id}`'s
   `residual_owned` count and move live resources only. `POST`/`DELETE /api/resources/{id}/grants`
   refuse grant administration on a deleted or erased resource from every caller, its owner and a
   system admin included (`403`, or `410` to a holder of an erased one). A relationship assert into a

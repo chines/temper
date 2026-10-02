@@ -18332,21 +18332,30 @@ export interface operations {
                     "application/json": components["schemas"]["ReassignAck"];
                 };
             };
-            /** @description Forbidden (not owner, or admin reach not satisfied) */
+            /** @description The caller owns the resource, but it is homed in a cognitive map (map interiors are not reassignable) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403 */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Resource has no home / not found */
+            /** @description Not answered: an unknown id answers 403, as a resource the caller has no authority over */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description The resource was erased (code RESOURCE_ERASED); answered to the owner (or an admin with reach) when they hold the erased resource; everyone else gets 403 */
+            /** @description The resource was erased (code RESOURCE_ERASED); answered to its owner, who holds the erased resource; everyone else, an admin with reach included, gets 403 */
             410: {
                 headers: {
                     [name: string]: unknown;

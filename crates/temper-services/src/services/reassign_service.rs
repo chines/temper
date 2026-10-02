@@ -25,16 +25,15 @@ struct HomeRow {
     anchor_table: String,
 }
 
-async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<HomeRow> {
-    sqlx::query_as!(
+async fn home_of(pool: &PgPool, resource: Uuid) -> ApiResult<Option<HomeRow>> {
+    Ok(sqlx::query_as!(
         HomeRow,
         "SELECT owner_profile_id AS owner, anchor_table \
            FROM kb_resource_homes WHERE resource_id = $1",
         resource,
     )
     .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| ApiError::NotFound("resource not found".to_string()))
+    .await?)
 }
 
 /// Is there a team T where caller manages T, `resource` is homed in a context shared
@@ -83,29 +82,37 @@ async fn admin_reach(
 /// OR team-admin over a team the resource is scoped to, to a member of that team.
 /// Reassigning to the current owner is an idempotent no-op. Cogmap-homed resources
 /// are rejected (map interiors are not personally owned).
+///
+/// Authority is decided FIRST, and an id with no home is refused exactly as an existing resource
+/// the caller has no authority over: `403`, the same body. Nothing the door answers before the
+/// authority check may depend on the id — otherwise the status says whether the id is a resource,
+/// and what kind of home it has, to any caller.
 pub async fn reassign_resource(
     pool: &PgPool,
     caller: ProfileId,
     resource_id: Uuid,
     to_profile_id: Uuid,
 ) -> ApiResult<()> {
-    let home = home_of(pool, resource_id).await?;
+    // Auth before writes: current owner, or an admin with reach over the resource+target. An
+    // unknown id has no owner and no reach, so it is refused like any other resource.
+    let Some(home) = home_of(pool, resource_id).await? else {
+        return Err(ApiError::Forbidden);
+    };
+    let authorized =
+        home.owner == *caller || admin_reach(pool, caller, resource_id, to_profile_id).await?;
+    if !authorized {
+        return Err(ApiError::Forbidden);
+    }
 
     // Only context-homed resources are reassignable. The owner path would otherwise
     // let a cogmap-node owner flip it — guard here for BOTH paths (the admin path's
-    // reach query already excludes non-context homes structurally).
+    // reach query already excludes non-context homes structurally, so only an owner
+    // reaches this refusal).
     if home.anchor_table != "kb_contexts" {
         return Err(ApiError::BadRequest(
             "cannot reassign a cogmap-homed resource; map interiors are not personally owned"
                 .to_string(),
         ));
-    }
-
-    // Auth before writes: current owner, or an admin with reach over the resource+target.
-    let authorized =
-        home.owner == *caller || admin_reach(pool, caller, resource_id, to_profile_id).await?;
-    if !authorized {
-        return Err(ApiError::Forbidden);
     }
 
     // The liveness floor (resource erasure spec D13; plan 2c, controller ruling 5), at the head of
@@ -542,6 +549,30 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    /// FAILS IF the door answers a caller without authority differently by what the id is. An
+    /// unknown id, another's context-homed resource and another's cogmap-homed resource each refuse
+    /// the stranger the same `Forbidden` — no status names whether the id is a resource or what
+    /// kind of home it has. The bite: read the home with a `NotFound` for a missing row, or run the
+    /// cogmap-home `BadRequest` ahead of the authority check, in `reassign_resource`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn a_stranger_is_refused_alike_whatever_the_id_is(pool: PgPool) {
+        let alice = mk_profile(&pool, "alice").await;
+        let mallory = mk_profile(&pool, "mallory").await;
+        let ctx = mk_context(&pool, "c", alice).await;
+        let in_context = mk_homed_resource(&pool, ctx, alice).await;
+        let in_cogmap = mk_cogmap_homed_resource(&pool, alice).await;
+        for (what, id) in [
+            ("an unknown id", Uuid::now_v7()),
+            ("another's context-homed resource", in_context),
+            ("another's cogmap-homed resource", in_cogmap),
+        ] {
+            let err = reassign_resource(&pool, mallory, id, *mallory)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, ApiError::Forbidden), "{what}: {err:?}");
+        }
     }
 
     #[sqlx::test(migrations = "../../migrations")]
