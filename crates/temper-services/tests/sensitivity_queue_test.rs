@@ -34,7 +34,6 @@ fn dispatch() -> &'static str {
 fn work_order() -> SensitivityJobPayload {
     SensitivityJobPayload {
         surface: "kb_block_content.content".into(),
-        cursor_from: None,
         budget: 500,
     }
 }
@@ -347,8 +346,9 @@ async fn a_payload_carrying_anything_beyond_the_work_order_is_refused(pool: PgPo
 async fn a_payload_missing_part_of_the_work_order_is_refused(pool: PgPool) {
     for payload in [
         json!({}),
-        json!({"surface": "kb_resources.title", "budget": 10}),
-        json!(["surface", "cursor_from", "budget"]),
+        json!({"surface": "kb_resources.title"}),
+        json!({"budget": 10}),
+        json!(["surface", "budget"]),
     ] {
         assert_refused_as_a_work_order(&pool, payload).await;
     }
@@ -370,10 +370,6 @@ async fn content_under_a_legitimate_key_is_refused(pool: PgPool) {
         ("budget", json!(-1)),
         ("budget", json!(1.5)),
         ("budget", json!(10_000_000_000_i64)),
-        ("cursor_from", json!("jane.doe@example.com called 555-1234")),
-        ("cursor_from", json!("123-45-6789")),
-        ("cursor_from", json!({"id": "x"})),
-        ("cursor_from", json!(42)),
     ] {
         let mut payload = serde_json::to_value(work_order()).unwrap();
         payload[key] = value;
@@ -382,32 +378,22 @@ async fn content_under_a_legitimate_key_is_refused(pool: PgPool) {
     assert_eq!(jobs_for(&pool, persona()).await, 0);
 }
 
-/// The two watermark kinds spec D4 names, and the first-tick null, are what the shape admits.
+/// The ruling of 2026-10-02: no cursor travels in the payload. On an append-only surface a
+/// watermark is the id of the last row read, a row from some tenant's content, and the claim that
+/// hands the payload out is unscoped. So a resume point is refused in any shape, including the two
+/// shapes spec D4's cursors would take. The watermark lives in the sweep's guarded store.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_two_cursor_kinds_and_a_first_tick_are_accepted(pool: PgPool) {
+async fn a_resume_point_is_never_part_of_the_work_order(pool: PgPool) {
     for cursor in [
-        None,
-        Some("01a0e9e6-959b-7780-af70-25ceb0f632e3".to_string()),
-        Some("2026-10-01T21:30:10.123456Z".to_string()),
-        Some("2026-10-01T21:30:10+00:00".to_string()),
+        json!(null),
+        json!("01a0e9e6-959b-7780-af70-25ceb0f632e3"),
+        json!("2026-10-01T21:30:10.123456Z"),
     ] {
-        let order = SensitivityJobPayload {
-            surface: "kb_resources.title".into(),
-            cursor_from: cursor.clone(),
-            budget: 0,
-        };
-        let id = enqueue_system(&pool, persona(), dispatch(), &order)
-            .await
-            .unwrap_or_else(|e| panic!("{cursor:?}: {e}"))
-            .expect("the slot is free");
-        let claimed = claim_system::<SensitivityJobPayload>(&pool, persona(), dispatch(), 1, 600)
-            .await
-            .unwrap();
-        complete_system(&pool, claimed[0].id, persona(), dispatch())
-            .await
-            .unwrap();
-        assert_eq!(status_of(&pool, id).await, "done");
+        let mut payload = serde_json::to_value(work_order()).unwrap();
+        payload["cursor_from"] = cursor;
+        assert_refused_as_a_work_order(&pool, payload).await;
     }
+    assert_eq!(jobs_for(&pool, persona()).await, 0);
 }
 
 /// Asserted over every sensitivity job's jsonb keys, as the spec words witness 15, so the test reads
@@ -425,7 +411,7 @@ async fn every_enqueued_sensitivity_payload_is_exactly_the_work_order(pool: PgPo
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(keys, vec![vec!["budget", "cursor_from", "surface"]]);
+    assert_eq!(keys, vec![vec!["budget", "surface"]]);
 }
 
 // ── P1: the scope CHECK, in both directions ────────────────────────────────────────────────────

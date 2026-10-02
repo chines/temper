@@ -41,8 +41,8 @@
 -- without rediscovering the hole.
 --
 -- ── 3 · The payload is a work order, held by the table ──────────────────────────────────────────
--- Spec D8, constraint 1. A sensitivity job's payload is {surface, cursor_from, budget} and nothing
--- else: no resource id, hash, category or count. That is what keeps the unscoped claim safe.
+-- Spec D8, constraint 1. A sensitivity job's payload is {surface, budget} and nothing else: no
+-- resource id, hash, category, count, or cursor. That is what keeps the unscoped claim safe.
 -- 20260724000130 narrowed the cogmap claim because claim_audit handed out cross-tenant ids IN ITS
 -- PAYLOAD; a payload with no ids in it has nothing to steal. The rule is enforced here, structurally,
 -- rather than by review, because kb_workflow_jobs is in public and is the one table outside the
@@ -52,11 +52,15 @@
 -- under them, including the content the sweep exists to find; the security review enqueued an SSN
 -- as a budget. So:
 --   * surface is a `<table>.<column>` identifier;
---   * budget is a non-negative integer that fits an int;
---   * cursor_from is null, a uuid, or an RFC 3339 timestamp, the two watermark kinds spec D4 names.
--- What a uuid cursor discloses is a residual, and build order 3a PR C owns it: a v7 watermark is a
--- row id from some tenant's content, and D8's "no ids in the payload" argument has to be restated
--- for it or the cursor moved into the guarded store. It is recorded in the plan.
+--   * budget is a non-negative integer that fits an int.
+--
+-- No cursor travels in the payload. That is a ruling (2026-10-02), amending the spec's
+-- {surface, cursor_from, budget}. On every append-only surface, a watermark is the v7 id of the last
+-- row read: a row id from some tenant's content, which also encodes when it was written. A payload
+-- carrying one would contradict the "no ids" argument above, and the claim that hands it out is
+-- unscoped. The watermark lives in the sweep's guarded store, keyed per (surface, detector,
+-- version) as D4 already keys it, and the tick reads it there. Both reviews of this migration
+-- named the contradiction; it was settled here, before ship, rather than carried.
 --
 -- ── 4 · Two incumbent doors stop reaching outside their families ───────────────────────────────────────
 -- complete_anchor matches with IS NOT DISTINCT FROM, so a call with both anchors NULL would complete
@@ -101,26 +105,19 @@ ALTER TABLE kb_workflow_jobs
         persona <> 'sensitivity'
         OR (
             jsonb_typeof(payload) = 'object'
-            AND payload ?& ARRAY['surface', 'cursor_from', 'budget']
-            AND payload - ARRAY['surface', 'cursor_from', 'budget'] = '{}'::jsonb
+            AND payload ?& ARRAY['surface', 'budget']
+            AND payload - ARRAY['surface', 'budget'] = '{}'::jsonb
             AND jsonb_typeof(payload -> 'surface') = 'string'
             AND payload ->> 'surface' ~ '^[a-z][a-z0-9_]{0,62}\.[a-z][a-z0-9_]{0,62}$'
             AND jsonb_typeof(payload -> 'budget') = 'number'
             AND payload ->> 'budget' ~ '^[0-9]{1,9}$'
-            AND (
-                jsonb_typeof(payload -> 'cursor_from') = 'null'
-                OR (jsonb_typeof(payload -> 'cursor_from') = 'string'
-                    AND (payload ->> 'cursor_from'
-                             ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                         OR payload ->> 'cursor_from'
-                             ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})$'))
-            )
         )
     );
 
 COMMENT ON CONSTRAINT ck_workflow_jobs_sensitivity_work_order ON kb_workflow_jobs IS
-    'A sensitivity job''s payload is a work order: exactly {surface, cursor_from, budget}, each '
-    'held to its shape. Never a resource id, hash, category, count or excerpt. Findings go to the sweep''s own store and the queue row '
+    'A sensitivity job''s payload is a work order: exactly {surface, budget}, each held to its '
+    'shape. Never a resource id, hash, category, count, cursor or excerpt. Findings and watermarks '
+    'live in the sweep''s own store, and the queue row '
     'never learns what was found (sensitivity-sweep spec D8, constraint 1). If you are here to add a '
     'field, read that section first.';
 
@@ -244,5 +241,5 @@ $$;
 SELECT declare_migration(
     20261001213010,
     'additive',
-    'kb_workflow_jobs gains a fourth, SYSTEM scope for the sensitivity sweep (sensitivity-sweep spec R5, D8). ck_workflow_jobs_one_scope is rewritten so the declared system personas (sensitivity) are anchorless-only and every other persona stays exactly-one-anchor; ck_workflow_jobs_sensitivity_work_order holds that persona''s payload to exactly {surface, cursor_from, budget}, each value shape-checked; uq_workflow_jobs_in_flight_system gives anchorless rows single-flight on (persona, dispatch_type); workflow_job_enqueue_system / claim_system / complete_system (complete by job id, in_progress only) are new; workflow_job_complete_anchor gains num_nonnulls(cogmap_id, context_id) = 1 and workflow_job_claim gains cogmap_id IS NOT NULL, so neither reaches outside its family. Additive: the rewritten CHECK refuses only an anchored sensitivity row, which no deployed binary writes, and every existing row satisfies it; the work-order CHECK and the new index touch only a persona and rows no deployed binary writes; the new functions are unreachable by old code; the two amended functions keep their signatures and change outcome only for calls no caller makes.'
+    'kb_workflow_jobs gains a fourth, SYSTEM scope for the sensitivity sweep (sensitivity-sweep spec R5, D8). ck_workflow_jobs_one_scope is rewritten so the declared system personas (sensitivity) are anchorless-only and every other persona stays exactly-one-anchor; ck_workflow_jobs_sensitivity_work_order holds that persona''s payload to exactly {surface, budget}, each value shape-checked, with no cursor (the watermark lives in the sweep''s guarded store); uq_workflow_jobs_in_flight_system gives anchorless rows single-flight on (persona, dispatch_type); workflow_job_enqueue_system / claim_system / complete_system (complete by job id, in_progress only) are new; workflow_job_complete_anchor gains num_nonnulls(cogmap_id, context_id) = 1 and workflow_job_claim gains cogmap_id IS NOT NULL, so neither reaches outside its family. Additive: the rewritten CHECK refuses only an anchored sensitivity row, which no deployed binary writes, and every existing row satisfies it; the work-order CHECK and the new index touch only a persona and rows no deployed binary writes; the new functions are unreachable by old code; the two amended functions keep their signatures and change outcome only for calls no caller makes.'
 );

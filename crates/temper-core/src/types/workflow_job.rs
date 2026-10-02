@@ -289,10 +289,12 @@ pub struct ClaimedAnchorJob {
 /// D8, constraint 1).
 ///
 /// It names where to look and how much to read, and nothing about what was found: no resource id,
-/// hash, category or count. That absence is what makes the unscoped system claim safe.
+/// hash, category or count. **No cursor either.** A watermark on an append-only surface is the id of
+/// the last row read, a row from some tenant's content, so it lives in the sweep's guarded store and
+/// the tick reads it there (ruled 2026-10-02, amending spec D8's `{surface, cursor_from, budget}`). That absence is what makes the unscoped system claim safe.
 /// `20260724000130` narrowed the cogmap claim because `claim_audit` disclosed cross-tenant ids in its
 /// payload, and a payload with no ids in it has nothing to steal. The table holds the same line
-/// structurally: `ck_workflow_jobs_sensitivity_work_order` admits exactly these three keys. A field
+/// structurally: `ck_workflow_jobs_sensitivity_work_order` admits exactly these two keys. A field
 /// added here without amending that constraint fails at the first enqueue, which is the intended
 /// order of events.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -300,8 +302,6 @@ pub struct ClaimedAnchorJob {
 pub struct SensitivityJobPayload {
     /// The scan-manifest key of the surface this tick reads, `<table>.<column>`.
     pub surface: String,
-    /// The watermark to resume from, opaque to the queue. `None` on a surface's first tick.
-    pub cursor_from: Option<String>,
     /// The row budget for this tick.
     pub budget: i32,
 }
@@ -354,21 +354,17 @@ mod cap_tests {
 mod sensitivity_payload_tests {
     use super::*;
 
-    /// The keys must match `ck_workflow_jobs_sensitivity_work_order` exactly, and `cursor_from`
-    /// travels as an explicit `null` rather than being skipped. A skipped key would fail the CHECK's
-    /// presence test on every surface's first tick.
+    /// The keys must match `ck_workflow_jobs_sensitivity_work_order` exactly.
     #[test]
-    fn the_work_order_serializes_exactly_the_three_keys_the_table_admits() {
+    fn the_work_order_serializes_exactly_the_two_keys_the_table_admits() {
         let v = serde_json::to_value(SensitivityJobPayload {
             surface: "kb_resources.title".into(),
-            cursor_from: None,
             budget: 10,
         })
         .unwrap();
         let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["budget", "cursor_from", "surface"]);
-        assert!(v["cursor_from"].is_null());
+        assert_eq!(keys, ["budget", "surface"]);
     }
 
     /// `deny_unknown_fields`: a worker reading a payload with a field it does not know refuses it,
@@ -376,7 +372,7 @@ mod sensitivity_payload_tests {
     #[test]
     fn a_work_order_with_an_extra_field_does_not_parse() {
         let v = serde_json::json!({
-            "surface": "kb_resources.title", "cursor_from": null, "budget": 10, "resource_id": "x"
+            "surface": "kb_resources.title", "budget": 10, "cursor_from": "x"
         });
         assert!(serde_json::from_value::<SensitivityJobPayload>(v).is_err());
     }
