@@ -2406,9 +2406,7 @@ async fn answers_without_waiting(
 /// While R's row is held `FOR UPDATE` (the erasure act's lock), a caller with no standing on R is
 /// refused at every door that would lock R on its behalf — every floored write door, an edge from
 /// its own resource into R, a blob relation onto R, and a goal set naming R — and is refused
-/// promptly, never queued behind the held lock. `FOR KEY SHARE` skips the queue behind a waiting
-/// `FOR UPDATE`, so a caller who could take it could hold an erasure off; a refused caller must
-/// never take it (`write_floor`'s "a refused caller takes no lock").
+/// promptly, never queued behind the held lock (`write_floor`'s "a refused caller takes no lock").
 ///
 /// FAILS IF any of those paths locks R before deciding the caller is refused. The bite: delete the
 /// unlocked `modify_admission(..)` call at the head of `write_floor::modify_floor_in_tx` (or the

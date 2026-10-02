@@ -41,19 +41,14 @@
 //! Called on a bare pool connection it still answers, but the lock is released at once and the
 //! floor is a pre-check again — the gap this module exists to close.
 //!
-//! **A refused caller takes no lock.** `FOR KEY SHARE` does not queue behind a waiting
-//! `FOR UPDATE`: a share locker that need not wait skips the queue, so a stream of overlapping
-//! share locks can hold the erasure act off indefinitely. If any caller could take the lock, any
-//! caller who knows an id could delay its erasure. So every entry point that locks a row on a
-//! caller's behalf asks its admission (or read check) unlocked first, on the same connection, and
-//! locks only a caller that passes; the check under the lock then decides. An unlocked refusal is
-//! the answer the write would have had ordered before a concurrent act — never a wrong one. The one
-//! exception is a goal patch's CURRENT goal rows (`DbBackend::lock_goal_rows`): rows the caller's own
-//! resource already links to, locked without a read check because the update folds their edges.
-//!
-//! **What this does not bound.** A caller who can READ a resource may still lock it — an edge into
-//! it, a blob relation onto it — so a reader, not only a writer, can delay its erasure. Bounding
-//! that wait is a lock-timeout question, not an admission one.
+//! **A refused caller takes no lock.** A caller the door refuses must never queue on, or hold, a
+//! lock the erasure act waits on. So every entry point that locks a row on a caller's behalf asks
+//! its admission (or read check) unlocked first, on the same connection, and locks only a caller
+//! that passes; the check under the lock then decides. An unlocked refusal is the answer the write
+//! would have had ordered before a concurrent act — never a wrong one. The one exception is a goal
+//! patch's CURRENT goal rows (`DbBackend::lock_goal_rows`): rows the caller's own resource already
+//! links to, locked without a read check because the update folds their edges. How long the act
+//! waits on the locks admitted callers hold is a lock-timeout question, not an admission one.
 //!
 //! **An admission without the lock** — [`modify_admission_unlocked`] — is the same admission and
 //! the same classification on the pool, for a door that must not let a refused caller take a row
