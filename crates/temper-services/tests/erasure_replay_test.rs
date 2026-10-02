@@ -46,9 +46,9 @@ fn to_owned(s: &str) -> String {
 /// re-walk, and no scenario-baseline exclusions: this crate runs the full chain).
 async fn reset_namespace(pool: &PgPool) {
     use sqlx::Executor;
-    pool.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+    pool.execute("DROP SCHEMA IF EXISTS sensitivity CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         .await
-        .expect("drop/recreate public schema");
+        .expect("drop sensitivity, recreate public schema");
     temper_substrate::MIGRATOR
         .run(pool)
         .await
