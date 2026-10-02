@@ -55,7 +55,9 @@ pub struct ShapeQuery {
     request_body = ReconcileCogmapRequest,
     responses(
         (status = 200, description = "Reconcile applied", body = ReconcileOutcome),
-        (status = 403, description = "Caller does not author this map, or is not a system admin for an L0 or root-team map"),
+        (status = 400, description = "The manifest or the act is invalid: it fails the pre-flight (an edge naming an unknown target), names an unknown edge kind or polarity, or carries malformed authorship fields", body = temper_services::error::ErrorBody),
+        (status = 401, description = "Unauthorized", body = temper_services::error::ErrorBody),
+        (status = 403, description = "Caller does not author this map, or is not a system admin for an L0 or root-team map", body = temper_services::error::ErrorBody),
         (status = 409, description = "A reconcile is already in progress on this map"),
     )
 )]

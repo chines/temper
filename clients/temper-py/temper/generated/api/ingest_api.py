@@ -107,6 +107,7 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BlocksResponse",
             '400': None,
+            '401': "ErrorBody",
             '403': None,
             '410': "ErrorBody",
         }
@@ -184,6 +185,7 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BlocksResponse",
             '400': None,
+            '401': "ErrorBody",
             '403': None,
             '410': "ErrorBody",
         }
@@ -261,6 +263,7 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '200': "BlocksResponse",
             '400': None,
+            '401': "ErrorBody",
             '403': None,
             '410': "ErrorBody",
         }
@@ -715,6 +718,7 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '401': "ErrorBody",
             '403': None,
             '409': "ErrorBody",
             '410': "ErrorBody",
@@ -794,6 +798,7 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '401': "ErrorBody",
             '403': None,
             '409': "ErrorBody",
             '410': "ErrorBody",
@@ -873,6 +878,7 @@ class IngestApi:
         _response_types_map: Dict[str, Optional[str]] = {
             '204': None,
             '400': None,
+            '401': "ErrorBody",
             '403': None,
             '409': "ErrorBody",
             '410': "ErrorBody",

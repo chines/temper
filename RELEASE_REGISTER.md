@@ -60,6 +60,10 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   schemas, no longer carry `propagated_to_clients` (`20261001000020`); no event carrying it exists.
   Every door that can answer `410 RESOURCE_ERASED` declares it in the contract, and
   `POST /api/resources/{id}/finalize` declares the `409` and `422` it answers; the SDKs regenerate.
+  The operations that take authorship as query parameters declare them as typed, optional query
+  parameters (`DELETE /api/relationships/{edge_handle}/facets/{property_id}` declared them in the
+  path); `PUT /api/cognitive-maps/{id}` declares its `400` and `401`, and append and finalize their
+  `401`.
   temper-client reads a `410` carrying `RESOURCE_ERASED` as a typed erasure, a block read included;
   every other `410` stays gone. The CLI reports the erasure under code `RESOURCE_ERASED`, and
   `resource delete`, `update` and `annotate` remove the local projected copy of the resource they

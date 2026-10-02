@@ -12533,22 +12533,22 @@ export interface operations {
                  * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
                  *     correlation aid, never a substitute for authn/authz.
                  */
-                invocation_id?: null | components["schemas"]["InvocationId"];
+                invocation_id?: components["schemas"]["InvocationId"];
                 /**
                  * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
                  *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
                  */
-                correlation_id?: null | components["schemas"]["CorrelationId"];
+                correlation_id?: components["schemas"]["CorrelationId"];
                 /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
-                reasoning?: string | null;
+                reasoning?: string;
                 /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
-                confidence?: null | components["schemas"]["ConfidenceBand"];
+                confidence?: components["schemas"]["ConfidenceBand"];
                 /** @description Structured rationale for the act. Authorship field — requires `confidence`. */
-                rationale?: string | null;
+                rationale?: string;
                 /** @description The persona/role the author acted as. Authorship field — requires `confidence`. */
-                persona?: string | null;
+                persona?: string;
                 /** @description The model that authored the act. Authorship field — requires `confidence`. */
-                model?: string | null;
+                model?: string;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -12930,22 +12930,22 @@ export interface operations {
                  * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
                  *     correlation aid, never a substitute for authn/authz.
                  */
-                invocation_id?: null | components["schemas"]["InvocationId"];
+                invocation_id?: components["schemas"]["InvocationId"];
                 /**
                  * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
                  *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
                  */
-                correlation_id?: null | components["schemas"]["CorrelationId"];
+                correlation_id?: components["schemas"]["CorrelationId"];
                 /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
-                reasoning?: string | null;
+                reasoning?: string;
                 /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
-                confidence?: null | components["schemas"]["ConfidenceBand"];
+                confidence?: components["schemas"]["ConfidenceBand"];
                 /** @description Structured rationale for the act. Authorship field — requires `confidence`. */
-                rationale?: string | null;
+                rationale?: string;
                 /** @description The persona/role the author acted as. Authorship field — requires `confidence`. */
-                persona?: string | null;
+                persona?: string;
                 /** @description The model that authored the act. Authorship field — requires `confidence`. */
-                model?: string | null;
+                model?: string;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -12972,12 +12972,32 @@ export interface operations {
                     "application/json": components["schemas"]["ReconcileOutcome"];
                 };
             };
+            /** @description The manifest or the act is invalid: it fails the pre-flight (an edge naming an unknown target), names an unknown edge kind or polarity, or carries malformed authorship fields */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description Caller does not author this map, or is not a system admin for an L0 or root-team map */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description A reconcile is already in progress on this map */
             409: {
@@ -16376,7 +16396,28 @@ export interface operations {
     };
     retract_edge_facet: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
+                 *     correlation aid, never a substitute for authn/authz.
+                 */
+                invocation_id?: components["schemas"]["InvocationId"];
+                /**
+                 * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
+                 *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
+                 */
+                correlation_id?: components["schemas"]["CorrelationId"];
+                /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
+                reasoning?: string;
+                /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
+                confidence?: components["schemas"]["ConfidenceBand"];
+                /** @description Structured rationale for the act. Authorship field — requires `confidence`. */
+                rationale?: string;
+                /** @description The persona/role the author acted as. Authorship field — requires `confidence`. */
+                persona?: string;
+                /** @description The model that authored the act. Authorship field — requires `confidence`. */
+                model?: string;
+            };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
                 "X-Temper-Surface"?: "cli" | "sdk";
@@ -16386,26 +16427,6 @@ export interface operations {
                 edge_handle: string;
                 /** @description Facet row id to retract */
                 property_id: string;
-                /**
-                 * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
-                 *     correlation aid, never a substitute for authn/authz.
-                 */
-                invocation_id: null | components["schemas"]["InvocationId"];
-                /**
-                 * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
-                 *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
-                 */
-                correlation_id: null | components["schemas"]["CorrelationId"];
-                /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
-                reasoning: string | null;
-                /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
-                confidence: null | components["schemas"]["ConfidenceBand"];
-                /** @description Structured rationale for the act. Authorship field — requires `confidence`. */
-                rationale: string | null;
-                /** @description The persona/role the author acted as. Authorship field — requires `confidence`. */
-                persona: string | null;
-                /** @description The model that authored the act. Authorship field — requires `confidence`. */
-                model: string | null;
             };
             cookie?: never;
         };
@@ -17052,22 +17073,22 @@ export interface operations {
                  * @description The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a
                  *     correlation aid, never a substitute for authn/authz.
                  */
-                invocation_id?: null | components["schemas"]["InvocationId"];
+                invocation_id?: components["schemas"]["InvocationId"];
                 /**
                  * @description The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-
                  *     minted, provenance-only. Rides independently of `invocation_id` and of authorship.
                  */
-                correlation_id?: null | components["schemas"]["CorrelationId"];
+                correlation_id?: components["schemas"]["CorrelationId"];
                 /** @description Free-text reasoning for the act. Authorship field — requires `confidence`. */
-                reasoning?: string | null;
+                reasoning?: string;
                 /** @description Graded self-assessed confidence band. Required whenever any other authorship field is set. */
-                confidence?: null | components["schemas"]["ConfidenceBand"];
+                confidence?: components["schemas"]["ConfidenceBand"];
                 /** @description Structured rationale for the act. Authorship field — requires `confidence`. */
-                rationale?: string | null;
+                rationale?: string;
                 /** @description The persona/role the author acted as. Authorship field — requires `confidence`. */
-                persona?: string | null;
+                persona?: string;
                 /** @description The model that authored the act. Authorship field — requires `confidence`. */
-                model?: string | null;
+                model?: string;
             };
             header?: {
                 /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
@@ -17429,6 +17450,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Caller cannot modify this resource */
             403: {
@@ -17868,6 +17898,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
             /** @description Caller cannot modify this resource */
             403: {

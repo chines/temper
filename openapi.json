@@ -3143,14 +3143,7 @@
             "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/InvocationId"
-                }
-              ]
+              "$ref": "#/components/schemas/InvocationId"
             }
           },
           {
@@ -3159,14 +3152,7 @@
             "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/CorrelationId"
-                }
-              ]
+              "$ref": "#/components/schemas/CorrelationId"
             }
           },
           {
@@ -3175,10 +3161,7 @@
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -3187,14 +3170,7 @@
             "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/ConfidenceBand"
-                }
-              ]
+              "$ref": "#/components/schemas/ConfidenceBand"
             }
           },
           {
@@ -3203,10 +3179,7 @@
             "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -3215,10 +3188,7 @@
             "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -3227,10 +3197,7 @@
             "description": "The model that authored the act. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -3789,14 +3756,7 @@
             "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/InvocationId"
-                }
-              ]
+              "$ref": "#/components/schemas/InvocationId"
             }
           },
           {
@@ -3805,14 +3765,7 @@
             "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/CorrelationId"
-                }
-              ]
+              "$ref": "#/components/schemas/CorrelationId"
             }
           },
           {
@@ -3821,10 +3774,7 @@
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -3833,14 +3783,7 @@
             "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/ConfidenceBand"
-                }
-              ]
+              "$ref": "#/components/schemas/ConfidenceBand"
             }
           },
           {
@@ -3849,10 +3792,7 @@
             "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -3861,10 +3801,7 @@
             "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -3873,10 +3810,7 @@
             "description": "The model that authored the act. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -3901,8 +3835,35 @@
               }
             }
           },
+          "400": {
+            "description": "The manifest or the act is invalid: it fails the pre-flight (an edge naming an unknown target), names an unknown edge kind or polarity, or carries malformed authorship fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
-            "description": "Caller does not author this map, or is not a system admin for an L0 or root-team map"
+            "description": "Caller does not author this map, or is not a system admin for an L0 or root-team map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "409": {
             "description": "A reconcile is already in progress on this map"
@@ -9363,98 +9324,65 @@
           },
           {
             "name": "invocation_id",
-            "in": "path",
+            "in": "query",
             "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
-            "required": true,
+            "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/InvocationId"
-                }
-              ]
+              "$ref": "#/components/schemas/InvocationId"
             }
           },
           {
             "name": "correlation_id",
-            "in": "path",
+            "in": "query",
             "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
-            "required": true,
+            "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/CorrelationId"
-                }
-              ]
+              "$ref": "#/components/schemas/CorrelationId"
             }
           },
           {
             "name": "reasoning",
-            "in": "path",
+            "in": "query",
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "confidence",
-            "in": "path",
+            "in": "query",
             "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
-            "required": true,
+            "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/ConfidenceBand"
-                }
-              ]
+              "$ref": "#/components/schemas/ConfidenceBand"
             }
           },
           {
             "name": "rationale",
-            "in": "path",
+            "in": "query",
             "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "persona",
-            "in": "path",
+            "in": "query",
             "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
             "name": "model",
-            "in": "path",
+            "in": "query",
             "description": "The model that authored the act. Authorship field — requires `confidence`.",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -10443,14 +10371,7 @@
             "description": "The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a\ncorrelation aid, never a substitute for authn/authz.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/InvocationId"
-                }
-              ]
+              "$ref": "#/components/schemas/InvocationId"
             }
           },
           {
@@ -10459,14 +10380,7 @@
             "description": "The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller-\nminted, provenance-only. Rides independently of `invocation_id` and of authorship.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/CorrelationId"
-                }
-              ]
+              "$ref": "#/components/schemas/CorrelationId"
             }
           },
           {
@@ -10475,10 +10389,7 @@
             "description": "Free-text reasoning for the act. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -10487,14 +10398,7 @@
             "description": "Graded self-assessed confidence band. Required whenever any other authorship field is set.",
             "required": false,
             "schema": {
-              "oneOf": [
-                {
-                  "type": "null"
-                },
-                {
-                  "$ref": "#/components/schemas/ConfidenceBand"
-                }
-              ]
+              "$ref": "#/components/schemas/ConfidenceBand"
             }
           },
           {
@@ -10503,10 +10407,7 @@
             "description": "Structured rationale for the act. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -10515,10 +10416,7 @@
             "description": "The persona/role the author acted as. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           },
           {
@@ -10527,10 +10425,7 @@
             "description": "The model that authored the act. Authorship field — requires `confidence`.",
             "required": false,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -11077,6 +10972,16 @@
           },
           "400": {
             "description": "Invalid chunks_packed"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "403": {
             "description": "Caller cannot modify this resource"
@@ -11800,6 +11705,16 @@
           },
           "400": {
             "description": "The path id is not a UUID, or the request body is not syntactically valid JSON (the extractor's plain-text rejection). A landed block count or body hash mismatch is the 409, never a 400"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "403": {
             "description": "Caller cannot modify this resource"
