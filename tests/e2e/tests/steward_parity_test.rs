@@ -41,6 +41,21 @@
 //!   attach to; the family's attribution witness pins that, beside the trusted-path
 //!   leg (`steward_attribution_witness_test.rs`).
 //!
+//! # Declared parity delta (flipped at the swap, in the same commit)
+//!
+//! - **NotFound prefix drops** — on three faces: the delta's unreadable/absent cogmap,
+//!   the advance's cogmap exit, and its ingest-window exit. The direct map prefixed
+//!   `{action}: `; the door's `ClientError::NotFound` carries the server's own sentence,
+//!   and the door does not re-apply a prefix the direct tool applied (the G3c precedent).
+//!   Kind (`invalid_params`) and gate identical; the advance's two exits stay
+//!   distinguishable by their sentences, and unreadable stays indistinguishable from
+//!   absent.
+//!
+//! NOT a delta, pinned unchanged through the swap: the disclosing 403 keeps the direct
+//! face byte-for-byte (`steward_advance_watermark: ` prefix, the backend's sentence,
+//! INVALID_REQUEST — the reblock family's precedent for `ForbiddenDetail`), and both
+//! bad-ref refusals stay MCP-local and pre-wire.
+//!
 //! Gate faces shared by every family — the post-edge 401 arms and the system-access
 //! 403 — are pinned once in `resources_wire_arms_test.rs` and not duplicated here.
 
@@ -87,23 +102,22 @@ use parity::{code_of, input, one_text, EMAIL};
 async fn harness(pool: PgPool) -> (E2eTestApp, TemperMcpService, axum::http::request::Parts) {
     let app = common::setup_relay(pool).await;
     let svc = app.mcp_relay_service(app.pool.clone()).await;
-    let parts = app.direct_parts();
+    let parts = app.relay_parts();
     (app, svc, parts)
 }
 
 // ── Drivers ────────────────────────────────────────────────────────────────────
 //
-// `(svc, parts, params)` signatures, byte-stable across the swap: pre-swap the one
-// bridging line resolves the profile from parts the way service.rs's dispatch does;
-// post-swap the same drivers hand the parts to the relayed tool.
+// `(svc, parts, params)` signatures, byte-stable across the swap: pre-swap (94d4e1d) one
+// bridging line resolved the profile from parts the way service.rs's dispatch did; at the
+// swap the same drivers hand the relayed parts to the tool, whose act the API adjudicates.
 
 async fn run_delta(
     svc: &TemperMcpService,
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
-    temper_mcp::tools::steward::steward_ingest_delta(svc, profile, input(params)).await
+    temper_mcp::tools::steward::steward_ingest_delta(svc, parts, input(params)).await
 }
 
 async fn run_advance(
@@ -111,8 +125,7 @@ async fn run_advance(
     parts: &axum::http::request::Parts,
     params: serde_json::Value,
 ) -> Result<rmcp::model::CallToolResult, rmcp::ErrorData> {
-    let profile = svc.ensure_profile_from_parts(parts).await?;
-    temper_mcp::tools::steward::steward_advance_watermark(svc, profile, input(params)).await
+    temper_mcp::tools::steward::steward_advance_watermark(svc, parts, input(params)).await
 }
 
 // ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -262,7 +275,7 @@ async fn delta_unreadable_cogmap_refuses_with_the_uniform_not_found(pool: PgPool
     assert_eq!(code_of(&unreadable_err), -32602, "{unreadable_err:?}");
     assert_eq!(
         unreadable_err.message,
-        "steward_ingest_delta: cognitive map not found or not readable"
+        "cognitive map not found or not readable"
     );
     assert_eq!(
         (code_of(&unreadable_err), unreadable_err.message.as_ref()),
@@ -371,10 +384,7 @@ async fn advance_unreadable_cogmap_refuses_not_found(pool: PgPool) {
     .await
     .expect_err("unreadable refuses");
     assert_eq!(code_of(&err), -32602, "{err:?}");
-    assert_eq!(
-        err.message,
-        format!("steward_advance_watermark: cognitive map {unreadable} not found")
-    );
+    assert_eq!(err.message, format!("cognitive map {unreadable} not found"));
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -404,7 +414,7 @@ async fn advance_to_an_event_outside_the_window_refuses_with_the_second_not_foun
     assert_eq!(
         err.message,
         format!(
-            "steward_advance_watermark: event {outside} is not in cognitive map {}'s ingest window",
+            "event {outside} is not in cognitive map {}'s ingest window",
             s.cogmap
         ),
         "the window exit, distinct from the cogmap exit"

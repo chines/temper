@@ -740,7 +740,7 @@ impl TemperMcpService {
         tools::ingest::segmented_ingest(self, &parts, input).await
     }
 
-    // ── Steward (unchanged, scoped descriptions) ───────────────────────
+    // ── Steward (scoped descriptions; crosses the network door — beat 5) ──
 
     #[tool(
         description = "This tool is for the team-self-cognition steward agent. If you are not running a steward cycle, you do not need this tool. Read a team-self-cognition cogmap's ingest delta: how many new resources + events have landed in the team's contexts since the steward's watermark, and whether that clears the threshold (i.e. the steward should run)."
@@ -750,8 +750,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardDeltaInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let authed = self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_ingest_delta(self, authed, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::steward::steward_ingest_delta(self, &parts, input).await
     }
 
     #[tool(
@@ -762,8 +763,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardAdvanceWatermarkInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let authed = self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_advance_watermark(self, authed, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::steward::steward_advance_watermark(self, &parts, input).await
     }
 
     #[tool(
