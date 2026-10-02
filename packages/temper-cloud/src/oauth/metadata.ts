@@ -74,21 +74,23 @@ export function buildAsMetadata(issuer: string): AsMetadata {
 }
 
 /**
- * Builds RFC 8414 metadata for the legacy Auth0-fronted instance. Byte-identical to the
- * retired Rust MCP handler (`crates/temper-mcp/src/discovery.rs`,
- * `authorization_server_metadata`): `auth0Domain` is trimmed of a trailing slash before use,
- * but `base` is used raw (no trimming) for `registration_endpoint`, matching Rust exactly.
+ * Builds RFC 8414 metadata for the legacy Auth0-fronted instance.
+ *
+ * `issuer` is the INSTANCE (`${base}/`), not the Auth0 domain. The protected-resource metadata
+ * (`crates/temper-mcp/src/discovery.rs`) names `${base}/` as the authorization server, clients
+ * fetch this document from that origin, and RFC 8414 §3.3 requires the `issuer` it carries to be
+ * identical to the one the client fetched it for — strict clients (the MCP TypeScript SDK, so
+ * opencode and others) abort discovery on a mismatch. Every endpoint below is already the
+ * instance's own proxy, so the instance is the authorization server these clients talk to.
+ * Tokens still carry Auth0's `iss`; that is the API's concern (`AUTH_ISSUER`), not this
+ * document's, and `auth0Domain` is no longer read here.
  */
-export function buildAuth0AsMetadata(cfg: {
-  base: string;
-  auth0Domain: string;
-  audience: string;
-}): Auth0AsMetadata {
-  const auth0 = cfg.auth0Domain.replace(/\/+$/, "");
+export function buildAuth0AsMetadata(cfg: { base: string; audience: string }): Auth0AsMetadata {
   const base = cfg.base.replace(/\/+$/, "");
 
   return {
-    issuer: `${auth0}/`,
+    // Byte-equal to the PRM's `authorization_servers` entry (`format!("{base}/")`).
+    issuer: `${base}/`,
     // Authorize and token endpoints are proxied through temperkb.io so loopback
     // redirect_uris (http://127.0.0.1:<port>/callback) can be rewritten to the
     // relay URL. Auth0's exact-match callback allowlist rejects loopback URLs
@@ -130,7 +132,7 @@ function issuerWellKnownSuffix(issuer: string): string {
  * instance that doesn't). This migrated the doc off the Rust MCP function
  * (`crates/temper-mcp/src/discovery.rs`) so a single shared `vercel.json` can serve the right
  * AS metadata per instance without env-conditional routing, which Vercel's static route table
- * can't express. The Auth0 branch below is byte-identical to the former Rust handler.
+ * can't express.
  *
  * The route also answers the RFC 8414 §3.1 path-suffixed form a conformant client computes
  * for a path-bearing issuer. Only the suffix the advertised issuer actually implies is
@@ -144,7 +146,7 @@ export async function handleAuthorizationServer(req: Request): Promise<Response>
     /^\/+|\/+$/g,
     "",
   );
-  const expected = issuerWellKnownSuffix(asIssuer ?? requireEnv("AUTH_ISSUER"));
+  const expected = issuerWellKnownSuffix(asIssuer ?? requireEnv("MCP_BASE_URL"));
   if (requested !== expected) {
     return new Response("Not Found", { status: 404 });
   }
@@ -153,7 +155,6 @@ export async function handleAuthorizationServer(req: Request): Promise<Response>
     ? buildAsMetadata(asIssuer)
     : buildAuth0AsMetadata({
         base: requireEnv("MCP_BASE_URL"),
-        auth0Domain: requireEnv("AUTH_ISSUER"),
         // This document's `resource` answers API callers — the temper CLI and M2M clients read
         // it to learn what `aud` their tokens must carry — so it is AUTH_AUDIENCE, the API
         // audience. The MCP surface has its own resource indicator now: `MCP_AUDIENCE`, the
