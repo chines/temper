@@ -6,8 +6,10 @@
 //! `a_teamless_connection_is_admin_only_over_http` — a teamless connection is the one with no
 //! owning team to key a check on, and "no team to check" must never mean "nothing to deny".
 //!
-//! A connection reuses `machine_authz::authorize` verbatim, so what is being proven at this layer
-//! is that the *surface* actually reaches that gate — not that the predicate returns false.
+//! A connection reuses `MachineAuthority`'s policy verbatim (provisioning through
+//! `machine_authz::authorize`, every per-row act through `ConnectionControlAuthority`), so what is
+//! being proven at this layer is that the *surface* actually reaches that gate — not that the
+//! predicate returns false.
 
 mod common;
 
@@ -301,8 +303,10 @@ async fn the_credential_and_the_capability_tiers_move_independently_over_http(po
     );
 }
 
-/// The mutators must reach `machine_authz::authorize` too — not just `provision`. A surface that
-/// gates creation and then leaves mutation open is the classic way this goes wrong.
+/// The mutators must reach the per-row gate too — not just `provision`. A surface that gates
+/// creation and then leaves mutation open is the classic way this goes wrong. The refusal is a
+/// `404` indistinguishable from a missing connection, so the outsider also learns nothing about
+/// whether the connection exists.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn an_outsider_cannot_attach_a_credential_over_http(pool: PgPool) {
     let app = common::setup(pool.clone()).await;
@@ -321,7 +325,7 @@ async fn an_outsider_cannot_attach_a_credential_over_http(pool: PgPool) {
     assert_eq!(status, 200, "owner provisions: {born:?}");
     let id = born["id"].as_str().expect("connection id").to_string();
 
-    let (status, _) = post_sub(
+    let (status, denied_body) = post_sub(
         &app,
         &outsider,
         &id,
@@ -329,7 +333,23 @@ async fn an_outsider_cannot_attach_a_credential_over_http(pool: PgPool) {
         json!({ "broker": "vercel-connect", "connector": "conn_abc123" }),
     )
     .await;
-    assert_eq!(status, 403, "an outsider may not attach a credential");
+    assert_eq!(
+        status, 404,
+        "an outsider may not attach a credential, and is answered as if the connection did not exist"
+    );
+    let (missing_status, missing_body) = post_sub(
+        &app,
+        &outsider,
+        &Uuid::now_v7().to_string(),
+        "credential",
+        json!({ "broker": "vercel-connect", "connector": "conn_abc123" }),
+    )
+    .await;
+    assert_eq!(
+        (status, &denied_body),
+        (missing_status, &missing_body),
+        "an existing connection must be indistinguishable from a missing one to an outsider"
+    );
 
     let stored: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT credential FROM kb_connections WHERE id = $1")

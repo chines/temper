@@ -72,6 +72,26 @@ pr: self
 classes: additive,behavioral
 surfaces: http,mcp,clients,cli-stdout,schema
 status: signal-only
+- **The per-row machine-client, connection and subscription routes refuse a caller without authority as `404`, indistinguishable from a missing id**
+  `GET`/`DELETE /api/machine-clients/{id}` and `POST …/rotate-secret`; `GET`/`DELETE
+  /api/connections/{id}`, `POST …/credential`, `…/webhook-events`, `…/tool-manifest` and
+  `POST`/`DELETE …/reach`; `GET`/`DELETE /api/subscriptions/{id}`. A caller who is neither a
+  system admin nor the owner of the owning team (for subscriptions, an owner or maintainer of the
+  authoring team) was answered `403` for an existing id and `404` for a missing one, so any
+  approved bearer could probe which ids exist. Both now answer the same `404`, same body
+  (`… not found or not readable`). The gates admit exactly whom they admitted before; only the
+  refusal voice moved. Unchanged `403`s: `SYSTEM_ACCESS_REQUIRED`; `POST …/reach` from a caller who
+  controls the connection but does not manage the receiving team (they can already read the
+  connection, so nothing is disclosed); and the team-scoped creates (provision, issue, subscription
+  create), where no row's existence is at stake. The machine-client missing-row message gains
+  "or not readable", matching the other two families. openapi.json changes descriptions only on the
+  twelve operations. Who observes: a caller without authority over a row, who now sees `404` where
+  they saw `403` — over HTTP, in the SDKs, and in the `temper admin machine|connection|subscription`
+  JSON error code (`forbidden` → `not_found`). User-visible: no. Release relevance: signal-only.
+pr: self
+classes: additive,behavioral
+surfaces: http,clients,cli-stdout
+status: signal-only
 - **The scoped operator routes enter the OpenAPI contract: admin ledger, machine clients, connections, subscriptions**
   The routes gated `is_system_admin OR <a scoped role>` — `GET /api/admin/ledger`, `/api/machine-clients`
   (list, provision, get, revoke, issue, rotate-secret), `/api/connections` (list, provision, get,

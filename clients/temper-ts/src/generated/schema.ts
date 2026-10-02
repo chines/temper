@@ -1231,14 +1231,14 @@ export interface paths {
         };
         /**
          * Get a connection
-         * @description Returns one connection. Requires a system admin or the owner of the connection's owning team.
+         * @description Returns one connection. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         get: operations["get_connection"];
         put?: never;
         post?: never;
         /**
          * Revoke a connection
-         * @description Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team.
+         * @description Revokes a connection so temper mints no new tokens for it. Tokens already minted stay valid at the remote system until they expire. The connection's profile, emitter and history are kept. Revoking an already-revoked connection returns it unchanged. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         delete: operations["revoke_connection"];
         options?: never;
@@ -1260,7 +1260,7 @@ export interface paths {
         put?: never;
         /**
          * Attach a connection credential
-         * @description Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent or an unconfigured broker is reported in `verification.note`. Requires a system admin or the owner of the connection's owning team.
+         * @description Attaches the credential reference: a broker and a connector the broker holds the secret for. The body carries no secret. temper mints once to verify the connector and reports what it observed; a connector the broker rejects fails the request, while pending consent or an unconfigured broker is reported in `verification.note`. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         post: operations["attach_connection_credential"];
         delete?: never;
@@ -1283,12 +1283,12 @@ export interface paths {
         put?: never;
         /**
          * Grant a team read-reach on a connection
-         * @description Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm.
+         * @description Lets the members of `team` read what the connection receives. Reach is read-only. Requires a system admin, or the owner of the connection's owning team who also owns or maintains the receiving team. When the connection declares a remote reach the attach-time verification did not confirm, `affirm_reach` must state why the binding is intended; it is refused when there is nothing to affirm. A caller with system access who does not control the connection is answered 404, exactly as for an id that does not exist.
          */
         post: operations["grant_connection_reach"];
         /**
          * Revoke a team's read-reach on a connection
-         * @description Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed.
+         * @description Removes the read-reach grant for `team`. Revoking an absent grant is a no-op. `affirm_reach` is ignored. Requires a system admin or the owner of the connection's owning team; no role on the receiving team is needed. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         delete: operations["revoke_connection_reach"];
         options?: never;
@@ -1310,7 +1310,7 @@ export interface paths {
         put?: never;
         /**
          * Set connection tool manifest
-         * @description Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team.
+         * @description Replaces the declared read-only remote tools. A non-empty manifest makes the connection reach-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         post: operations["set_connection_tool_manifest"];
         delete?: never;
@@ -1333,7 +1333,7 @@ export interface paths {
         put?: never;
         /**
          * Set connection webhook events
-         * @description Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team.
+         * @description Replaces the set of remote event types the connection receives. A non-empty set makes the connection ledger-capable. Requires a system admin or the owner of the connection's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         post: operations["set_connection_webhook_events"];
         delete?: never;
@@ -2169,14 +2169,14 @@ export interface paths {
         };
         /**
          * Get a machine client
-         * @description Returns one machine client. Requires a system admin or the owner of the machine's owning team.
+         * @description Returns one machine client. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         get: operations["get_machine_client"];
         put?: never;
         post?: never;
         /**
          * Revoke a machine client
-         * @description Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team.
+         * @description Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         delete: operations["revoke_machine_client"];
         options?: never;
@@ -2221,7 +2221,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate a machine client secret
-         * @description Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team.
+         * @description Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         post: operations["rotate_machine_client_secret"];
         delete?: never;
@@ -3126,14 +3126,14 @@ export interface paths {
         };
         /**
          * Get a subscription
-         * @description Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+         * @description Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         get: operations["get_subscription"];
         put?: never;
         post?: never;
         /**
          * Revoke a subscription
-         * @description Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+         * @description Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
          */
         delete: operations["revoke_subscription"];
         options?: never;
@@ -13564,7 +13564,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13573,7 +13573,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such connection */
+            /** @description No such connection, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13617,7 +13617,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13626,7 +13626,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such connection */
+            /** @description No such connection, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13683,7 +13683,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13692,7 +13692,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such connection */
+            /** @description No such connection, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13758,7 +13758,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description The caller controls the connection but does not own or maintain the receiving team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13767,7 +13767,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such connection, or no such receiving team */
+            /** @description No such connection, or one the caller does not control (answered identically); or, for a system admin, no such receiving team */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13824,7 +13824,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13833,7 +13833,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such connection */
+            /** @description No such connection, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13881,7 +13881,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13890,7 +13890,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such connection */
+            /** @description No such connection, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -13947,7 +13947,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13956,7 +13956,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such connection */
+            /** @description No such connection, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -15815,7 +15815,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15824,7 +15824,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such machine client */
+            /** @description No such machine client, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -15868,7 +15868,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15877,7 +15877,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such machine client */
+            /** @description No such machine client, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -16009,7 +16009,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor the owner of the owning team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16018,7 +16018,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such machine client */
+            /** @description No such machine client, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -18859,7 +18859,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor an owner or maintainer of the authoring team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18868,7 +18868,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such subscription */
+            /** @description No such subscription, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -18912,7 +18912,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Caller is neither a system admin nor an owner or maintainer of the authoring team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
+            /** @description Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18921,7 +18921,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description No such subscription */
+            /** @description No such subscription, or one the caller may not act on: the two are answered identically */
             404: {
                 headers: {
                     [name: string]: unknown;

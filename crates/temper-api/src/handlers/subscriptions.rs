@@ -90,7 +90,7 @@ pub async fn list(
     get,
     operation_id = "get_subscription",
     summary = "Get a subscription",
-    description = "Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team.",
+    description = "Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/subscriptions/{id}",
     tag = "Subscriptions",
     params(("id" = Uuid, Path, description = "Subscription ID")),
@@ -98,8 +98,8 @@ pub async fn list(
     responses(
         (status = 200, description = "The subscription", body = Subscription),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor an owner or maintainer of the authoring team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
-        (status = 404, description = "No such subscription", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such subscription, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
 pub async fn get(
@@ -116,7 +116,7 @@ pub async fn get(
     delete,
     operation_id = "revoke_subscription",
     summary = "Revoke a subscription",
-    description = "Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team.",
+    description = "Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/subscriptions/{id}",
     tag = "Subscriptions",
     params(("id" = Uuid, Path, description = "Subscription ID")),
@@ -124,8 +124,8 @@ pub async fn get(
     responses(
         (status = 200, description = "The revoked subscription", body = Subscription),
         (status = 401, description = "Authentication required", body = ErrorBody),
-        (status = 403, description = "Caller is neither a system admin nor an owner or maintainer of the authoring team, or lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
-        (status = 404, description = "No such subscription", body = ErrorBody),
+        (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`)", body = ErrorBody),
+        (status = 404, description = "No such subscription, or one the caller may not act on: the two are answered identically", body = ErrorBody),
     )
 )]
 pub async fn revoke(

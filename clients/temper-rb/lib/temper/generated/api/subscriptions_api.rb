@@ -95,7 +95,7 @@ module Temper::Generated
     end
 
     # Get a subscription
-    # Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+    # Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Subscription ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -106,7 +106,7 @@ module Temper::Generated
     end
 
     # Get a subscription
-    # Returns one subscription. Requires a system admin or an owner or maintainer of the subscription&#39;s authoring team.
+    # Returns one subscription. Requires a system admin or an owner or maintainer of the subscription&#39;s authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Subscription ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -235,7 +235,7 @@ module Temper::Generated
     end
 
     # Revoke a subscription
-    # Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+    # Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Subscription ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -246,7 +246,7 @@ module Temper::Generated
     end
 
     # Revoke a subscription
-    # Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription&#39;s authoring team.
+    # Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription&#39;s authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Subscription ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.

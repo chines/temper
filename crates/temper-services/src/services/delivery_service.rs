@@ -165,7 +165,7 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Delivery> {
     )
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| ApiError::NotFound("delivery not found or not readable".to_string()))?
+    .ok_or_else(|| ApiError::NotFound(DELIVERY_REFUSAL.to_string()))?
     .into_delivery()
 }
 
@@ -176,8 +176,31 @@ pub async fn get_for_caller(
     id: Uuid,
 ) -> ApiResult<Delivery> {
     let delivery = get(pool, id).await?;
-    subscription_service::get_for_caller(pool, authed, delivery.subscription_id).await?;
+    authorize_through_subscription(pool, authed, &delivery).await?;
     Ok(delivery)
+}
+
+/// The refusal for a delivery the caller cannot see — absent, or behind a subscription the caller
+/// may not act on. One sentence for both, so a caller probing delivery ids cannot tell them apart.
+const DELIVERY_REFUSAL: &str = "delivery not found or not readable";
+
+/// Gate a delivery-id act through the delivery's own subscription, refusing in the **delivery's**
+/// voice. The subscription gate refuses with its own `SUBSCRIPTION_REFUSAL` (a `404`
+/// indistinguishable from a missing subscription); passed through unchanged, that sentence would
+/// differ from a missing delivery's [`DELIVERY_REFUSAL`] and reopen the existence oracle one level
+/// down. So every `NotFound` from the gate is re-rendered as the missing-delivery refusal. Any other
+/// error passes through.
+async fn authorize_through_subscription(
+    pool: &PgPool,
+    authed: &AuthenticatedProfile,
+    delivery: &Delivery,
+) -> ApiResult<temper_core::types::subscription::Subscription> {
+    subscription_service::get_for_caller(pool, authed, delivery.subscription_id)
+        .await
+        .map_err(|err| match err {
+            ApiError::NotFound(_) => ApiError::NotFound(DELIVERY_REFUSAL.to_string()),
+            other => other,
+        })
 }
 
 /// **Goal C11** — what was routed to this declaration, and what became of it.
@@ -366,7 +389,7 @@ pub async fn record_scope(
 
     // Auth before writes, derived from the delivery's own subscription.
     let existing = get(pool, delivery_id).await?;
-    subscription_service::get_for_caller(pool, authed, existing.subscription_id).await?;
+    authorize_through_subscription(pool, authed, &existing).await?;
 
     if existing.disposition.is_some() {
         return Err(ApiError::BadRequest(
@@ -444,7 +467,7 @@ pub async fn record_disposition(
 
     // Auth before writes.
     let existing = get(pool, delivery_id).await?;
-    let sub = subscription_service::get_for_caller(pool, authed, existing.subscription_id).await?;
+    let sub = authorize_through_subscription(pool, authed, &existing).await?;
 
     // Judgment only follows a resolved scope, and only where there is something to judge. The
     // schema enforces this too (`disposition_follows_a_resolved_scope`); refusing here turns a
@@ -556,7 +579,7 @@ pub async fn record_disposition(
     )
     .fetch_optional(&mut *tx)
     .await?
-    .ok_or_else(|| ApiError::NotFound("delivery not found or not readable".to_string()))?;
+    .ok_or_else(|| ApiError::NotFound(DELIVERY_REFUSAL.to_string()))?;
 
     if locked.disposition.is_some() {
         return Err(ApiError::BadRequest(
@@ -1696,5 +1719,47 @@ mod tests {
         )
         .await
         .expect("one overlapping event kind is enough for the declaration to be live");
+    }
+
+    /// The existence oracle, closed one level down: a delivery-id act refuses a caller who cannot
+    /// act on the delivery's subscription with the **missing-delivery** refusal, not the
+    /// subscription's. Passing the subscription gate's sentence through would let a prober tell an
+    /// existing delivery (subscription refusal) from a missing one (delivery refusal).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_denied_delivery_is_indistinguishable_from_a_missing_one(pool: PgPool) {
+        let (admin, _t, _c, conn, sub) = seed_world(&pool).await;
+        let (_e, d) = deliver_one(&pool, conn, sub, admin).await;
+        let stranger = seed_plain_profile(&pool).await;
+        let prober = crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await;
+        let scope = RecordScopeRequest {
+            status: DeliveryStatus::InScope,
+            reason: None,
+        };
+
+        for id in [d.id, Uuid::now_v7()] {
+            let refusals = [
+                (
+                    "get",
+                    get_for_caller(&pool, &prober, id).await.expect_err("get"),
+                ),
+                (
+                    "scope",
+                    record_scope(&pool, &prober, id, &scope)
+                        .await
+                        .expect_err("scope"),
+                ),
+            ];
+            for (act, err) in refusals {
+                assert!(
+                    matches!(&err, ApiError::NotFound(m) if m == DELIVERY_REFUSAL),
+                    "{act}: must refuse as a missing delivery, got {err:?}"
+                );
+            }
+        }
+        assert_eq!(
+            get(&pool, d.id).await.expect("get").status,
+            DeliveryStatus::PendingScope,
+            "the denied scope wrote nothing"
+        );
     }
 }

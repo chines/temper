@@ -34,7 +34,7 @@ use temper_core::types::subscription::{
 };
 
 use crate::auth::AuthenticatedProfile;
-use crate::authz::{authorize, Principal, SubscriptionAuthority};
+use crate::authz::{authorize, Principal, SubscriptionAuthority, SubscriptionControlAuthority};
 use crate::error::{ApiError, ApiResult};
 use crate::services::connection_service;
 
@@ -42,6 +42,12 @@ use crate::services::connection_service;
 /// layer can match on them without re-parsing strings. The migration's CHECK is the
 /// enforcement; this const is the mirror the service layer dispatches on.
 const SUBSCRIBER_TABLES: &[&str] = &["kb_contexts", "kb_cogmaps", "kb_teams"];
+
+/// The refusal for a subscription the caller cannot see — absent, or present but outside the
+/// caller's authority. One sentence for both, on purpose: `get` renders it for a missing row and
+/// `authz::SubscriptionControlAuthority` for a denied one, so a caller probing ids cannot tell the
+/// two apart.
+pub(crate) const SUBSCRIPTION_REFUSAL: &str = "subscription not found or not readable";
 
 /// Load one subscription by its own id. Unauthorized: the internal primitive the post-insert
 /// readback uses. Surface callers want [`get_for_caller`].
@@ -56,19 +62,19 @@ pub async fn get(pool: &PgPool, id: Uuid) -> ApiResult<Subscription> {
     )
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| ApiError::NotFound("subscription not found or not readable".to_string()))
+    .ok_or_else(|| ApiError::NotFound(SUBSCRIPTION_REFUSAL.to_string()))
 }
 
-/// [`get`], gated on the authoring team: the caller manages it, or is a system admin.
+/// [`get`], gated on the authoring team: the caller manages it, or is a system admin. A caller
+/// outside that authority is refused exactly as a missing id is (`SUBSCRIPTION_REFUSAL`) — see
+/// `authz::SubscriptionControlAuthority`.
 pub async fn get_for_caller(
     pool: &PgPool,
     authed: &AuthenticatedProfile,
     id: Uuid,
 ) -> ApiResult<Subscription> {
-    let sub = get(pool, id).await?;
-    authorize::<SubscriptionAuthority>(pool, Principal::Proof(authed), sub.authoring_team_id)
-        .await?;
-    Ok(sub)
+    authorize::<SubscriptionControlAuthority>(pool, Principal::Proof(authed), id).await?;
+    get(pool, id).await
 }
 
 /// List subscriptions visible to `caller`, newest first. Revoked rows are hidden unless asked
@@ -273,10 +279,9 @@ pub async fn revoke(
     id: Uuid,
 ) -> ApiResult<Subscription> {
     let caller = ProfileId::from(authed.profile().id);
-    // Auth before writes, keyed on the existing row's authoring team.
-    let existing = get(pool, id).await?;
-    authorize::<SubscriptionAuthority>(pool, Principal::Proof(authed), existing.authoring_team_id)
-        .await?;
+    // Auth before writes, keyed on the existing row's authoring team. A refusal is
+    // indistinguishable from a missing id.
+    authorize::<SubscriptionControlAuthority>(pool, Principal::Proof(authed), id).await?;
 
     sqlx::query!(
         r#"UPDATE kb_subscriptions
@@ -868,7 +873,10 @@ mod tests {
         )
         .await
         .expect_err("stranger must not read");
-        assert!(matches!(err, ApiError::Forbidden), "get: got {err:?}");
+        assert!(
+            matches!(&err, ApiError::NotFound(m) if m == SUBSCRIPTION_REFUSAL),
+            "get: a subscription the caller cannot manage reads as missing, got {err:?}"
+        );
 
         let err = revoke(
             &pool,
@@ -877,7 +885,36 @@ mod tests {
         )
         .await
         .expect_err("stranger must not revoke");
-        assert!(matches!(err, ApiError::Forbidden), "revoke: got {err:?}");
+        assert!(
+            matches!(&err, ApiError::NotFound(m) if m == SUBSCRIPTION_REFUSAL),
+            "revoke: a subscription the caller cannot manage reads as missing, got {err:?}"
+        );
+
+        // And it is the same refusal a missing id gets, byte for byte: the existence oracle, closed.
+        let prober = crate::test_support::authenticated_profile_for(&pool, stranger.uuid()).await;
+        let missing = uuid::Uuid::now_v7();
+        assert_eq!(
+            get_for_caller(&pool, &prober, created.id)
+                .await
+                .expect_err("denied")
+                .to_string(),
+            get_for_caller(&pool, &prober, missing)
+                .await
+                .expect_err("missing")
+                .to_string(),
+            "get: a denied id must refuse like a missing one"
+        );
+        assert_eq!(
+            revoke(&pool, &prober, created.id)
+                .await
+                .expect_err("denied")
+                .to_string(),
+            revoke(&pool, &prober, missing)
+                .await
+                .expect_err("missing")
+                .to_string(),
+            "revoke: a denied id must refuse like a missing one"
+        );
 
         // And the refusal was real, not a silent no-op: the row is still live.
         let still = get(&pool, created.id).await.expect("row still readable");
