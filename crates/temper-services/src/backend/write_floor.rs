@@ -1,7 +1,8 @@
 //! The write floor (resource erasure spec D13, F4): the one check a write on a resource passes,
 //! run INSIDE the write's own transaction so the check and the mutation cannot be separated.
 //!
-//! Each entry point, in order:
+//! Each entry point, in order (after an unlocked admission that refuses without locking — see "A
+//! refused caller takes no lock" below):
 //!
 //! 1. takes `FOR KEY SHARE` on the `kb_resources` row — the lock `_resource_write_guard` takes
 //!    (migration `20260929040730`, re-commented in `20260930000070`). It conflicts with the erasure
@@ -40,6 +41,14 @@
 //! Called on a bare pool connection it still answers, but the lock is released at once and the
 //! floor is a pre-check again — the gap this module exists to close.
 //!
+//! **A refused caller takes no lock.** `FOR KEY SHARE` does not queue behind a waiting
+//! `FOR UPDATE`: a share locker that need not wait skips the queue, so a stream of overlapping
+//! share locks can hold the erasure act off indefinitely. If any caller could take the lock, any
+//! caller who knows an id could delay its erasure. So every entry point that locks a row on a
+//! caller's behalf asks its admission (or read check) unlocked first, on the same connection, and
+//! locks only a caller that passes; the check under the lock then decides. An unlocked refusal is
+//! the answer the write would have had ordered before a concurrent act — never a wrong one.
+//!
 //! **An admission without the lock** — [`modify_admission_unlocked`] — is the same admission and
 //! the same classification on the pool, for a door that must not let a refused caller take a row
 //! lock at all (the delete door's `FOR UPDATE`). It binds nothing; the door still floors inside its
@@ -68,6 +77,9 @@ pub async fn modify_floor_in_tx(
     profile: ProfileId,
     resource: ResourceId,
 ) -> Result<(), TemperError> {
+    // Unlocked first, so a caller this floor refuses never takes the row lock (the module's
+    // "a refused caller takes no lock"). It binds nothing; the locked admission below decides.
+    modify_admission(conn, profile, resource).await?;
     // The lock is all this step is for; whether a row came back is the admission's question.
     lock_resource_row(conn, resource).await?;
     modify_admission(conn, profile, resource).await

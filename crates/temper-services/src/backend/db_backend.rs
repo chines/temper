@@ -1357,11 +1357,13 @@ impl DbBackend {
     /// predicate's read floor (`resources_visible_to` joins `kb_resources.is_active`) hides it, and
     /// the caller is not writing the target, so the erased classification does not apply to it.
     ///
-    /// **A resource target is locked first** (`write_floor::lock_resource_key_share`: `FOR KEY
-    /// SHARE` on its row, held to the edge write's commit), so the erasure act cannot commit
-    /// between this check and the edge. An edge assert that races the act either lands before it
-    /// (and the act folds the edge) or waits on the act's lock and then reads the husk as
-    /// unreadable here. Other endpoint kinds are read unlocked.
+    /// **A resource target is locked before the deciding check**
+    /// (`write_floor::lock_resource_key_share`: `FOR KEY SHARE` on its row, held to the edge
+    /// write's commit), so the erasure act cannot commit between this check and the edge. An edge
+    /// assert that races the act either lands before it (and the act folds the edge) or waits on
+    /// the act's lock and then reads the husk as unreadable here. A caller who cannot read the
+    /// target is refused by an unlocked check first and never takes the lock. Other endpoint kinds
+    /// are read unlocked.
     ///
     /// On a caller-supplied connection only: every caller is an edge write gating inside its own
     /// transaction (see [`Self::check_cogmap_authorable_in_tx`] for why), so no pool form exists.
@@ -1372,8 +1374,27 @@ impl DbBackend {
         endpoint_id: uuid::Uuid,
     ) -> Result<(), TemperError> {
         if endpoint_table == "kb_resources" {
+            // Read check unlocked first: a caller who cannot read the target never takes its
+            // row lock (`write_floor`'s "a refused caller takes no lock"). The check under the
+            // lock decides.
+            self.endpoint_readable_on(&mut *conn, endpoint_table, endpoint_id)
+                .await?;
             write_floor::lock_resource_key_share(&mut *conn, ResourceId::from(endpoint_id)).await?;
         }
+        self.endpoint_readable_on(&mut *conn, endpoint_table, endpoint_id)
+            .await
+    }
+
+    /// `endpoint_readable_by_profile` on `conn`, unlocked: `Ok(())` when the caller reads the
+    /// endpoint, else `NotFound` — not `Forbidden`: the caller cannot read this endpoint, so
+    /// confirming it exists would make the write an existence oracle over resources they have no
+    /// standing to see. Mirrors the citation-audit gate's treatment of the same disclosure problem.
+    async fn endpoint_readable_on(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        endpoint_table: &str,
+        endpoint_id: uuid::Uuid,
+    ) -> Result<(), TemperError> {
         let can: Option<bool> = sqlx::query_scalar!(
             "SELECT endpoint_readable_by_profile($1, $2, $3)",
             *self.profile_id,
@@ -1386,9 +1407,6 @@ impl DbBackend {
         if can.unwrap_or(false) {
             Ok(())
         } else {
-            // NotFound, not Forbidden: the caller cannot read this endpoint, so confirming it exists
-            // would make the write an existence oracle over resources they have no standing to see.
-            // Mirrors the citation-audit gate's treatment of the same disclosure problem.
             Err(TemperError::NotFound(format!(
                 "{endpoint_table} {endpoint_id} not found"
             )))
@@ -1608,6 +1626,47 @@ impl DbBackend {
     ///
     /// Runs on the update's own transaction (`conn`), so a goal-set whose assert is refused rolls
     /// the folds back with the rest of the update.
+    /// Lock, `FOR KEY SHARE` and in id order, every goal row a goal patch on `src` touches: the
+    /// targets of `src`'s current goal edges (the rows [`Self::fold_goal_edges`] folds away from)
+    /// and, for a set, the new goal. The new goal is read-checked unlocked first, so a caller who
+    /// cannot read it is refused (`NotFound`, the target clause's answer) without taking its lock
+    /// (`write_floor`'s "a refused caller takes no lock"). The current goals need no such check:
+    /// the caller was admitted to modify `src`, and these are rows `src` already links to.
+    async fn lock_goal_rows(
+        &self,
+        conn: &mut sqlx::PgConnection,
+        src: uuid::Uuid,
+        patch: &GoalPatch,
+    ) -> Result<(), TemperError> {
+        let mut rows: Vec<uuid::Uuid> = sqlx::query_scalar!(
+            "SELECT e.target_id FROM kb_edges e \
+             JOIN kb_properties p \
+               ON p.owner_table = 'kb_resources' AND p.owner_id = e.target_id \
+              AND p.property_key = 'doc_type' AND NOT p.is_folded \
+             WHERE e.source_table = 'kb_resources' AND e.source_id = $1 \
+               AND e.target_table = 'kb_resources' \
+               AND e.edge_kind = 'leads_to' AND e.label = $2 \
+               AND p.property_value #>> '{}' = 'goal' \
+               AND NOT e.is_folded",
+            src,
+            GOAL_EDGE_LABEL,
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(api_err)?;
+        if let GoalPatch::Set(goal) = patch {
+            self.endpoint_readable_on(&mut *conn, "kb_resources", goal.uuid())
+                .await?;
+            rows.push(goal.uuid());
+        }
+        rows.sort_unstable();
+        rows.dedup();
+        for row in rows {
+            write_floor::lock_resource_key_share(&mut *conn, ResourceId::from(row)).await?;
+        }
+        Ok(())
+    }
+
     async fn fold_goal_edges(
         conn: &mut sqlx::PgConnection,
         src_next: uuid::Uuid,
@@ -2795,19 +2854,20 @@ impl Backend for DbBackend {
         // lands before an erasure or is refused after it — never separated from its check.
         let mut tx = self.begin_floored(ResourceId::from(new_id)).await?;
         // LOCK ORDER (the rule for every floored write): lock every `kb_resources` row the write
-        // touches up front, before any other row lock. The source is locked by the floor above; a
-        // goal-set also touches the GOAL's row, whose `FOR KEY SHARE` the edge's target clause
-        // (`check_endpoint_readable_in_tx`) takes — so it is taken HERE, before the update and the
-        // goal-edge folds lock edge, block and remote-source rows. Taken after them, an erasure of
-        // the goal (which holds the goal's `FOR UPDATE` and then folds every edge touching it)
-        // deadlocks against this update: each holds a lock the other waits on. Taken first, the
-        // update either locks the goal before the act and the act waits for the commit, or waits on
-        // the act having written nothing — holding only the source row's `FOR KEY SHARE`, which
-        // the act's `FOR UPDATE` on the goal does not touch — and then the target clause reads
-        // the goal erased and refuses the whole update. A lock on an unknown id locks nothing;
-        // the target clause answers it.
-        if let Some(GoalPatch::Set(goal)) = &cmd.goal {
-            if let Err(refusal) = write_floor::lock_resource_key_share(&mut tx, *goal).await {
+        // touches up front, before any other row lock. The source is locked by the floor above. A
+        // goal patch also touches goal rows: the NEW goal's (a set), whose `FOR KEY SHARE` the
+        // edge's target clause (`check_endpoint_readable_in_tx`) takes, and the CURRENT goal's (a
+        // set or a clear), whose edge `fold_goal_edges` folds. Both are taken HERE, before the
+        // update and the goal-edge folds lock edge, block and remote-source rows, in id order.
+        // Taken after them, an erasure of a goal (which holds the goal's `FOR UPDATE` and then
+        // folds every edge touching it) deadlocks against this update. Taken first, the update
+        // either locks the goal before the act and the act waits for the commit, or waits on the
+        // act having written nothing and then reads its outcome: the target clause reads a new
+        // goal erased and refuses the whole update; `fold_goal_edges` reads the current goal's edge
+        // already folded and does not fold it again (no second `relationship_folded`). A lock on
+        // an unknown id locks nothing; the target clause answers it.
+        if let Some(patch) = &cmd.goal {
+            if let Err(refusal) = self.lock_goal_rows(&mut tx, new_id, patch).await {
                 return Err(write_floor::rollback_with(tx, refusal).await);
             }
         }

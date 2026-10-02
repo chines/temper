@@ -921,22 +921,36 @@ async fn check_home_authorable(
 /// existence oracle over anchors the caller cannot read.
 ///
 /// Runs on the relation write's own transaction (`conn`; resource erasure spec D13). A resource
-/// peer is locked first (`write_floor::lock_resource_key_share`: `FOR KEY SHARE`, held to the
-/// write's commit), so the erasure act cannot commit between this check and the edge: a relate
-/// that races the act either lands before it (and the act folds the edge) or waits on the act's
-/// lock and then reads the husk as unreadable here.
+/// peer the caller reads is locked before the deciding check
+/// (`write_floor::lock_resource_key_share`: `FOR KEY SHARE`, held to the write's commit), so the
+/// erasure act cannot commit between this check and the edge: a relate that races the act either
+/// lands before it (and the act folds the edge) or waits on the act's lock and then reads the husk
+/// as unreadable here. A caller who cannot read the peer is refused unlocked and never locks it.
 async fn check_peer_readable(
     conn: &mut sqlx::PgConnection,
     caller: ProfileId,
     peer: &temper_substrate::payloads::AnchorRef,
 ) -> ApiResult<()> {
     if peer.table == temper_substrate::payloads::AnchorTable::Resources {
+        // Read check unlocked first: a caller who cannot read the peer never takes its row lock
+        // (`write_floor`'s "a refused caller takes no lock"). The check under the lock decides.
+        peer_readable_on(&mut *conn, caller, peer).await?;
         crate::backend::write_floor::lock_resource_key_share(
             &mut *conn,
             temper_core::types::ids::ResourceId::from(peer.id),
         )
         .await?;
     }
+    peer_readable_on(&mut *conn, caller, peer).await
+}
+
+/// `endpoint_readable_by_profile` for the peer on `conn`, unlocked: invisible-or-absent is
+/// `NotFound`, never an existence oracle.
+async fn peer_readable_on(
+    conn: &mut sqlx::PgConnection,
+    caller: ProfileId,
+    peer: &temper_substrate::payloads::AnchorRef,
+) -> ApiResult<()> {
     let readable: Option<bool> = sqlx::query_scalar!(
         "SELECT endpoint_readable_by_profile($1, $2, $3)",
         caller.uuid(),

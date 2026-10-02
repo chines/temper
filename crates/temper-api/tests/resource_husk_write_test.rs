@@ -145,6 +145,16 @@ async fn team_context(pool: &PgPool, members: &[Uuid]) -> Uuid {
 
 /// A resource with a real body, made through `POST /api/ingest` by `owner` into `context`.
 async fn ingest(app: &common::TestApp, owner: &Caller, context: Uuid) -> Uuid {
+    ingest_typed(app, owner, context, "research").await
+}
+
+/// [`ingest`], as `doc_type`: a goal edge folds only onto a `goal`-typed target.
+async fn ingest_typed(
+    app: &common::TestApp,
+    owner: &Caller,
+    context: Uuid,
+    doc_type: &str,
+) -> Uuid {
     let payload = IngestPayload {
         idempotency_key: None,
         segmented: None,
@@ -152,7 +162,7 @@ async fn ingest(app: &common::TestApp, owner: &Caller, context: Uuid) -> Uuid {
         origin_uri: format!("test://husk-write-{}", Uuid::new_v4()),
         context_ref: context.to_string(),
         home_cogmap_id: None,
-        doc_type_name: "research".to_string(),
+        doc_type_name: doc_type.to_string(),
         content_hash: None,
         content: BODY.to_string(),
         metadata: None,
@@ -2322,7 +2332,7 @@ async fn row_exclusive_locks(pool: &PgPool, pid: i32) -> i64 {
 /// `RowExclusiveLock` — it has written no row anywhere.
 ///
 /// FAILS IF the update writes before it locks the goal. The bite: delete the up-front
-/// `write_floor::lock_resource_key_share(&mut tx, *goal)` block in `DbBackend::update_resource`.
+/// `self.lock_goal_rows(..)` block in `DbBackend::update_resource`.
 /// The update then runs `update_resource_in_tx` (the retitle appends an event and updates R's
 /// row) before the target clause's lock waits on G, so its backend holds `RowExclusiveLock`s
 /// while it waits and the zero assertion fails.
@@ -2365,6 +2375,200 @@ async fn a_goal_set_racing_the_acts_erasure_of_the_goal_locks_it_first_and_answe
         title_of(&app, &owner, resource).await,
         TITLE,
         "the refused goal-set rolled the whole update back — the title did not land"
+    );
+}
+
+// ── WITNESS: a refused caller takes no row lock ───────────────────────────────────────────────
+
+/// Hold `FOR UPDATE` on `resource`'s row in an open transaction — the lock the erasure act takes —
+/// without erasing anything. Any request that asks for the row's `FOR KEY SHARE` waits on it.
+async fn hold_the_row(pool: &PgPool, resource: Uuid) -> sqlx::Transaction<'static, sqlx::Postgres> {
+    let mut held = pool.begin().await.expect("begin the holder");
+    sqlx::query("SELECT 1 FROM kb_resources WHERE id = $1 FOR UPDATE")
+        .bind(resource)
+        .execute(&mut *held)
+        .await
+        .expect("hold the row");
+    held
+}
+
+/// Await `request`, failing if it has not answered within five seconds: a refused caller's request
+/// must not be waiting on the held row.
+async fn answers_without_waiting(
+    request: impl std::future::Future<Output = (u16, Value)>,
+    what: &str,
+) -> (u16, Value) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), request)
+        .await
+        .unwrap_or_else(|_| panic!("{what}: a refused caller waited on the held row lock"))
+}
+
+/// While R's row is held `FOR UPDATE` (the erasure act's lock), a caller with no standing on R is
+/// refused at every door that would lock R on its behalf — every floored write door, an edge from
+/// its own resource into R, a blob relation onto R, and a goal set naming R — and is refused
+/// promptly, never queued behind the held lock. `FOR KEY SHARE` skips the queue behind a waiting
+/// `FOR UPDATE`, so a caller who could take it could hold an erasure off; a refused caller must
+/// never take it (`write_floor`'s "a refused caller takes no lock").
+///
+/// FAILS IF any of those paths locks R before deciding the caller is refused. The bite: delete the
+/// unlocked `modify_admission(..)` call at the head of `write_floor::modify_floor_in_tx` (or the
+/// unlocked `endpoint_readable_on(..)` in `check_endpoint_readable_in_tx`, the unlocked
+/// `peer_readable_on(..)` in `blob_service::check_peer_readable`, or the one in
+/// `DbBackend::lock_goal_rows`) — that request queues for R's `FOR KEY SHARE` behind the held
+/// `FOR UPDATE` and does not answer within the deadline.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_refused_caller_answers_without_taking_the_row_lock(pool: PgPool) {
+    let app = blob_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let (stranger, stranger_context) = caller(&app.pool, "stranger").await;
+    let resource = ingest(&app, &owner, own_context).await;
+    let own = ingest(&app, &stranger, stranger_context).await;
+    let blob = commit_blob(&app, &stranger, stranger_context).await;
+
+    let held = hold_the_row(&app.pool, resource).await;
+
+    for door in doors(resource) {
+        let (status, body) = answers_without_waiting(send(&app, &stranger, &door), door.name).await;
+        assert_eq!(
+            status, 403,
+            "{}: a caller with no standing; body: {body}",
+            door.name
+        );
+    }
+
+    let (status, body) = answers_without_waiting(
+        call(
+            &app,
+            &stranger,
+            Method::POST,
+            "/api/relationships".to_string(),
+            Some(json!({
+                "source": own,
+                "target": resource,
+                "edge_kind": "leads_to",
+                "polarity": "forward",
+                "label": "into-an-unreadable-target",
+                "weight": 1.0,
+            })),
+        ),
+        "edge assert into R",
+    )
+    .await;
+    assert_eq!(status, 404, "the target read refuses; body: {body}");
+
+    let (status, body) = answers_without_waiting(
+        call(
+            &app,
+            &stranger,
+            Method::POST,
+            format!("/api/blobs/{blob}/relations"),
+            Some(json!({
+                "direction": "blob_as_source",
+                "peer_table": "kb_resources",
+                "peer_id": resource,
+                "edge_kind": "express",
+                "polarity": "forward",
+                "label": "onto-an-unreadable-peer",
+                "weight": 1.0,
+            })),
+        ),
+        "blob relate onto R",
+    )
+    .await;
+    assert_eq!(status, 404, "the peer read refuses; body: {body}");
+
+    let (status, body) = answers_without_waiting(
+        call(
+            &app,
+            &stranger,
+            Method::PATCH,
+            format!("/api/resources/{own}"),
+            Some(json!({ "title": "goal-set onto R", "goal": resource })),
+        ),
+        "goal set naming R",
+    )
+    .await;
+    assert_eq!(status, 404, "the goal's read refuses; body: {body}");
+
+    held.rollback().await.expect("release the row");
+}
+
+// ── WITNESS: a goal change racing the act on the CURRENT goal folds its edge once ─────────────
+
+/// `relationship_folded` events naming `edge`.
+async fn fold_events(pool: &PgPool, edge: Uuid) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'relationship_folded' AND e.payload->>'edge_id' = $1",
+    )
+    .bind(edge.to_string())
+    .fetch_one(pool)
+    .await
+    .expect("fold event count")
+}
+
+/// The id of `source`'s live goal edge.
+async fn goal_edge(pool: &PgPool, source: Uuid) -> Uuid {
+    sqlx::query_scalar(
+        "SELECT id FROM kb_edges \
+          WHERE source_table = 'kb_resources' AND source_id = $1 \
+            AND edge_kind = 'leads_to' AND NOT is_folded",
+    )
+    .bind(source)
+    .fetch_one(pool)
+    .await
+    .expect("the goal edge")
+}
+
+/// R advances goal G. The owner clears R's goal while the act holds G. The act has folded the
+/// edge R → G in its open transaction, so the clear must not fold it a second time: the update
+/// locks G's row up front (`DbBackend::lock_goal_rows`, the CURRENT goal's row), waits on the act,
+/// and once the act commits reads the edge already folded. One `relationship_folded` for the
+/// edge, the act's — never two.
+///
+/// FAILS IF the update does not lock the current goal's row before folding. The bite: in
+/// `DbBackend::lock_goal_rows`, start `rows` empty instead of from the current goal edges'
+/// targets. The clear then reads the edge unfolded on its own snapshot, fires its fold, waits on
+/// the act's lock on the edge row, and appends a second `relationship_folded` once the act
+/// commits — the count reads 2.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_goal_clear_racing_the_acts_erasure_of_the_goal_folds_the_edge_once(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+    let goal = ingest_typed(&app, &owner, own_context, "goal").await;
+    let (status, body) = call(
+        &app,
+        &owner,
+        Method::PATCH,
+        format!("/api/resources/{resource}"),
+        Some(json!({ "goal": goal })),
+    )
+    .await;
+    assert_eq!(status, 200, "precondition: the goal is set; body: {body}");
+    let edge = goal_edge(&app.pool, resource).await;
+
+    let act = hold_the_act(&app, goal).await;
+    let request = spawn_request(
+        &app,
+        &owner,
+        Method::PATCH,
+        &format!("/api/resources/{resource}"),
+        Some(json!({ "clear_goal": true })),
+    );
+    a_backend_waits_on_a_lock(&app.pool, &request, "PATCH clear_goal").await;
+    act.commit().await.expect("commit the act");
+    let (status, body) = request.await.expect("the raced clear must not panic");
+
+    assert!(
+        is_erased(&app.pool, goal).await,
+        "precondition: the act committed an erasure of the goal"
+    );
+    assert_eq!(status, 200, "the clear lands after the act; body: {body}");
+    assert_eq!(
+        fold_events(&app.pool, edge).await,
+        1,
+        "the edge was folded once — by the act — and the clear did not fold it again"
     );
 }
 
