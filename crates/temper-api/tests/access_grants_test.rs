@@ -339,7 +339,7 @@ async fn a_delegate_cannot_escalate_itself(pool: PgPool) {
     );
 }
 
-/// 5b.4: `require_cogmap_write_admin` now binds the GRANT axis, not just the write axis.
+/// 5b.4: the admin-only regime (`cogmap_write_requires_admin`) binds the GRANT axis, not just the write axis.
 ///
 /// It always kept the reserved L0 kernel admin-only for writes, but `grant_capability` never
 /// consulted it — so a `can_grant` holder could mint `can_write` on the kernel, reaching by the

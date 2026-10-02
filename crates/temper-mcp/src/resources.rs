@@ -22,6 +22,7 @@ use crate::cache_policy::{
     CALLER_DATA_SCOPE, CALLER_DATA_TTL_MS, DEPLOYMENT_SURFACE_SCOPE, DEPLOYMENT_SURFACE_TTL_MS,
 };
 use crate::service::AcrossAuth;
+use crate::tools::resources::map_read_err;
 
 /// Page size for the resource-browsing list calls. MCP resource listing is a
 /// flat browse surface (no client-driven pagination), so we cap each fetch at a
@@ -119,9 +120,13 @@ async fn read_resource_contents(
         .and_then(|rest| rest.strip_suffix("/content"))
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let content = client.resources().content(id).await.across_auth(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
-        })?;
+        // The resource tools' refusals, not a bespoke internal error: a not-found is the
+        // caller's (`invalid_params`), an erasure is named, only what is left is a fault.
+        let content = client
+            .resources()
+            .content(id)
+            .await
+            .across_auth(map_read_err)?;
 
         return Ok(ReadResourceResult::new(vec![ResourceContents::text(
             content.markdown,
@@ -140,13 +145,17 @@ async fn read_resource_contents(
         // (and the managed tier, which is always present on a view). The markdown is
         // fetched below as its own part rather than asked for as a section (the
         // `…/content` read is the same door a `…/content` URI uses).
-        let row = client.resources().get(id, None).await.across_auth(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
-        })?;
+        let row = client
+            .resources()
+            .get(id, None)
+            .await
+            .across_auth(map_read_err)?;
 
-        let content = client.resources().content(id).await.across_auth(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
-        })?;
+        let content = client
+            .resources()
+            .content(id)
+            .await
+            .across_auth(map_read_err)?;
 
         // Return metadata as JSON + content as markdown.
         let meta_json = serde_json::to_string_pretty(&row).map_err(|e| {

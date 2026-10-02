@@ -31,15 +31,14 @@ cd "$(git rev-parse --show-toplevel)"
 # surface (handlers/ or an mcp tool) is drift worth a second look.
 PREDICATES='is_system_admin|has_system_access|can_administer_grant|grant_authority|require_cogmap_write_admin|machine_authz::authorize|attenuates_to_caller|profile_can_grant'
 
-# Reviewed baseline: <count> <path> for each surface file that STILL gates in a handler. The
-# admin-authz enclosure (2026-07-22) moved access.rs's five admin gates and embed.rs's reembed gate
-# INTO the service as `&SystemAdmin` params, so F-3 is resolved for them and they leave this baseline.
-# What remains is the one cognitive_maps gate: a COMPOSITIONAL (Bucket-2) check where `is_system_admin`
-# is one branch of a disjunction (admin OR gating-team OR scoped grant), not the gate — deliberately
-# NOT enclosed (forcing it behind the proof would deny the scoped actors it exists to admit; see the
-# enclosure spec's audit inventory). A NEW handler-side predicate still reds CI here.
+# Reviewed baseline: <count> <path> for each surface file that STILL gates in a handler. It is
+# empty: the admin-authz enclosure (2026-07-22) moved access.rs's five admin gates and embed.rs's
+# reembed gate into the service as `&SystemAdmin` params, and resource erasure 2c (2026-10-01)
+# moved reconcile's regime decision (system admin for the L0 kernel and gating-team maps,
+# authorship for every other map) out of the cognitive_maps handler into
+# `DbBackend::reconcile_cognitive_map`, so the shared write path enforces it for every caller.
+# A NEW handler-side predicate still reds CI here.
 read -r -d '' BASELINE <<'EOF' || true
-1 crates/temper-api/src/handlers/cognitive_maps.rs
 EOF
 
 current() {

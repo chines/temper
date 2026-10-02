@@ -929,6 +929,30 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
                 parse_error_field(body, "message").unwrap_or_else(|| "not found".to_owned());
             ClientError::NotFound { message }
         }
+        // Keyed on the CODE, mirroring the 403 arm's `FORBIDDEN_DETAIL` — `GONE` (a folded block)
+        // and `RESOURCE_ERASED` share the status, and only the code separates "the row persists"
+        // from "the resource was erased".
+        410 if is_resource_erased_body(body) => {
+            match parse_error_field(body, "message")
+                .as_deref()
+                .and_then(parse_erased_id)
+            {
+                Some(id) => ClientError::ResourceErased { id },
+                // The code said erased and the sentence did not name an id this client can
+                // read. Guessing either way is wrong — `Gone` would tell the caller the row
+                // persists, and an id-less erased would invite a client to drop a file it cannot
+                // name — so it is reported as the contract disagreement it is, as the
+                // `PLAN_REFUSED` arm reports an unparseable refusal list.
+                None => ClientError::Server {
+                    status: 410,
+                    message: format!(
+                        "server sent {} with a message this client could not read an id from — \
+                         client and server disagree about the erasure contract",
+                        temper_core::error::RESOURCE_ERASED_CODE
+                    ),
+                },
+            }
+        }
         410 => {
             let message = parse_error_field(body, "message").unwrap_or_else(|| "gone".to_owned());
             ClientError::Gone { message }
@@ -1012,6 +1036,27 @@ fn parse_error_message(body: &str) -> Option<String> {
         .get("message")?
         .as_str()
         .map(ToOwned::to_owned)
+}
+
+/// Read the id out of a `RESOURCE_ERASED` sentence — the fixed `resource <id> was erased` that
+/// [`temper_core::error::TemperError::ResourceErased`]'s `Display` renders and the server's
+/// `ApiError::ResourceErased` pins. Called only after the CODE has classified the body; this
+/// extracts the payload, it never decides the kind.
+fn parse_erased_id(message: &str) -> Option<temper_core::types::ids::ResourceId> {
+    let id = message
+        .strip_prefix("resource ")?
+        .strip_suffix(" was erased")?;
+    uuid::Uuid::parse_str(id)
+        .ok()
+        .map(temper_core::types::ids::ResourceId::from)
+}
+
+/// True when an error body is the `RESOURCE_ERASED` envelope.
+///
+/// For a caller that ADMITS a `410` as data ([`HttpClient::send_admitting`]): the admitted body
+/// is not always the caller's data shape, and the code is the only thing that says which.
+pub(crate) fn is_resource_erased_body(body: &str) -> bool {
+    parse_error_field(body, "code").as_deref() == Some(temper_core::error::RESOURCE_ERASED_CODE)
 }
 
 /// Try to extract a named field from `{ "error": { "<field>": "..." } }`.
@@ -1374,6 +1419,136 @@ mod tests {
             temper_core::error::FORBIDDEN_DETAIL_CODE,
             "FORBIDDEN_DETAIL"
         );
+    }
+
+    /// The erased body as the server renders it: core's own `Display` is the message, so this
+    /// test reads the sentence the producer is built from rather than a literal it re-types.
+    fn erased_body(id: temper_core::types::ids::ResourceId) -> String {
+        serde_json::json!({
+            "error": {
+                "code": temper_core::error::RESOURCE_ERASED_CODE,
+                "message": temper_core::error::TemperError::ResourceErased(id).to_string(),
+            }
+        })
+        .to_string()
+    }
+
+    /// A 410 under `RESOURCE_ERASED` is the erased variant, carrying the id the sentence names.
+    /// FAILS IF the 410 arm stops keying on the code (it would come back `Gone`), or if core's
+    /// sentence is reworded away from what `parse_erased_id` reads.
+    #[test]
+    fn a_410_resource_erased_maps_to_the_erased_variant_with_its_id() {
+        let id = temper_core::types::ids::ResourceId::from(uuid::Uuid::now_v7());
+        match map_status_to_error(status(410), &erased_body(id)) {
+            ClientError::ResourceErased { id: got } => assert_eq!(got, id),
+            other => panic!("expected ResourceErased, got {other:?}"),
+        }
+    }
+
+    /// Every other 410 — the folded-block `GONE` — stays `Gone`, its sentence intact. FAILS IF the
+    /// erased arm keys on the status alone.
+    #[test]
+    fn a_410_gone_stays_gone() {
+        let body = r#"{"error":{"code":"GONE","message":"content block 0198 was folded"}}"#;
+        match map_status_to_error(status(410), body) {
+            ClientError::Gone { message } => assert_eq!(message, "content block 0198 was folded"),
+            other => panic!("expected Gone, got {other:?}"),
+        }
+    }
+
+    /// The erased code with a sentence that names no readable id is a contract disagreement —
+    /// never `Gone` (which would say the row persists), never an id-less erasure.
+    #[test]
+    fn a_resource_erased_code_with_an_unreadable_sentence_is_a_contract_disagreement() {
+        let body = r#"{"error":{"code":"RESOURCE_ERASED","message":"this resource is gone"}}"#;
+        match map_status_to_error(status(410), body) {
+            ClientError::Server {
+                status: 410,
+                message,
+            } => {
+                assert!(message.contains("RESOURCE_ERASED"), "{message}")
+            }
+            other => panic!("expected a 410 contract disagreement, got {other:?}"),
+        }
+    }
+
+    /// The variant renders exactly as core's — the CLI lifts it into core's variant, and a JSON
+    /// caller must read one sentence whichever side produced it.
+    #[test]
+    fn the_erased_variant_renders_exactly_as_cores() {
+        let id = temper_core::types::ids::ResourceId::from(uuid::Uuid::now_v7());
+        assert_eq!(
+            ClientError::ResourceErased { id }.to_string(),
+            temper_core::error::TemperError::ResourceErased(id).to_string()
+        );
+    }
+
+    /// The trap: `read_block` admits every 410 as data. An erased home resource's 410 must come
+    /// back as the erased error, not as a JSON parse failure on a missing `state` tag. FAILS IF
+    /// the code check before the `BlockRead` parse is removed (the result is `ClientError::Json`).
+    #[tokio::test]
+    async fn read_block_reports_an_erased_home_resource_as_erased() {
+        let id = temper_core::types::ids::ResourceId::from(uuid::Uuid::now_v7());
+        let block = uuid::Uuid::now_v7();
+        let body = erased_body(id);
+        let app = axum::Router::new().fallback(axum::routing::any(move || {
+            let body = body.clone();
+            std::future::ready((axum::http::StatusCode::GONE, body))
+        }));
+        let client = crate::TemperClient::in_process_with_token(
+            app,
+            Surface::Sdk,
+            "tok".to_owned(),
+            std::sync::Arc::new(crate::auth::MemoryTokenStore::empty()),
+        )
+        .expect("in-process client builds");
+        match client
+            .resources()
+            .read_block(uuid::Uuid::from(id), block)
+            .await
+        {
+            Err(ClientError::ResourceErased { id: got }) => assert_eq!(got, id),
+            // Names the outcome, never formats it: the client carries a bearer, and a formatted
+            // client result is what a cleartext-logging scan follows the token into.
+            Ok(_) => panic!("expected ResourceErased, got a block"),
+            Err(_) => panic!("expected ResourceErased, got another error"),
+        }
+    }
+
+    /// The admitted 410's own data — a folded `BlockRead` — still parses as data. FAILS IF the
+    /// erased guard keys on the status rather than the code (the folded read would become an error).
+    #[tokio::test]
+    async fn read_block_still_parses_a_folded_block_as_data() {
+        use temper_core::types::provenance::{BlockFoldDisposition, BlockRead};
+        let block = uuid::Uuid::now_v7();
+        let folded = BlockRead::Folded {
+            block_id: block,
+            folded_by_event_id: uuid::Uuid::now_v7(),
+            disposition: BlockFoldDisposition::ContentGone,
+            attribution_history: Vec::new(),
+        };
+        let body = serde_json::to_string(&folded).expect("BlockRead serializes");
+        let app = axum::Router::new().fallback(axum::routing::any(move || {
+            let body = body.clone();
+            std::future::ready((axum::http::StatusCode::GONE, body))
+        }));
+        let client = crate::TemperClient::in_process_with_token(
+            app,
+            Surface::Sdk,
+            "tok".to_owned(),
+            std::sync::Arc::new(crate::auth::MemoryTokenStore::empty()),
+        )
+        .expect("in-process client builds");
+        match client
+            .resources()
+            .read_block(uuid::Uuid::now_v7(), block)
+            .await
+        {
+            Ok(BlockRead::Folded { block_id, .. }) => assert_eq!(block_id, block),
+            // Names the outcome, never formats it (see the erased-home test above).
+            Ok(_) => panic!("expected BlockRead::Folded, got another block shape"),
+            Err(_) => panic!("expected BlockRead::Folded, got an error"),
+        }
     }
 
     #[test]

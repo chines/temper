@@ -164,6 +164,7 @@ pub async fn get_by_id(
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "No write standing on the owning resource", body = ErrorBody),
         (status = 404, description = "Resource not found or not visible", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn commit(

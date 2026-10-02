@@ -1517,11 +1517,11 @@ class BlobsApi:
         id: Annotated[UUID, Field(description="Blob ID")],
         invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
         correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
-        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")] = None,
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
         confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
-        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")] = None,
-        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")] = None,
-        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")] = None,
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1546,15 +1546,15 @@ class BlobsApi:
         :type invocation_id: UUID
         :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.
         :type correlation_id: UUID
-        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`.
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
         :type reasoning: str
         :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set.
         :type confidence: ConfidenceBand
-        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`.
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.
         :type rationale: str
-        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`.
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.
         :type persona: str
-        :param model: The model that authored the act. Authorship field — requires `confidence`.
+        :param model: The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.
         :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -1619,11 +1619,11 @@ class BlobsApi:
         id: Annotated[UUID, Field(description="Blob ID")],
         invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
         correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
-        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")] = None,
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
         confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
-        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")] = None,
-        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")] = None,
-        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")] = None,
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1648,15 +1648,15 @@ class BlobsApi:
         :type invocation_id: UUID
         :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.
         :type correlation_id: UUID
-        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`.
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
         :type reasoning: str
         :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set.
         :type confidence: ConfidenceBand
-        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`.
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.
         :type rationale: str
-        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`.
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.
         :type persona: str
-        :param model: The model that authored the act. Authorship field — requires `confidence`.
+        :param model: The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.
         :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str
@@ -1721,11 +1721,11 @@ class BlobsApi:
         id: Annotated[UUID, Field(description="Blob ID")],
         invocation_id: Annotated[Optional[Any], Field(description="The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.")] = None,
         correlation_id: Annotated[Optional[Any], Field(description="The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.")] = None,
-        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`.")] = None,
+        reasoning: Annotated[Optional[StrictStr], Field(description="Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
         confidence: Annotated[Optional[Any], Field(description="Graded self-assessed confidence band. Required whenever any other authorship field is set.")] = None,
-        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`.")] = None,
-        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`.")] = None,
-        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`.")] = None,
+        rationale: Annotated[Optional[StrictStr], Field(description="Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.")] = None,
+        persona: Annotated[Optional[StrictStr], Field(description="The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
+        model: Annotated[Optional[StrictStr], Field(description="The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.")] = None,
         x_temper_surface: Annotated[Optional[StrictStr], Field(description="The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.")] = None,
         _request_timeout: Union[
             None,
@@ -1750,15 +1750,15 @@ class BlobsApi:
         :type invocation_id: UUID
         :param correlation_id: The act-grain thread this write belongs to (`kb_events.correlation_id`). Optional, caller- minted, provenance-only. Rides independently of `invocation_id` and of authorship.
         :type correlation_id: UUID
-        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`.
+        :param reasoning: Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
         :type reasoning: str
         :param confidence: Graded self-assessed confidence band. Required whenever any other authorship field is set.
         :type confidence: ConfidenceBand
-        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`.
+        :param rationale: Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.
         :type rationale: str
-        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`.
+        :param persona: The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.
         :type persona: str
-        :param model: The model that authored the act. Authorship field — requires `confidence`.
+        :param model: The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.
         :type model: str
         :param x_temper_surface: The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
         :type x_temper_surface: str

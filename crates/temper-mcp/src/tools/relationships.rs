@@ -133,6 +133,7 @@ fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
         // each not-found with "{action}: ", a prefix the door does not re-apply —
         // the kind (invalid_params) and the gate are identical.
         ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::ResourceErased { id } => crate::tools::resources::erased_error(id),
         ClientError::Server {
             status: 400,
             message,
@@ -435,6 +436,17 @@ pub async fn relationship(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An edge door that floors its source answers an erased source `410 RESOURCE_ERASED`; the
+    /// tool names the erasure as the caller's state, never an internal fault. FAILS IF the erased
+    /// arm is removed from `map_err` (the catch-all answers `INTERNAL_ERROR`).
+    #[test]
+    fn an_erased_source_maps_to_a_named_invalid_params() {
+        let id = temper_core::types::ids::ResourceId::from(uuid::Uuid::now_v7());
+        let err = map_err(ClientError::ResourceErased { id }, "assert");
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert_eq!(err.message, format!("resource {id} was erased"));
+    }
 
     #[test]
     fn assert_relationship_input_deserializes() {

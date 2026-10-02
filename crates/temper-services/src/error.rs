@@ -33,8 +33,10 @@ pub enum ApiError {
     /// the uniform 404 and the 410 is never an erasure oracle.
     ///
     /// Carries the id and nothing else. The message is fixed: no title (a sentinel anyway), no
-    /// `body_hash`, no `ingest_state`, no `erased_at`.
-    #[error("resource {0} was erased")]
+    /// `body_hash`, no `ingest_state`, no `erased_at`. The sentence is core's
+    /// ([`temper_core::error::TemperError::ResourceErased`]), rendered through it rather than
+    /// restated: the client parses the id back out of it, so one literal owns it.
+    #[error("{}", erased_sentence(.0))]
     ResourceErased(ResourceId),
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
@@ -166,6 +168,12 @@ const INTERNAL_CLIENT_MESSAGE: &str = "An internal error occurred";
 /// quoting an upstream response), so a cap is what keeps one event from being
 /// whatever size the input was.
 pub const MAX_LOGGED_ERROR_BYTES: usize = 2048;
+
+/// [`ApiError::ResourceErased`]'s message: core's `TemperError::ResourceErased` sentence, so the
+/// literal has one owner on both sides of the wire.
+fn erased_sentence(id: &ResourceId) -> String {
+    temper_core::error::TemperError::ResourceErased(*id).to_string()
+}
 
 /// `s`, truncated on a char boundary with an ellipsis when past [`MAX_LOGGED_ERROR_BYTES`].
 ///
@@ -802,6 +810,18 @@ mod tests {
         assert!(
             body["error"].get("details").is_none(),
             "an erased resource carries no details: {body}"
+        );
+    }
+
+    /// One sentence for the erasure on both sides of the wire: the API renders exactly core's,
+    /// which the client parses the id back out of. FAILS IF `ApiError::ResourceErased` stops
+    /// delegating and either literal is reworded.
+    #[test]
+    fn the_erased_variant_renders_exactly_as_cores() {
+        let id = ResourceId::from(uuid::Uuid::now_v7());
+        assert_eq!(
+            ApiError::ResourceErased(id).to_string(),
+            TemperError::ResourceErased(id).to_string()
         );
     }
 

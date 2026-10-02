@@ -121,21 +121,47 @@ pub struct ActInput {
     /// minted, provenance-only. Rides independently of `invocation_id` and of authorship.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<CorrelationId>,
-    /// Free-text reasoning for the act. Authorship field — requires `confidence`.
+    /// Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
     /// Graded self-assessed confidence band. Required whenever any other authorship field is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<ConfidenceBand>,
-    /// Structured rationale for the act. Authorship field — requires `confidence`.
+    /// Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
+    /// bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rationale: Option<String>,
-    /// The persona/role the author acted as. Authorship field — requires `confidence`.
+    /// The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
+    /// bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
-    /// The model that authored the act. Authorship field — requires `confidence`.
+    /// The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+/// The most bytes `reasoning` or `rationale` may carry. These are prose justifications written
+/// into the ledger (`kb_events` metadata) on every authored write, so the bound is what keeps one
+/// write from inflating the ledger. 16 KiB is several pages — far above the paragraph an act's
+/// justification needs. Not measured against production: a ceiling chosen well clear of any
+/// plausible legitimate value. If a legitimate write is refused (the error names the field and
+/// this limit), raise it.
+pub const MAX_ACT_PROSE_BYTES: usize = 16_384;
+
+/// The most bytes `persona` or `model` may carry. These are identifiers (a model id is a few dozen
+/// bytes); 256 leaves room for provider-prefixed ids. Chosen, not measured, on the same terms as
+/// [`MAX_ACT_PROSE_BYTES`].
+pub const MAX_ACT_LABEL_BYTES: usize = 256;
+
+/// Refuse an authorship field longer than `limit` bytes, naming the field and the limit.
+fn bounded(field: &str, value: &Option<String>, limit: usize) -> Result<(), TemperError> {
+    match value {
+        Some(v) if v.len() > limit => Err(TemperError::BadRequest(format!(
+            "agent authorship field `{field}` is {} bytes; the limit is {limit}",
+            v.len()
+        ))),
+        _ => Ok(()),
+    }
 }
 
 impl ActInput {
@@ -144,8 +170,10 @@ impl ActInput {
     /// Authorship is `Some` iff `confidence` is supplied. Supplying any other authorship field
     /// (`reasoning`/`rationale`/`persona`/`model`) without a `confidence` band is a hard
     /// [`TemperError::BadRequest`] — `AgentAuthorship::confidence` is non-`Option`, so a graded
-    /// band is mandatory once authorship is claimed. The `invocation_id` and `correlation_id`
-    /// correlators ride independently and may be present with no authorship at all.
+    /// band is mandatory once authorship is claimed. Each authorship string is bounded
+    /// ([`MAX_ACT_PROSE_BYTES`], [`MAX_ACT_LABEL_BYTES`]); an over-long one is a `BadRequest` naming
+    /// the field. The `invocation_id` and `correlation_id` correlators ride independently and may be
+    /// present with no authorship at all.
     pub fn into_act_context(self) -> Result<ActContext, TemperError> {
         let ActInput {
             invocation_id,
@@ -158,13 +186,19 @@ impl ActInput {
         } = self;
 
         let authorship = match confidence {
-            Some(confidence) => Some(AgentAuthorship {
-                reasoning,
-                confidence,
-                rationale,
-                persona,
-                model,
-            }),
+            Some(confidence) => {
+                bounded("reasoning", &reasoning, MAX_ACT_PROSE_BYTES)?;
+                bounded("rationale", &rationale, MAX_ACT_PROSE_BYTES)?;
+                bounded("persona", &persona, MAX_ACT_LABEL_BYTES)?;
+                bounded("model", &model, MAX_ACT_LABEL_BYTES)?;
+                Some(AgentAuthorship {
+                    reasoning,
+                    confidence,
+                    rationale,
+                    persona,
+                    model,
+                })
+            }
             None => {
                 if reasoning.is_some()
                     || rationale.is_some()
@@ -229,6 +263,47 @@ impl From<ActContext> for ActInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn authored(field: &str, value: String) -> ActInput {
+        let mut input = ActInput {
+            confidence: Some(ConfidenceBand::Probable),
+            ..Default::default()
+        };
+        match field {
+            "reasoning" => input.reasoning = Some(value),
+            "rationale" => input.rationale = Some(value),
+            "persona" => input.persona = Some(value),
+            "model" => input.model = Some(value),
+            other => unreachable!("not an authorship field: {other}"),
+        }
+        input
+    }
+
+    /// FAILS IF an authorship string is unbounded, or bounded below its stated limit: each field
+    /// is accepted at exactly its limit and refused one byte over it, naming the field.
+    #[test]
+    fn each_authorship_string_is_bounded_at_its_limit() {
+        for (field, limit) in [
+            ("reasoning", MAX_ACT_PROSE_BYTES),
+            ("rationale", MAX_ACT_PROSE_BYTES),
+            ("persona", MAX_ACT_LABEL_BYTES),
+            ("model", MAX_ACT_LABEL_BYTES),
+        ] {
+            authored(field, "x".repeat(limit))
+                .into_act_context()
+                .unwrap_or_else(|e| panic!("{field} at its limit is accepted: {e:?}"));
+            let refused = authored(field, "x".repeat(limit + 1))
+                .into_act_context()
+                .expect_err("one byte over the limit is refused");
+            match refused {
+                TemperError::BadRequest(message) => assert!(
+                    message.contains(field) && message.contains(&limit.to_string()),
+                    "the refusal names {field} and its limit: {message}"
+                ),
+                other => panic!("{field}: expected BadRequest, got {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn authorship_serializes_confidence_band() {

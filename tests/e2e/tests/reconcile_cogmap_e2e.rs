@@ -277,7 +277,7 @@ async fn non_admin_reconcile_is_denied(pool: sqlx::PgPool) {
     common::enable_invite_only(&pool, admin_id).await;
 
     // A SECOND user with system access (a `watcher` of temper-system) but NOT admin: it passes the
-    // system-access middleware and reaches the handler, where `require_cogmap_write_admin` denies it.
+    // system-access middleware and reaches reconcile, where `DbBackend::authorize_reconcile` denies it.
     let second_token = common::generate_second_user_jwt();
     let second_id = provision_profile(&app, &second_token).await;
     sqlx::query(
@@ -303,7 +303,7 @@ async fn non_admin_reconcile_is_denied(pool: sqlx::PgPool) {
     assert_eq!(
         resp.status(),
         StatusCode::FORBIDDEN,
-        "a non-admin write to the root-team-joined L0 map must be denied by the handler gate"
+        "a non-admin write to the root-team-joined L0 map must be denied by reconcile's regime gate"
     );
     let body: serde_json::Value = resp.json().await.expect("json parse");
     assert_eq!(body["error"]["code"], "FORBIDDEN");

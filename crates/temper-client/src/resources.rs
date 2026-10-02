@@ -208,9 +208,12 @@ impl<'a> ResourceClient<'a> {
     /// `GET /api/resources/{id}/blocks/{block_id}`. `200` and `410 Gone` carry the
     /// same `BlockRead` envelope — the `state` tag distinguishes them — so both
     /// parse as data (the 410 rides [`HttpClient::send_admitting`], which returns
-    /// the body the plain error mapping would discard). `404` — a block that does
-    /// not exist OR is not visible, indistinguishable by design — synthesizes
-    /// [`BlockRead::Absent`], denying existence. Every other failure (auth,
+    /// the body the plain error mapping would discard). The route's own block-naming
+    /// `404` — no such block under a visible home — synthesizes [`BlockRead::Absent`].
+    /// A home resource the caller cannot see answers the resource-naming `404`, which
+    /// stays [`ClientError::NotFound`], denying existence. A home resource that was
+    /// erased answers `410` under `RESOURCE_ERASED` to a caller who held it, and that
+    /// comes back as [`ClientError::ResourceErased`]. Every other failure (auth,
     /// transport, 5xx) stays an `Err`, exactly as the sibling reads report.
     pub async fn read_block(&self, resource_id: Uuid, block_id: Uuid) -> Result<BlockRead> {
         let token = self.http.resolve_token()?;
@@ -222,7 +225,19 @@ impl<'a> ResourceClient<'a> {
             .await
         {
             Ok(resp) => {
+                let status = resp.status();
                 let bytes = resp.bytes().await?;
+                // The admitted 410 is not always a `BlockRead`: the server answers an erased
+                // HOME resource's holder 410 too, under `RESOURCE_ERASED` and the error envelope
+                // (`substrate_read::block_read_select` classifies its miss through `erased_or`).
+                // The code is checked BEFORE the parse — otherwise the erasure surfaces as a JSON
+                // error about a missing `state` tag, and the one answer that names it is lost.
+                if status == StatusCode::GONE {
+                    let body = String::from_utf8_lossy(&bytes);
+                    if crate::http::is_resource_erased_body(&body) {
+                        return Err(crate::http::map_status_to_error(status, &body));
+                    }
+                }
                 Ok(serde_json::from_slice(&bytes)?)
             }
             // The route's OWN 404 names the block ("content block {id} not found") — that is

@@ -23,6 +23,61 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.3 — unreleased
+- **Resource erasure 2c: write doors refuse an erased resource with `410 RESOURCE_ERASED`, checked inside the write**
+  The resource write doors (`PATCH /api/resources/{id}`, `PUT /api/resources/{id}/meta`,
+  `PUT /api/ingest/{id}`, `DELETE /api/resources/{id}`, `POST /api/resources/{id}/provenance`,
+  `POST /api/resources/{id}/artifacts`, `POST /api/facets` on a resource,
+  `POST /api/resources/{id}/blocks`, `POST /api/resources/{id}/finalize`, the ingestion record of a
+  segmented `POST /api/ingest`, each candidate of `POST /api/resources/reblock`, and the source of
+  `POST /api/relationships`) check the caller's right to modify inside the write's own transaction,
+  under a row lock, so a write racing an erasure or a soft delete either lands before it or is
+  refused after it. A caller who holds standing on an erased resource (`resource_husk_held_by`, the
+  read side's population) gets `410 RESOURCE_ERASED` where it got `403`; every other caller keeps
+  `403`, and a soft-deleted resource keeps `403`. A refused caller takes no row lock on `DELETE`.
+  A `PATCH` that sets a goal the caller may not link is refused as a whole: the title and body no
+  longer land without the goal. Reblock addressed at an erased id answers a holder `410` (everyone
+  else keeps `404`); a candidate erased under a running batch is a `denied` row. A segmented ingest
+  replaying an idempotency key onto a since-deleted resource gets `403` where it got `404`. A
+  principal with no emitter to resolve (a read-only machine client) is refused by the gate (`403`)
+  on create and on these doors, where it got `500`. The relationship doors (`.../retype`,
+  `.../reweight`, `.../fold`, `POST` and `DELETE` on `.../facets`) check the source resource the
+  same way; an erased or deleted target keeps its `404`, and an edge that touched a since-erased
+  resource was folded by the erasure and keeps answering `404`. `POST /api/resources/{id}/reassign`
+  refuses a deleted or erased resource (`403`, or `410` to the owner of an erased one) where it moved
+  it, and decides authority before anything about the id: an unknown id answers `403` where it
+  answered `404`, and a cognitive-map-homed resource's `400` (now declared) answers only its owner,
+  where every caller got it; `POST /api/teams/{id}/reassign` and `DELETE /api/teams/{id}/members/{profile_id}`'s
+  `residual_owned` count and move live resources only. `POST`/`DELETE /api/resources/{id}/grants`
+  refuse grant administration on a deleted or erased resource from every caller, its owner and a
+  system admin included (`403`, or `410` to a holder of an erased one). A relationship assert into a
+  target, a blob relation onto a resource peer, and a grant or revoke each take the resource's row
+  lock inside the write, so one racing an erasure is refused (`404`, or `410`/`403` on the grant
+  doors) instead of answering `500` or landing on it. `GET /api/resources/{id}/blocks/{block_id}`
+  answers a holder of an erased resource `410 RESOURCE_ERASED` (everyone else keeps `404`; a folded
+  block keeps its `410` `BlockRead`). `PUT /api/cognitive-maps/{id}` (reconcile) requires
+  authorship of the map; the L0 kernel and maps joined to the gating team keep requiring a system
+  admin. The `principal_erased` and `resource_erased` ledger payloads, and their registered payload
+  schemas, no longer carry `propagated_to_clients` (`20261002000020`); no event carrying it exists.
+  Every door that can answer `410 RESOURCE_ERASED` declares it in the contract, and
+  `POST /api/resources/{id}/finalize` declares the `409` and `422` it answers; the SDKs regenerate.
+  `PUT /api/cognitive-maps/{id}` declares its `400` and `401`, and append and finalize their `401`.
+  Every authored write refuses an over-long authorship field with `400`, naming the field and the
+  limit: `reasoning` and `rationale` at most 16384 bytes, `persona` and `model` at most 256.
+  temper-client reads a `410` carrying `RESOURCE_ERASED` as a typed erasure, a block read included;
+  every other `410` stays gone. The CLI reports the erasure under code `RESOURCE_ERASED`, and
+  `resource delete`, `update` and `annotate` remove the local projected copy of the resource they
+  addressed when they meet it; `resource show` reports it and leaves the vault alone. MCP tools and
+  MCP resource reads report an erased resource as `invalid_params` naming the erasure, and an
+  unknown or deleted id as `invalid_params` (`-32602`) where it was `internal_error` (`-32603`).
+  Who observes: the owner or a grant holder of an erased resource; a caller whose goal link is
+  refused; a team admin reassigning or removing a departing member; the owner or a system admin
+  administering grants on a deleted resource; a caller reconciling a cognitive map; MCP and CLI
+  users meeting an erased or unknown id; a caller reassigning an id it has no authority over; an
+  agent sending an over-long authorship field. User-visible: yes. Release relevance: signal-only.
+pr: self
+classes: additive,behavioral
+surfaces: http,mcp,clients,cli-stdout,schema
+status: signal-only
 - **The per-row machine-client, connection and subscription routes refuse a caller without authority as `404`, indistinguishable from a missing id**
   `GET`/`DELETE /api/machine-clients/{id}` and `POST …/rotate-secret`; `GET`/`DELETE
   /api/connections/{id}`, `POST …/credential`, `…/webhook-events`, `…/tool-manifest` and

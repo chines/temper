@@ -25,16 +25,16 @@ module Temper::Generated
     # The invocation this act is correlated under (`kb_events.invocation_id`). Optional — a correlation aid, never a substitute for authn/authz.
     attr_accessor :invocation_id
 
-    # The model that authored the act. Authorship field — requires `confidence`.
+    # The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.
     attr_accessor :model
 
-    # The persona/role the author acted as. Authorship field — requires `confidence`.
+    # The persona/role the author acted as. Authorship field — requires `confidence`. At most 256 bytes.
     attr_accessor :persona
 
-    # Structured rationale for the act. Authorship field — requires `confidence`.
+    # Structured rationale for the act. Authorship field — requires `confidence`. At most 16384 bytes.
     attr_accessor :rationale
 
-    # Free-text reasoning for the act. Authorship field — requires `confidence`.
+    # Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
     attr_accessor :reasoning
 
     # Base64-encoded MessagePack of `Vec<PackedChunk>`. Server computes via `temper_ingest::pipeline::prepare_markdown` if absent.

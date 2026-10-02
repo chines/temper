@@ -58,7 +58,7 @@ invocation_id: InvocationId | null,
  */
 correlation_id: CorrelationId | null, 
 /**
- * Free-text reasoning for the act. Authorship field — requires `confidence`.
+ * Free-text reasoning for the act. Authorship field — requires `confidence`. At most 16384 bytes.
  */
 reasoning: string | null, 
 /**
@@ -66,15 +66,17 @@ reasoning: string | null,
  */
 confidence: ConfidenceBand | null, 
 /**
- * Structured rationale for the act. Authorship field — requires `confidence`.
+ * Structured rationale for the act. Authorship field — requires `confidence`. At most 16384
+ * bytes.
  */
 rationale: string | null, 
 /**
- * The persona/role the author acted as. Authorship field — requires `confidence`.
+ * The persona/role the author acted as. Authorship field — requires `confidence`. At most 256
+ * bytes.
  */
 persona: string | null, 
 /**
- * The model that authored the act. Authorship field — requires `confidence`.
+ * The model that authored the act. Authorship field — requires `confidence`. At most 256 bytes.
  */
 model: string | null, };
 

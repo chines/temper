@@ -5,7 +5,8 @@
 //! unknown id gets, so the `410` never becomes an erasure oracle.
 //!
 //! Witnessed on the three doors that read a resource, `GET /api/resources/{id}`,
-//! `GET /api/resources/{id}/content` and `GET /api/resources/{id}/meta`:
+//! `GET /api/resources/{id}/content` and `GET /api/resources/{id}/meta`, and on the block read
+//! `GET /api/resources/{id}/blocks/{block_id}`, whose home-resource miss classifies the same way:
 //!
 //! * the owner of a husk gets `410` + `RESOURCE_ERASED`, and the body names the id and nothing
 //!   else — neither the original title nor the body text;
@@ -209,41 +210,52 @@ async fn get(app: &common::TestApp, who: &Caller, path: &str) -> (u16, String) {
 /// of the original title or body text anywhere in the bytes.
 async fn assert_husk_410(app: &common::TestApp, who: &Caller, resource: Uuid, label: &str) {
     for path in reads(resource) {
-        let (status, text) = get(app, who, &path).await;
-        assert_eq!(status, 410, "{label}: {path} answers 410; body: {text}");
-        let body: Value = serde_json::from_str(&text).expect("410 body is JSON");
-        assert_eq!(body["error"]["code"], RESOURCE_ERASED, "{label}: {path}");
-        assert_eq!(
-            body["error"]["message"],
-            format!("resource {resource} was erased"),
-            "{label}: {path} — the fixed message names the id and nothing else"
-        );
-        let mut keys: Vec<&str> = body["error"]
-            .as_object()
-            .expect("error object")
-            .keys()
-            .map(String::as_str)
-            .collect();
-        keys.sort_unstable();
-        assert_eq!(
-            keys,
-            ["code", "message"],
-            "{label}: {path} — no details ride the 410"
-        );
-        assert_eq!(
-            body.as_object().expect("body object").len(),
-            1,
-            "{label}: {path}"
-        );
-        assert!(
-            !text.contains(TITLE),
-            "{label}: {path} leaked the title: {text}"
-        );
-        assert!(
-            !text.contains(BODY),
-            "{label}: {path} leaked the body: {text}"
-        );
+        assert_husk_410_at(app, who, resource, &path, label).await;
     }
+}
+
+/// [`assert_husk_410`] for one `path` reading `resource`.
+async fn assert_husk_410_at(
+    app: &common::TestApp,
+    who: &Caller,
+    resource: Uuid,
+    path: &str,
+    label: &str,
+) {
+    let (status, text) = get(app, who, path).await;
+    assert_eq!(status, 410, "{label}: {path} answers 410; body: {text}");
+    let body: Value = serde_json::from_str(&text).expect("410 body is JSON");
+    assert_eq!(body["error"]["code"], RESOURCE_ERASED, "{label}: {path}");
+    assert_eq!(
+        body["error"]["message"],
+        format!("resource {resource} was erased"),
+        "{label}: {path} — the fixed message names the id and nothing else"
+    );
+    let mut keys: Vec<&str> = body["error"]
+        .as_object()
+        .expect("error object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["code", "message"],
+        "{label}: {path} — no details ride the 410"
+    );
+    assert_eq!(
+        body.as_object().expect("body object").len(),
+        1,
+        "{label}: {path}"
+    );
+    assert!(
+        !text.contains(TITLE),
+        "{label}: {path} leaked the title: {text}"
+    );
+    assert!(
+        !text.contains(BODY),
+        "{label}: {path} leaked the body: {text}"
+    );
 }
 
 /// Assert `who` reads the live resource on every door — the precondition that makes a later
@@ -263,19 +275,32 @@ async fn assert_reads_live(app: &common::TestApp, who: &Caller, resource: Uuid, 
 async fn assert_unknown_id_404(app: &common::TestApp, who: &Caller, resource: Uuid, label: &str) {
     let unknown = Uuid::now_v7();
     for (path, unknown_path) in reads(resource).into_iter().zip(reads(unknown)) {
-        let (status, text) = get(app, who, &path).await;
-        let (unknown_status, unknown_text) = get(app, who, &unknown_path).await;
-        assert_eq!(
-            unknown_status, 404,
-            "an unknown id is 404 on {unknown_path}"
-        );
-        assert_eq!(status, unknown_status, "{label}: {path}; body: {text}");
-        assert_eq!(
-            text.replace(&resource.to_string(), "<id>"),
-            unknown_text.replace(&unknown.to_string(), "<id>"),
-            "{label}: {path} must read exactly as an unknown id's 404"
-        );
+        assert_unknown_id_404_at(app, who, (resource, &path), (unknown, &unknown_path), label)
+            .await;
     }
+}
+
+/// [`assert_unknown_id_404`] for one door: `path` reads `resource`, `unknown_path` reads the
+/// never-existing `unknown` through the same door.
+async fn assert_unknown_id_404_at(
+    app: &common::TestApp,
+    who: &Caller,
+    (resource, path): (Uuid, &str),
+    (unknown, unknown_path): (Uuid, &str),
+    label: &str,
+) {
+    let (status, text) = get(app, who, path).await;
+    let (unknown_status, unknown_text) = get(app, who, unknown_path).await;
+    assert_eq!(
+        unknown_status, 404,
+        "an unknown id is 404 on {unknown_path}"
+    );
+    assert_eq!(status, unknown_status, "{label}: {path}; body: {text}");
+    assert_eq!(
+        text.replace(&resource.to_string(), "<id>"),
+        unknown_text.replace(&unknown.to_string(), "<id>"),
+        "{label}: {path} must read exactly as an unknown id's 404"
+    );
 }
 
 // ── WITNESS: the owner of a husk gets 410 RESOURCE_ERASED on every read, and nothing else ──────
@@ -375,4 +400,126 @@ async fn the_owner_of_a_tombstone_gets_404_not_410(pool: PgPool) {
     assert!(!erased, "precondition: a tombstone is not an erasure");
 
     assert_unknown_id_404(&app, &owner, resource, "tombstone owner").await;
+}
+
+// ── the block read: `GET /api/resources/{id}/blocks/{block_id}` ───────────────────────────────
+
+/// The resource's first content block, read before any erasure or delete — a read-only probe of
+/// what the ingest door wrote, so the block address under test is a real one.
+async fn first_block(pool: &PgPool, resource: Uuid) -> Uuid {
+    sqlx::query_scalar(
+        "SELECT id FROM kb_content_blocks WHERE resource_id = $1 ORDER BY seq LIMIT 1",
+    )
+    .bind(resource)
+    .fetch_one(pool)
+    .await
+    .expect("the ingested resource has a content block")
+}
+
+fn block_path(resource: Uuid, block: Uuid) -> String {
+    format!("/api/resources/{resource}/blocks/{block}")
+}
+
+/// Assert `who` reads `block` live on its home `resource` — the precondition that makes a later
+/// `404` or `410` about the erasure or the delete, not about an address that never resolved.
+async fn assert_block_live(
+    app: &common::TestApp,
+    who: &Caller,
+    resource: Uuid,
+    block: Uuid,
+    label: &str,
+) {
+    let (status, text) = get(app, who, &block_path(resource, block)).await;
+    assert_eq!(status, 200, "{label}: the live block reads; body: {text}");
+    let body: Value = serde_json::from_str(&text).expect("block read is JSON");
+    assert_eq!(body["state"], "live", "{label}: {text}");
+}
+
+/// FAILS IF the block read answers the owner of an erased home resource with anything but the
+/// husk `410` under `RESOURCE_ERASED` and the error envelope (the bite: `block_read_select`
+/// mapping its `NotVisible` miss straight to `NotFound`, without `erased_or`, answers `404`).
+/// The body is the error envelope, never a folded `BlockRead` — `assert_husk_410_at` admits a
+/// body with exactly one `error` key and no `state`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_owner_of_an_erased_resource_gets_410_on_the_block_read(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, _) = caller(&app.pool, "owner").await;
+    let home = team_context(&app.pool, &[owner.profile]).await;
+    let resource = ingest(&app, &owner, home).await;
+    let block = first_block(&app.pool, resource).await;
+
+    assert_block_live(&app, &owner, resource, block, "owner").await;
+
+    erase(&app, resource).await;
+
+    assert_husk_410_at(
+        &app,
+        &owner,
+        resource,
+        &block_path(resource, block),
+        "owner",
+    )
+    .await;
+}
+
+/// The block read's oracle check. FAILS IF a home-context member holding no grant can tell the
+/// erased home resource from one that never existed through the block read — by status or by one
+/// byte of body once each body's own resource id is normalized (the bite: classifying the miss on
+/// "erased" alone, not on `resource_husk_held_by`, answers this caller `410`). The owner's `410`
+/// in the same world shows the resource IS a husk.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_non_holder_gets_the_unknown_id_404_on_the_block_read(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, _) = caller(&app.pool, "owner").await;
+    let (member, _) = caller(&app.pool, "member").await;
+    let home = team_context(&app.pool, &[owner.profile, member.profile]).await;
+    let resource = ingest(&app, &owner, home).await;
+    let block = first_block(&app.pool, resource).await;
+
+    assert_block_live(&app, &member, resource, block, "context member").await;
+
+    erase(&app, resource).await;
+
+    let unknown = Uuid::now_v7();
+    assert_unknown_id_404_at(
+        &app,
+        &member,
+        (resource, &block_path(resource, block)),
+        (unknown, &block_path(unknown, block)),
+        "context member",
+    )
+    .await;
+    assert_husk_410_at(
+        &app,
+        &owner,
+        resource,
+        &block_path(resource, block),
+        "owner, same world",
+    )
+    .await;
+}
+
+/// FAILS IF the block read answers the owner of a tombstone (soft-deleted, never erased) `410`
+/// (the bite: a husk test on `is_active` rather than `erased_at`), or anything but the unknown
+/// id's `404`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn the_owner_of_a_tombstone_gets_404_on_the_block_read(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+    let block = first_block(&app.pool, resource).await;
+
+    assert_block_live(&app, &owner, resource, block, "owner").await;
+
+    delete(&app, &owner, resource).await;
+
+    let unknown = Uuid::now_v7();
+    assert_unknown_id_404_at(
+        &app,
+        &owner,
+        (resource, &block_path(resource, block)),
+        (unknown, &block_path(unknown, block)),
+        "tombstone owner",
+    )
+    .await;
 }

@@ -29,11 +29,6 @@
         "$ref": "#/$defs/RedactedEventFields"
       }
     },
-    "propagated_to_clients": {
-      "description": "`true` iff the `410 resource_erased` signal exists for clients (D7): the signal exists,\nnot that every client obeyed it.",
-      "type": "boolean",
-      "default": false
-    },
     "redacted_fields": {
       "description": "The ledger paths this act redacted to their sentinels (D3). Empty until sanctioned field\nredaction ships (D12).",
       "type": "array",

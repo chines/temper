@@ -125,8 +125,11 @@ fingerprint() {
 # do not red claims bound to the gate that happens to live in it.
 #
 # The `fn` gates are named here because each was READ, not because it matched a pattern:
-# `require_cogmap_write_admin` is the one whose no-op branch made four cogmap surfaces false, and
-# `require_manage_on_team` is the bar three `admin` subcommands were said to exceed.
+# `reconcile_regime` (`DbBackend::authorize_reconcile`, its authorship arm
+# `check_cogmap_authorable_in_tx`, and the structural `cogmap_write_requires_admin`) decides who may
+# reconcile a cognitive map — the authorship arm's own predicate, `cogmap_authorable_by_profile`, is
+# SQL and is not fingerprinted here — and `require_manage_on_team` is the bar three `admin`
+# subcommands were said to exceed.
 read -r -d '' GATES <<'EOF' || true
 audit_gate|file:crates/temper-services/src/authz/audit_gate.rs
 connection|file:crates/temper-services/src/authz/connection.rs
@@ -137,7 +140,7 @@ read_gates|file:crates/temper-services/src/authz/read_gates.rs
 ledger_subject|block:fn:readable_event_types:crates/temper-services/src/services/admin_ledger_service.rs
 subscription|file:crates/temper-services/src/authz/subscription.rs
 two_sided|file:crates/temper-services/src/authz/two_sided.rs
-require_cogmap_write_admin|block:fn:require_cogmap_write_admin:crates/temper-services/src/services/access_service.rs
+reconcile_regime|block:fn:authorize_reconcile:crates/temper-services/src/backend/db_backend.rs;block:fn:check_cogmap_authorable_in_tx:crates/temper-services/src/backend/db_backend.rs;block:fn:cogmap_write_requires_admin:crates/temper-services/src/services/access_service.rs
 is_system_admin|block:fn:is_system_admin:crates/temper-services/src/services/access_service.rs
 require_manage_on_team|block:fn:require_manage_on_team:crates/temper-services/src/services/team_service.rs
 can_manage|block:fn:can_manage:crates/temper-services/src/services/team_service.rs
@@ -196,12 +199,25 @@ current_gates() {
 # prose those types publish as OpenAPI schema descriptions.
 #
 # `gate <name> <fingerprint>` — code-only hash; see `fingerprint`.
+#
+# REVIEWED 2026-10-01 (resource erasure 2c, Step 3) — `grant` f1de797e6695 -> 38fca1c55861. The gate
+# NARROWED: `GrantAuthority::resolve`'s system-admin arm now refuses a dead `kb_resources` subject
+# (tombstone or erased husk), and the owner's derived grant arm floors on liveness (20261002000010).
+# Re-read against the claims bound to `grant` (admin_ledger.rs, openapi.rs): a system admin's ledger
+# read short-circuits on is_system_admin before can_administer_grant, so "a system admin reads all
+# of them" holds; "a caller who may administer grants on the subject reads its grant acts" holds,
+# the population now excluding a dead resource's owner. No over-claim.
+# REVIEWED 2026-10-02 (resource erasure 2c, review wave) — `reconcile_regime` 0ee7e4e11553 ->
+# f9833fb81725. The gate did not move; its definition WIDENED to fingerprint the authorship arm
+# (`check_cogmap_authorable_in_tx`), so that arm cannot widen unseen. Claim files about bind/unbind
+# rebound to `two_sided`, and genesis's reserved-id claims to `is_system_admin`. Re-read the one
+# claim still bound to `reconcile_regime` (handlers/cognitive_maps.rs, reconcile's 403): holds.
 read -r -d '' BASELINE <<'EOF' || true
 claim crates/temper-api/src/handlers/access.rs 44 is_system_admin
 claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
-claim crates/temper-api/src/handlers/cognitive_maps.rs 4 require_cogmap_write_admin
+claim crates/temper-api/src/handlers/cognitive_maps.rs 4 reconcile_regime,two_sided
 claim crates/temper-api/src/handlers/connections.rs 13 connection,machine,require_manage_on_team,can_manage
 claim crates/temper-api/src/handlers/embed.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/erasure.rs 6 is_system_admin
@@ -223,17 +239,17 @@ claim crates/temper-cli/src/commands/admin_machine.rs 3 machine
 claim crates/temper-cli/src/commands/admin_saml.rs 1 -
 claim crates/temper-cli/src/commands/admin_slack.rs 1 -
 claim crates/temper-cli/src/commands/admin_subscription.rs 2 subscription
-claim crates/temper-cli/src/commands/cogmap.rs 3 require_cogmap_write_admin
+claim crates/temper-cli/src/commands/cogmap.rs 3 two_sided,is_system_admin
 claim crates/temper-cli/src/commands/context_cmd.rs 2 context_admin
 claim crates/temper-cli/src/commands/warmup.rs 1 is_system_admin
 claim crates/temper-mcp/src/service.rs 3 -
 claim crates/temper-mcp/src/tools/reblock.rs 3 -
-claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 require_cogmap_write_admin
+claim crates/temper-mcp/src/tools/cognitive_maps.rs 1 is_system_admin
 claim crates/temper-mcp/src/tools/contexts.rs 2 context_admin,two_sided
-claim crates/temper-services/src/services/access_service.rs 5 is_system_admin
-claim crates/temper-services/src/services/cogmap_service.rs 2 require_cogmap_write_admin
+claim crates/temper-services/src/services/access_service.rs 6 is_system_admin
+claim crates/temper-services/src/services/cogmap_service.rs 2 two_sided
 claim crates/temper-services/src/services/admin_directory_service.rs 1 is_system_admin
-claim crates/temper-services/src/services/connection_service.rs 10 connection
+claim crates/temper-services/src/services/connection_service.rs 11 connection
 claim crates/temper-services/src/services/context_service.rs 14 context_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
@@ -247,13 +263,13 @@ claim crates/temper-services/src/services/team_service.rs 2 require_manage_on_te
 gate audit_gate 05a9b61226c4
 gate connection 30434edb8ee6
 gate context_admin 6bd5aa70ab69
-gate grant f1de797e6695
+gate grant 38fca1c55861
 gate machine 5a43dd016820
+gate reconcile_regime f9833fb81725
 gate read_gates 5b394645d054
 gate ledger_subject 595564c89c9c
 gate subscription 97b9a90d234d
 gate two_sided 4fb1fb73d559
-gate require_cogmap_write_admin 0e739e3f803f
 gate is_system_admin 1f8215393b50
 gate require_manage_on_team 9dc74ce6502d
 gate can_manage b48bac6a803e

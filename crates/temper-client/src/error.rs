@@ -82,6 +82,26 @@ pub enum ClientError {
     #[error("{message}")]
     Gone { message: String },
 
+    /// 410 under [`temper_core::error::RESOURCE_ERASED_CODE`] — the addressed resource was
+    /// ERASED and the caller holds standing on the husk. Distinct from [`Self::Gone`] (a folded
+    /// block, whose row survives and can still be addressed) and from [`Self::NotFound`] (which
+    /// may be a soft delete, a move, or an unreadable resource): this is the one answer that
+    /// licenses a client to drop its local copy.
+    ///
+    /// Discriminated by the wire `code`, exactly as the 403 arm discriminates
+    /// `FORBIDDEN_DETAIL` — never by the message. **Carries the id, not the message**: the
+    /// envelope carries no `details` by design (the server's own test asserts it), so the id
+    /// rides only in the fixed sentence `resource <id> was erased`, and every consumer that acts
+    /// on the variant needs the id as a typed value — the CLI to lift it to
+    /// [`temper_core::error::TemperError::ResourceErased`], whose wire code a JSON caller
+    /// branches on. Parsing it once, here, against core's own `Display`, is what keeps that
+    /// parse in one place; a sentence that does not parse is a contract disagreement, reported
+    /// as such (see `map_status_to_error`), never guessed at. Renders exactly as core's variant.
+    #[error("resource {id} was erased")]
+    ResourceErased {
+        id: temper_core::types::ids::ResourceId,
+    },
+
     #[error("conflict: {message}")]
     Conflict { message: String },
 

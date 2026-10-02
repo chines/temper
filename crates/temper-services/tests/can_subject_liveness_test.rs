@@ -334,3 +334,82 @@ async fn a_subject_kind_without_a_liveness_column_stays_answerable(pool: sqlx::P
          this is the arm an over-broad floor would close"
     );
 }
+
+/// Home `resource` in `context`, owned (and originated) by `owner`.
+async fn home_resource(pool: &sqlx::PgPool, resource: Uuid, context: Uuid, owner: Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_resource_homes \
+           (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
+         VALUES ($1, 'kb_contexts', $2, $3, $3)",
+    )
+    .bind(resource)
+    .bind(context)
+    .bind(owner)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// `derived_access_profile(profile, action, 'kb_resources', resource)`, read directly.
+async fn derived(pool: &sqlx::PgPool, profile: Uuid, action: &str, resource: Uuid) -> bool {
+    sqlx::query_scalar("SELECT derived_access_profile($1, $2, 'kb_resources', $3)")
+        .bind(profile)
+        .bind(action)
+        .bind(resource)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// The owner's derived `grant` closes on a tombstone; `delete` does not (migration
+/// `20261002000010`). `grant` answers only a live resource, as `read` and `write` already do
+/// through their predicates: kb_resource_homes keeps its row when the resource is soft-deleted, so
+/// ownership alone would keep it open. `delete` is blob custody and stays with the owner: a soft
+/// delete folds no edge, and a floored `delete` would leave a blob related to the tombstone
+/// deletable by no one (ruled 2026-10-01).
+///
+/// FAILS IF `grant` answers a dead resource, or `delete` stops answering its owner there. The
+/// bites: drop the `AND EXISTS (... r.is_active)` conjunct from the `grant` arm in
+/// `20261002000010` (the grant assertions fail), or add it to the `delete` arm (the custody
+/// assertion fails) — each through `derived_access_profile` and through `can()`.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn the_owners_derived_grant_closes_on_a_tombstone_and_delete_custody_stays(
+    pool: sqlx::PgPool,
+) {
+    let owner = insert_profile(&pool, "floor_owner5").await;
+    let resource = insert_resource(&pool, "floor-owned-doc").await;
+    let context = insert_context(&pool, owner, "floor-owned-ctx").await;
+    home_resource(&pool, resource, context, owner).await;
+
+    // Live subject: home ownership derives both, and the seam agrees.
+    for action in ["grant", "delete"] {
+        assert!(
+            derived(&pool, owner, action, resource).await,
+            "the owner derives {action} on a live resource"
+        );
+        assert!(
+            can(&pool, owner, action, "kb_resources", resource).await,
+            "can({action}) admits the owner of a live resource"
+        );
+    }
+
+    set_resource_active(&pool, resource, false).await;
+
+    // Tombstone: grant administration closes; blob custody stays with the owner.
+    assert!(
+        !derived(&pool, owner, "grant", resource).await,
+        "the owner derives no grant on a tombstone"
+    );
+    assert!(
+        !can(&pool, owner, "grant", "kb_resources", resource).await,
+        "can(grant) refuses the owner of a tombstone"
+    );
+    assert!(
+        derived(&pool, owner, "delete", resource).await,
+        "the owner keeps delete (blob custody) on a tombstone"
+    );
+    assert!(
+        can(&pool, owner, "delete", "kb_resources", resource).await,
+        "can(delete) still admits the owner of a tombstone"
+    );
+}

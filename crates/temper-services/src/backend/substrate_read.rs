@@ -776,26 +776,40 @@ pub async fn get_content_select(
 /// gets — so the `410` cannot become an erasure oracle. A tombstone (soft-deleted, not erased) is
 /// not a husk and keeps its `404`.
 ///
-/// `held!`: sqlx types a function-call column as nullable, but the function is `EXISTS (...) AND
-/// EXISTS (...)`, which is never NULL.
+/// The write side classifies its deny through the same probe
+/// (`backend::write_floor`), so a read and a write of one husk name the same population.
 async fn erased_or(
     pool: &PgPool,
     profile_id: ProfileId,
     id: ResourceId,
     not_found: ApiError,
 ) -> ApiError {
-    let held = sqlx::query_scalar!(
-        r#"SELECT resource_husk_held_by($1, $2) AS "held!""#,
-        profile_id.as_uuid(),
-        id.as_uuid(),
-    )
-    .fetch_one(pool)
-    .await;
-    match held {
+    match husk_held_by(pool, profile_id, id).await {
         Ok(true) => ApiError::ResourceErased(id),
         Ok(false) => not_found,
         Err(e) => ApiError::from(e),
     }
+}
+
+/// `resource_husk_held_by(profile, id)` (migration `20260930000060`), called, never restated: is
+/// `id` an erased husk `profile_id` holds standing on? The one copy of the probe, shared by the
+/// read classifier [`erased_or`] and the write floor (`backend::write_floor`), on whatever
+/// executor the caller is on — the pool for a read, the write's own transaction for a write.
+///
+/// `held!`: sqlx types a function-call column as nullable, but the function is `EXISTS (...) AND
+/// EXISTS (...)`, which is never NULL.
+pub(crate) async fn husk_held_by<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    profile_id: ProfileId,
+    id: ResourceId,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"SELECT resource_husk_held_by($1, $2) AS "held!""#,
+        profile_id.as_uuid(),
+        id.as_uuid(),
+    )
+    .fetch_one(executor)
+    .await
 }
 
 /// `get_meta` — one resource with both metadata tiers, as a [`ResourceView`].
@@ -1619,20 +1633,26 @@ pub async fn cogmap_charter_select(
 /// denying existence, never 403. All three arms return as DATA (MCP renders the envelope
 /// verbatim); the HTTP handler maps `Absent` → 404 and `Folded` → 410 so the route keeps its
 /// status contract.
+///
+/// **A not-visible home resource that is an erased husk** the caller holds answers
+/// [`ApiError::ResourceErased`] (`410`, the error envelope — not the folded `BlockRead`) through
+/// `erased_or`, exactly as `show_view_select` and `get_content_select` classify their misses;
+/// everyone else keeps the `404`. Only the `NotVisible` arm asks; a fault stays a fault.
 pub async fn block_read_select(
     pool: &PgPool,
     profile_id: ProfileId,
     resource_id: uuid::Uuid,
     block_id: uuid::Uuid,
 ) -> ApiResult<temper_core::types::provenance::BlockRead> {
-    readback::block_read(
-        pool,
-        profile_id,
-        ResourceId::from(resource_id),
-        BlockId::from(block_id),
-    )
-    .await
-    .map_err(|e| ApiError::from(map_readback_err(e)))
+    let resource_id = ResourceId::from(resource_id);
+    match readback::block_read(pool, profile_id, resource_id, BlockId::from(block_id)).await {
+        Ok(read) => Ok(read),
+        Err(e @ readback::ReadbackError::NotVisible { .. }) => {
+            let not_found = ApiError::from(map_readback_err(e));
+            Err(erased_or(pool, profile_id, resource_id, not_found).await)
+        }
+        Err(e) => Err(ApiError::from(map_readback_err(e))),
+    }
 }
 
 /// `resource_block_provenance` — the itemized per-block provenance read for one resource. Service-direct
