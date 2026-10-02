@@ -6,9 +6,11 @@
 //! write into, and the detectors it will run.
 //!
 //! Spec witnesses 1 (the column-set half), 18 (`ssn_valid()`) and 19 (the delimiter requirement),
-//! plus Q19 (the surface registry equals the manifest, and the enqueue refuses what it does not
-//! enable), Q20 (the cursor's tuple watermark) and Q21 (append-only dispositions). Witness 12's grep
-//! gate needs no database and lives in `sensitivity_schema_unreachable_test.rs`.
+//! plus Q19 (the surface registry covers both manifests, and the enqueue refuses what it does not
+//! enable), Q20 (the cursor's tuple watermark), Q21 and Q25 (append-only dispositions about one
+//! finding), Q26 (a document finding's structural path) and Q27 (a detector changes only with a
+//! version, and every version is kept). Witness 12's grep gate needs no database and lives in
+//! `sensitivity_schema_unreachable_test.rs`.
 
 use std::collections::BTreeSet;
 
@@ -20,6 +22,7 @@ use temper_core::types::workflow_job::{DispatchType, Persona, SensitivityJobPayl
 use temper_services::services::workflow_job_service::enqueue_system;
 
 const SCAN_MANIFEST: &str = include_str!("../../../scripts/sensitivity-scan-surface.txt");
+const PERSONAL_DATA_MANIFEST: &str = include_str!("../../../scripts/personal-data-surface.txt");
 
 const A_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -62,13 +65,14 @@ async fn validator(pool: &PgPool, function: &str, text: &str) -> bool {
 
 // ── Witness 1, the column-set half: the store cannot hold content ─────────────────────────────
 
-/// Spec D1, verbatim. A later PR adding `sample_text`, an offset or a window fails here, not in
+/// Spec D1, verbatim, plus Q26's `path`. A later PR adding `sample_text`, an offset or a window fails here, not in
 /// review.
 const FINDINGS_COLUMNS: &[(&str, &str)] = &[
     ("id", "uuid"),
     ("surface", "text"),
     ("target_table", "text"),
     ("target_id", "uuid"),
+    ("path", "text"),
     ("resource_id", "uuid"),
     ("content_hash", "text"),
     ("detector_id", "text"),
@@ -105,10 +109,12 @@ async fn the_findings_columns_are_exactly_the_d1_allowlist(pool: PgPool) {
 /// Insert one finding built from a JSON row, so each case changes exactly one column.
 async fn insert_finding(pool: &PgPool, row: &serde_json::Value) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO sensitivity.findings (surface, target_table, target_id, content_hash, \
+        "INSERT INTO sensitivity.findings (surface, target_table, target_id, path, content_hash, \
            detector_id, detector_version, category, severity, match_count) \
-         SELECT r->>'surface', r->>'target_table', (r->>'target_id')::uuid, r->>'content_hash', \
-                r->>'detector_id', 1, r->>'category', 4, (r->>'match_count')::int \
+         SELECT r->>'surface', r->>'target_table', (r->>'target_id')::uuid, r->>'path', \
+                r->>'content_hash', r->>'detector_id', \
+                coalesce((r->>'detector_version')::int, 1), r->>'category', 4, \
+                (r->>'match_count')::int \
            FROM (SELECT $1::jsonb r) x",
     )
     .bind(row)
@@ -130,7 +136,7 @@ fn a_finding_row(target: Uuid) -> serde_json::Value {
 }
 
 /// The column names are not the whole guarantee: a `text` column can carry anything. Each text
-/// column of `findings` is held to a non-prose shape, and each count to six digits, so a planted
+/// column of `findings` is held to a non-prose shape, and each count to 100000, so a planted
 /// value is refused by the constraint that names it. The unmodified row is admitted first, so no
 /// refusal below can be about a row that could never be written.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -149,6 +155,12 @@ async fn content_under_a_findings_column_is_refused(pool: PgPool) {
             json!("kb_resources Jane Doe"),
             "findings_target_table_check",
         ),
+        // Fits the table-name shape, and is a dash-stripped SSN: the surface decides the table.
+        (
+            "target_table",
+            json!("kb_078_05_1120"),
+            "findings_target_table_is_the_surfaces",
+        ),
         (
             "category",
             json!("national_id 219-45-6789"),
@@ -162,8 +174,16 @@ async fn content_under_a_findings_column_is_refused(pool: PgPool) {
         (
             "detector_id",
             json!("us_ssn_delimited 219-45-6789"),
-            "findings_detector_id_fkey",
+            "findings_detector_id_detector_version_fkey",
         ),
+        // A version the detector never had (Q27).
+        (
+            "detector_version",
+            json!(99),
+            "findings_detector_id_detector_version_fkey",
+        ),
+        // A text surface has no document to point into (Q26).
+        ("path", json!("/title"), "findings_path_fits_shape"),
         // An SSN with its dashes stripped fits an int; a count of matches never needs to.
         (
             "match_count",
@@ -212,49 +232,138 @@ async fn a_finding_is_one_value_in_one_place(pool: PgPool) {
     );
 }
 
-// ── Q19: the surface registry is the manifest's scan lines ────────────────────────────────────
+fn a_payload_finding_row(target: Uuid, path: Option<&str>) -> serde_json::Value {
+    json!({
+        "surface": "kb_events.payload",
+        "target_table": "kb_events",
+        "target_id": target,
+        "path": path,
+        "content_hash": A_HASH,
+        "detector_id": "us_ssn_delimited",
+        "category": "national_id",
+        "match_count": 1,
+    })
+}
 
-fn manifest_scan_lines() -> BTreeSet<String> {
-    SCAN_MANIFEST
+/// Q26: in a document the place is the path as well as the row, so a ledger finding can be read
+/// for its per-path remediability (D3). The same value at two paths of one event is two findings.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_document_finding_is_placed_by_its_path(pool: PgPool) {
+    let event = Uuid::now_v7();
+    insert_finding(&pool, &a_payload_finding_row(event, Some("/title")))
+        .await
+        .expect("a path into a jsonb surface");
+    insert_finding(&pool, &a_payload_finding_row(event, Some("/origin_uri")))
+        .await
+        .expect("another path in the same event is another place");
+    let err = insert_finding(&pool, &a_payload_finding_row(event, Some("/title")))
+        .await
+        .unwrap_err();
+    assert_eq!(code_of(&err).as_deref(), Some("23505"), "{err}");
+
+    let err = insert_finding(&pool, &a_payload_finding_row(Uuid::now_v7(), None))
+        .await
+        .unwrap_err();
+    assert_check_violation(
+        &err,
+        "findings_path_fits_shape",
+        "a document finding with no path",
+    );
+}
+
+/// A path is structure, never a value: letters and underscores only, so it cannot hold a digit,
+/// and an array index or a user-authored key is written as `*` or `?`.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_path_holds_no_value(pool: PgPool) {
+    insert_finding(
+        &pool,
+        &a_payload_finding_row(Uuid::now_v7(), Some("/properties/?/*")),
+    )
+    .await
+    .expect("the base path is admitted");
+    for path in [
+        "/ssn_219456789",
+        "/items/0/title",
+        "/Jane",
+        "/jane doe",
+        "title",
+        "/",
+        "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q",
+    ] {
+        let err = insert_finding(&pool, &a_payload_finding_row(Uuid::now_v7(), Some(path)))
+            .await
+            .unwrap_err();
+        assert_check_violation(&err, "findings_path_check", path);
+    }
+}
+
+// ── Q19 and Q26: the surface registry covers both manifests ───────────────────────────────────
+
+/// The `table.column` of every line in `manifest` whose second field is `class`.
+fn manifest_lines(manifest: &str, class: &str) -> BTreeSet<String> {
+    manifest
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .filter_map(|l| {
             let cols: Vec<&str> = l.split('|').map(str::trim).collect();
-            (cols.get(1) == Some(&"scan")).then(|| cols[0].to_string())
+            (cols.get(1) == Some(&class)).then(|| cols[0].to_string())
         })
         .collect()
 }
 
+/// Every `scan` line is a `text` surface and every `incidental` line of the personal-data manifest
+/// a `jsonb` one (Q26). A registry row neither manifest names any longer must be disabled: findings
+/// and cursors pin a surface's row, so retiring a line cannot delete it (Q19, amended).
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn the_seeded_surfaces_are_the_manifests_scan_lines(pool: PgPool) {
-    let seeded: BTreeSet<String> = sqlx::query_scalar("SELECT surface FROM sensitivity.surfaces")
-        .fetch_all(&pool)
-        .await
-        .unwrap()
-        .into_iter()
+async fn the_surface_registry_covers_both_manifests(pool: PgPool) {
+    let rows: Vec<(String, String, bool)> =
+        sqlx::query_as("SELECT surface, shape, enabled FROM sensitivity.surfaces")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let declared = [
+        (manifest_lines(SCAN_MANIFEST, "scan"), "text"),
+        (
+            manifest_lines(PERSONAL_DATA_MANIFEST, "incidental"),
+            "jsonb",
+        ),
+    ];
+    for (lines, shape) in &declared {
+        assert!(
+            !lines.is_empty(),
+            "the manifest parse found no {shape} lines"
+        );
+        let registered: BTreeSet<String> = rows
+            .iter()
+            .filter(|(_, s, _)| s == shape)
+            .map(|(surface, _, _)| surface.clone())
+            .collect();
+        assert_eq!(
+            lines.difference(&registered).collect::<Vec<_>>(),
+            Vec::<&String>::new(),
+            "manifest lines with no {shape} sensitivity.surfaces row"
+        );
+    }
+    let retired_but_enabled: Vec<&String> = rows
+        .iter()
+        .filter(|(surface, _, enabled)| {
+            *enabled && !declared.iter().any(|(lines, _)| lines.contains(surface))
+        })
+        .map(|(surface, _, _)| surface)
         .collect();
-    let manifest = manifest_scan_lines();
-    assert!(
-        !manifest.is_empty(),
-        "the manifest parse found no scan lines"
-    );
     assert_eq!(
-        manifest.difference(&seeded).collect::<Vec<_>>(),
+        retired_but_enabled,
         Vec::<&String>::new(),
-        "scan lines with no sensitivity.surfaces row"
-    );
-    assert_eq!(
-        seeded.difference(&manifest).collect::<Vec<_>>(),
-        Vec::<&String>::new(),
-        "sensitivity.surfaces rows that are not scan lines"
+        "enabled surfaces that neither manifest declares"
     );
 }
 
 /// Cut 1 cursors D3's first cut (plan P3), less `kb_blobs.blob_pathname`, which the manifest
 /// declares structural, and `kb_workflow_jobs.last_error`, which `workflow_job_reap` rewrites on
-/// old ids. Every other scan line is seeded disabled with no cursor kind, which is what the run
-/// summary reads to name it as not yet cursored.
+/// old ids, plus the three documents D3 reads through the personal-data manifest (Q26). Every other
+/// surface is seeded disabled with no cursor kind, which is what the run summary reads to name it
+/// as not yet cursored.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn cut_one_enables_the_first_cut_surfaces_and_no_others(pool: PgPool) {
     let enabled: Vec<(String, String)> = sqlx::query_as(
@@ -269,7 +378,10 @@ async fn cut_one_enables_the_first_cut_surfaces_and_no_others(pool: PgPool) {
         ("kb_chunks.header_path", "append_only_v7"),
         ("kb_citation_audits.reason", "append_only_v7"),
         ("kb_edges.label", "append_only_v7"),
+        ("kb_events.metadata", "append_only_v7"),
+        ("kb_events.payload", "append_only_v7"),
         ("kb_properties.property_key", "append_only_v7"),
+        ("kb_properties.property_value", "append_only_v7"),
         ("kb_remote_sources.uri", "append_only_v7"),
         ("kb_resources.origin_uri", "mutable_timestamp"),
         ("kb_resources.title", "mutable_timestamp"),
@@ -606,12 +718,133 @@ async fn a_detector_pattern_must_compile_and_never_match_empty(pool: PgPool) {
         Some("2201B"),
         "invalid regex: {err}"
     );
+    // The scan runs the pattern wrapped in a group. An embedded option is legal only at the start
+    // of a regex, so it compiles bare and fails wrapped: refused here, not mid-scan.
+    let err = sqlx::query(insert)
+        .bind("x")
+        .bind("(?i)secret")
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        code_of(&err).as_deref(),
+        Some("2201B"),
+        "an option that only compiles bare: {err}"
+    );
+    // The wrapping group renumbers a backreference, so `\1` would silently mean another group.
+    let err = sqlx::query(insert)
+        .bind("x")
+        .bind(r"(x)\1")
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_check_violation(&err, "detectors_patterns_usable", "a backreference");
     sqlx::query(insert)
         .bind("x")
         .bind("x[0-9]+")
         .execute(&pool)
         .await
         .expect("a usable pattern is admitted");
+}
+
+/// A pattern that matches only between characters never matches the empty string, so the write
+/// gate admits it; the count is what refuses to treat a position as a value.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_empty_match_is_not_a_match(pool: PgPool) {
+    sqlx::query(
+        "INSERT INTO sensitivity.detectors (id, category, severity, prefilter, pattern, note) \
+         VALUES ('probe_boundary', 'credential', 2, 'x', '\\y', 'probe')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        matches(&pool, "probe_boundary", "x marks the spot").await,
+        0
+    );
+}
+
+/// The store caps a count at 100000. One huge row must yield a capped count, not a value that
+/// fails the insert and wedges the tick on that row for good.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_match_count_stops_at_the_stores_ceiling(pool: PgPool) {
+    let text = "/home/ab ".repeat(100_001);
+    assert_eq!(matches(&pool, "local_path_username", &text).await, 100_000);
+}
+
+// ── Q27: a detector changes only with a version, and every version is kept ────────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_detector_changes_only_with_a_version_bump(pool: PgPool) {
+    for (column, value) in [
+        ("pattern", "'(?<![0-9])[0-9]{3}-[0-9]{2}-[0-9]{4}(?![0-9])'"),
+        ("prefilter", "'[0-9]{3}-'"),
+        ("validator", "NULL"),
+        ("category", "'identifier'"),
+    ] {
+        let err = sqlx::query(&format!(
+            "UPDATE sensitivity.detectors SET {column} = {value} WHERE id = 'us_ssn_delimited'"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap_err();
+        assert_eq!(code_of(&err).as_deref(), Some("23514"), "{column}: {err}");
+    }
+    let err = sqlx::query("UPDATE sensitivity.detectors SET version = 0 WHERE id = 'jwt'")
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        code_of(&err).as_deref(),
+        Some("23514"),
+        "a version goes down: {err}"
+    );
+
+    // Severity is operational policy (Q3), tunable without a version.
+    sqlx::query("UPDATE sensitivity.detectors SET severity = 3 WHERE id = 'us_ssn_delimited'")
+        .execute(&pool)
+        .await
+        .expect("a severity retune needs no bump");
+    sqlx::query(
+        "UPDATE sensitivity.detectors SET pattern = 'eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}', \
+                version = 2 WHERE id = 'jwt'",
+    )
+    .execute(&pool)
+    .await
+    .expect("a change with a bump is admitted");
+
+    let versions: Vec<(String, i32)> = sqlx::query_as(
+        "SELECT detector_id, version FROM sensitivity.detector_versions \
+          WHERE detector_id IN ('jwt', 'us_ssn_delimited') ORDER BY 1, 2",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        versions,
+        vec![
+            ("jwt".to_string(), 1),
+            ("jwt".to_string(), 2),
+            ("us_ssn_delimited".to_string(), 1),
+        ],
+        "every version is kept, and a severity retune is not one"
+    );
+    let v1_kept: bool = sqlx::query_scalar(
+        "SELECT pattern LIKE '%{10,}%' FROM sensitivity.detector_versions \
+          WHERE detector_id = 'jwt' AND version = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        v1_kept,
+        "version 1 keeps the pattern that produced its findings"
+    );
+    let err = sqlx::query("DELETE FROM sensitivity.detector_versions")
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("append-only"), "{err}");
 }
 
 // ── Q20: a cursor's watermark is typed by its surface's kind ──────────────────────────────────
@@ -861,6 +1094,39 @@ async fn a_false_positive_in_one_place_leaves_the_other_open(pool: PgPool) {
     assert_eq!(open, vec![there]);
 }
 
+/// Under the coverage rule (Q22) a disposition covers what was seen up to its `decided_at`, so a
+/// writer's future date would silence the finding for good. The database supplies the clock, and an
+/// accepted risk must expire after it was accepted.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_disposition_is_decided_now(pool: PgPool) {
+    let f = a_finding(&pool).await;
+    let in_the_future: bool = sqlx::query_scalar(
+        "INSERT INTO sensitivity.dispositions (state, finding_id, decided_at) \
+         VALUES ('actioned', $1, '2999-01-01') RETURNING decided_at > now() + interval '1 day'",
+    )
+    .bind(f)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!in_the_future, "decided_at is the database's now()");
+
+    let err = dispose(
+        &pool,
+        Disposition {
+            state: "accepted_risk",
+            finding: Some(f),
+            expires_in_days: Some(-1),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_check_violation(
+        &err,
+        "dispositions_expiry_after_decision",
+        "expired before decided",
+    );
+}
+
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn dispositions_are_append_only_in_enforcement(pool: PgPool) {
     let f = Some(a_finding(&pool).await);
@@ -890,7 +1156,7 @@ async fn a_runs_tally_holds_only_categories_and_counts(pool: PgPool) {
     let insert = "INSERT INTO sensitivity.runs (surface, by_category) \
                   VALUES ('kb_resources.title', $1)";
     sqlx::query(insert)
-        .bind(json!({"national_id": 2, "credential": 0}))
+        .bind(json!({"national_id": 100_000, "credential": 0}))
         .execute(&pool)
         .await
         .unwrap();
@@ -899,6 +1165,8 @@ async fn a_runs_tally_holds_only_categories_and_counts(pool: PgPool) {
         json!({"national_id": "219-45-6789"}),
         json!({"national_id": 123_456_789_012_i64}),
         json!({"national_id": 219_456_789}),
+        // Six digits, but past every other count's ceiling: two keys could split an SSN.
+        json!({"national_id": 219_456, "payment_card": 789}),
         json!(["national_id"]),
     ] {
         let err = sqlx::query(insert)
