@@ -2,7 +2,9 @@
 //!
 //! **Authorization lives in the services, not here** (Phase B2) — the same shape
 //! `team_service` and `access_service` already use. It is `is_system_admin OR owner of the
-//! machine's owning team` (`machine_authz::authorize`), and it is load-bearing rather than
+//! machine's owning team` — `machine_authz::authorize` for provision and issue,
+//! `authz::MachineClientControlAuthority` for acts on an existing machine, whose refusal is a `404`
+//! indistinguishable from a missing id — and it is load-bearing rather than
 //! defense-in-depth: since D11, `has_system_access` reads `kb_principal_standing` (approved), so
 //! `require_system_access` on the gated router denies unapproved profiles, but the service-side
 //! check is still the only real authorization (Phase A D12). The one exception is `rebind`, which
@@ -127,7 +129,7 @@ pub async fn list(
     get,
     operation_id = "get_machine_client",
     summary = "Get a machine client",
-    description = "Returns one machine client. Requires a system admin or the owner of the machine's owning team. Any other caller is answered 404, exactly as for an id that does not exist.",
+    description = "Returns one machine client. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/machine-clients/{id}",
     tag = "Machine Clients",
     params(("id" = Uuid, Path, description = "Machine client ID")),
@@ -153,7 +155,7 @@ pub async fn get(
     delete,
     operation_id = "revoke_machine_client",
     summary = "Revoke a machine client",
-    description = "Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller is answered 404, exactly as for an id that does not exist.",
+    description = "Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/machine-clients/{id}",
     tag = "Machine Clients",
     params(("id" = Uuid, Path, description = "Machine client ID")),
@@ -204,7 +206,7 @@ pub async fn issue(
     post,
     operation_id = "rotate_machine_client_secret",
     summary = "Rotate a machine client secret",
-    description = "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller is answered 404, exactly as for an id that does not exist.",
+    description = "Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.",
     path = "/api/machine-clients/{id}/rotate-secret",
     tag = "Machine Clients",
     params(("id" = Uuid, Path, description = "Machine client ID")),

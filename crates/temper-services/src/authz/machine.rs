@@ -93,7 +93,10 @@ impl ScopedAuthority for MachineClientControlAuthority {
             {
                 MachineAuthority::SystemAdmin => MachineClientControlAuthority::SystemAdmin,
                 MachineAuthority::TeamOwner => MachineClientControlAuthority::OwnerOfOwningTeam,
-                MachineAuthority::None => MachineClientControlAuthority::None,
+                MachineAuthority::None => {
+                    super::log_concealed_refusal(caller, "machine_client");
+                    MachineClientControlAuthority::None
+                }
             },
         )
     }

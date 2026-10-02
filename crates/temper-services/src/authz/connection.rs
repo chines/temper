@@ -7,6 +7,15 @@
 //! Folding it into the shared resolver would mean parameterizing away everything that is actually
 //! shared.
 //!
+//! **Two refusal dialects, and this is not an oracle.** `ConnectionAuthority` answers `404` to a
+//! caller who does not control the connection — byte-identical to a missing connection, like every
+//! other per-row act through [`ConnectionControlAuthority`] — and `403` only to a caller who does
+//! control it but does not manage the receiving team. That `403` reaches only callers who can
+//! already `GET` the connection, so it discloses nothing a read would not. It is the argument a
+//! later "let's make the denials consistent" pass has to answer before collapsing the arms, as with
+//! `ContextAdminAuthority` (`super::context_admin`). "Indistinguishable" means the response, not
+//! the timing: a denied id runs the authority probes a missing id never reaches.
+//!
 //! It also must not route through `GrantAuthority`, despite writing a `kb_access_grants` row. That
 //! is stated at the call site and is load-bearing: *"the `can_grant` seam has no bootstrap holder
 //! for a connection subject"* (`connection_service.rs`, `grant_reach`'s doc). A connection has no
@@ -90,7 +99,10 @@ impl ScopedAuthority for ConnectionControlAuthority {
             {
                 MachineAuthority::SystemAdmin => ConnectionControlAuthority::SystemAdmin,
                 MachineAuthority::TeamOwner => ConnectionControlAuthority::OwnerOfOwningTeam,
-                MachineAuthority::None => ConnectionControlAuthority::None,
+                MachineAuthority::None => {
+                    super::log_concealed_refusal(caller, "connection");
+                    ConnectionControlAuthority::None
+                }
             },
         )
     }

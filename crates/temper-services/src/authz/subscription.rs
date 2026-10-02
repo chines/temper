@@ -128,7 +128,10 @@ impl ScopedAuthority for SubscriptionControlAuthority {
             {
                 SubscriptionAuthority::SystemAdmin => SubscriptionControlAuthority::SystemAdmin,
                 SubscriptionAuthority::TeamManager => SubscriptionControlAuthority::TeamManager,
-                SubscriptionAuthority::None => SubscriptionControlAuthority::None,
+                SubscriptionAuthority::None => {
+                    super::log_concealed_refusal(caller, "subscription");
+                    SubscriptionControlAuthority::None
+                }
             },
         )
     }

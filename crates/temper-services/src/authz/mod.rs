@@ -52,12 +52,15 @@ pub(crate) use audit_gate::{
     citation_subject, finding_of_block, require_machine_principal, AuditAuthority,
     AuditorJobAuthority, FINDING_REFUSAL,
 };
+// The per-row control gates — `ConnectionControlAuthority`, `MachineClientControlAuthority` and
+// `SubscriptionControlAuthority`, one per family whose acts address an existing row by id. Each
+// refuses with its family's missing-row sentence, so a denied id and an absent one are
+// indistinguishable. `ConnectionAuthority` is the second authority to declare two refusal dialects.
 pub(crate) use connection::{ConnectionAuthority, ConnectionControlAuthority, ConnectionScope};
-// The per-row control gates: one per family whose acts address an existing row by id. Each refuses
-// with the family's missing-row sentence, so a denied id and an absent one are indistinguishable.
 pub(crate) use machine::MachineClientControlAuthority;
-// The first authority to declare two refusal dialects, and so the first (and only) consumer of
-// `ScopedAuthority::denial_for`. Wired by Task 6: `context_service::rename` is its single gate.
+// The first authority to declare two refusal dialects, and so the first consumer of
+// `ScopedAuthority::denial_for` (`ConnectionAuthority` is the second). Wired by Task 6:
+// `context_service::rename` is its single gate.
 pub(crate) use context_admin::ContextAdminAuthority;
 pub(crate) use grant::{wire_subject, BornSubject, GrantWarrant, RevokeWarrant};
 pub(crate) use read_gates::{ActorHistoryAuthority, TeamReadAuthority, ACTOR_HISTORY_REFUSAL};
@@ -231,6 +234,20 @@ pub(crate) async fn authorize<A: ScopedAuthority>(
         return Err(authority.denial_for());
     }
     Ok(Authorized { authority, subject })
+}
+
+/// Log a per-row refusal that the response renders as a missing row.
+///
+/// Warn, the level the API logs every `Forbidden` at (`ApiError`'s response logging): the `404` a
+/// control authority renders logs at debug, so without this line a caller probing ids would leave
+/// no trace an operator sees at the default filter. The precedent is the erasure doors'
+/// `require_erasure_operator`. Names the caller and the family, never the subject.
+pub(super) fn log_concealed_refusal(caller: Principal<'_>, family: &'static str) {
+    tracing::warn!(
+        profile_id = %caller.profile_id(),
+        family,
+        "per-row act refused a caller without authority; answered 404, as for a missing id"
+    );
 }
 
 /// The **voices-unchanged boundary** over this module's refusal dialects.
@@ -415,7 +432,7 @@ mod tests {
         assert_one_voice("ActorHistoryAuthority", ActorHistoryAuthority::None);
     }
 
-    // ── (c) the deliberate two-dialect exception ──────────────────────────────
+    // ── (c) the deliberate two-dialect exceptions ─────────────────────────────
     //
     // `ContextAdminAuthority` is NOT asserted voice-unchanged, because diverging is the point: one
     // gate, two dialects. The two tests below assert each dialect positively, which is a claim about
@@ -484,5 +501,6 @@ mod tests {
             matches!(refusal, ApiError::Forbidden),
             "NotTargetManager must render Forbidden, got {refusal:?}"
         );
+        assert_eq!(refusal.to_string(), ApiError::Forbidden.to_string());
     }
 }

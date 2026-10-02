@@ -1694,8 +1694,9 @@ mod tests {
         assert!(!after.is_reach_capable());
     }
 
-    /// The mutators call `machine_authz::authorize` — the same gate as provisioning, keyed on the
-    /// EXISTING row's owning team. A maintainer is not an owner.
+    /// The mutators pass `ConnectionControlAuthority` — `MachineAuthority`'s policy, keyed on the
+    /// EXISTING row's owning team. A maintainer is not an owner, and is refused as if the connection
+    /// did not exist.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_mere_maintainer_cannot_attach_a_credential(pool: PgPool) {
         let admin = seed_admin(&pool).await;
@@ -1782,9 +1783,11 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Reach grants — a TEAM's read-reach on a connection. Same gate as every
-    // other mutator (`machine_authz::authorize`, keyed on the connection's
-    // owning team; teamless fails closed), writing a `kb_access_grants` row.
+    // Reach grants — a TEAM's read-reach on a connection. Same connection-side
+    // gate as every other mutator (`ConnectionControlAuthority`, keyed on the
+    // connection's owning team; teamless fails closed; a refusal reads as a
+    // missing connection), plus the receiving-team bar, writing a
+    // `kb_access_grants` row.
     // -----------------------------------------------------------------------
 
     /// A bare team, so a reach grant has a real principal to point at.
@@ -2405,7 +2408,8 @@ mod tests {
     }
 
     /// Authorization precedes affirmation: a non-owner/non-admin caller passing `affirm_reach` on a
-    /// reach-declaring connection is still `Forbidden` (the gate runs FIRST), and nothing is written.
+    /// reach-declaring connection is still refused — as a missing connection, since it does not
+    /// control this one (the gate runs FIRST) — and nothing is written.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn authorization_precedes_affirmation(pool: PgPool) {
         let (owner, team) = seed_team_member(&pool, "reach-owner", "acme", TeamRole::Owner).await;
@@ -2781,99 +2785,106 @@ mod tests {
     /// The existence oracle, closed: every per-row act refuses a caller who does not control the
     /// connection with the **same** error a missing id gets — variant and message — so probing ids
     /// learns nothing. A `Forbidden` on any of these would mean the row exists.
+    ///
+    /// Run against a live connection AND a revoked one: the revoked target is what pins the order
+    /// of `authorize_live`. Move its `409 revoked` check above the gate and a revoked connection
+    /// answers differently from a missing one — which this test then catches.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn a_denied_connection_is_indistinguishable_from_a_missing_one(pool: PgPool) {
         let admin = seed_admin(&pool).await;
+        let admin_auth = crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await;
         let (_owner, team) = seed_team_member(&pool, "conn-owner", "acme", TeamRole::Owner).await;
-        let c = svc::provision(
-            &pool,
-            &crate::test_support::authenticated_profile_for(&pool, admin.uuid()).await,
-            &req("Acme GitHub", Some(team)),
-        )
-        .await
-        .expect("provision");
+        let live = svc::provision(&pool, &admin_auth, &req("Acme GitHub", Some(team)))
+            .await
+            .expect("provision live");
+        let revoked = svc::provision(&pool, &admin_auth, &req("Acme Linear", Some(team)))
+            .await
+            .expect("provision revoked");
+        svc::revoke(&pool, revoked.id, &admin_auth)
+            .await
+            .expect("revoke as admin");
+
         let (outsider, _other) =
             seed_team_member(&pool, "conn-prober", "other", TeamRole::Owner).await;
         let prober = crate::test_support::authenticated_profile_for(&pool, outsider.uuid()).await;
         let missing = Uuid::now_v7();
 
-        let refusals = |a: ApiError, b: ApiError| (a.to_string(), b.to_string());
-        let pairs = [
-            (
-                "get",
-                refusals(
-                    svc::get_for_caller(&pool, &prober, c.id)
+        for (state, target) in [("live", live.id), ("revoked", revoked.id)] {
+            for id in [target, missing] {
+                let refusals: [(&str, ApiError); 7] = [
+                    (
+                        "get",
+                        svc::get_for_caller(&pool, &prober, id)
+                            .await
+                            .expect_err("get"),
+                    ),
+                    (
+                        "revoke",
+                        svc::revoke(&pool, id, &prober).await.expect_err("revoke"),
+                    ),
+                    (
+                        "credential",
+                        svc::attach_credential(
+                            &pool,
+                            &granting_broker(),
+                            &prober,
+                            id,
+                            &credential(),
+                        )
                         .await
-                        .expect_err("denied"),
-                    svc::get_for_caller(&pool, &prober, missing)
-                        .await
-                        .expect_err("missing"),
-                ),
-            ),
-            (
-                "revoke",
-                refusals(
-                    svc::revoke(&pool, c.id, &prober).await.expect_err("denied"),
-                    svc::revoke(&pool, missing, &prober)
-                        .await
-                        .expect_err("missing"),
-                ),
-            ),
-            (
-                "webhook events",
-                refusals(
-                    svc::set_webhook_events(&pool, &prober, c.id, &["push".into()])
-                        .await
-                        .expect_err("denied"),
-                    svc::set_webhook_events(&pool, &prober, missing, &["push".into()])
-                        .await
-                        .expect_err("missing"),
-                ),
-            ),
-            (
-                "grant reach",
-                refusals(
-                    svc::grant_reach(&pool, &prober, c.id, team, None)
-                        .await
-                        .expect_err("denied"),
-                    svc::grant_reach(&pool, &prober, missing, team, None)
-                        .await
-                        .expect_err("missing"),
-                ),
-            ),
-            (
-                "revoke reach",
-                refusals(
-                    svc::revoke_reach(&pool, &prober, c.id, team)
-                        .await
-                        .expect_err("denied"),
-                    svc::revoke_reach(&pool, &prober, missing, team)
-                        .await
-                        .expect_err("missing"),
-                ),
-            ),
-        ];
-        for (act, (denied, absent)) in pairs {
-            assert_eq!(
-                denied, absent,
-                "{act}: a denied id must refuse like a missing one"
-            );
+                        .expect_err("credential"),
+                    ),
+                    (
+                        "webhook events",
+                        svc::set_webhook_events(&pool, &prober, id, &["push".into()])
+                            .await
+                            .expect_err("webhook events"),
+                    ),
+                    (
+                        "tool manifest",
+                        svc::set_tool_manifest(&pool, &prober, id, &["read_pr".into()])
+                            .await
+                            .expect_err("tool manifest"),
+                    ),
+                    (
+                        "grant reach",
+                        svc::grant_reach(&pool, &prober, id, team, None)
+                            .await
+                            .expect_err("grant reach"),
+                    ),
+                    (
+                        "revoke reach",
+                        svc::revoke_reach(&pool, &prober, id, team)
+                            .await
+                            .expect_err("revoke reach"),
+                    ),
+                ];
+                for (act, err) in refusals {
+                    assert!(
+                        matches!(&err, ApiError::NotFound(m) if m == svc::CONNECTION_REFUSAL),
+                        "{act} on a {state} target (or a missing id): must refuse as a missing \
+                         connection, got {err:?}"
+                    );
+                }
+            }
         }
 
-        let err = svc::get_for_caller(&pool, &prober, c.id)
-            .await
-            .expect_err("denied");
+        let reloaded = svc::get(&pool, live.id).await.expect("get");
         assert!(
-            matches!(&err, ApiError::NotFound(m) if m == svc::CONNECTION_REFUSAL),
-            "the shared refusal is the missing-row sentence, got {err:?}"
+            reloaded.revoked_at.is_none(),
+            "the denied revoke wrote nothing"
         );
         assert!(
-            svc::get(&pool, c.id)
-                .await
-                .expect("get")
-                .revoked_at
-                .is_none(),
-            "the denied revoke wrote nothing"
+            reloaded.needs_credential(),
+            "the denied attach wrote nothing"
+        );
+        assert!(
+            reloaded.webhook_events.is_empty(),
+            "the denied webhook write wrote nothing"
+        );
+        assert!(
+            !reloaded.is_reach_capable(),
+            "the denied manifest write wrote nothing"
         );
     }
 }

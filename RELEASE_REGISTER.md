@@ -37,10 +37,11 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   create), where no row's existence is at stake. The machine-client missing-row message gains
   "or not readable", matching the other two families. openapi.json changes descriptions only on the
   twelve operations. Who observes: a caller without authority over a row, who now sees `404` where
-  they saw `403`. User-visible: no. Release relevance: signal-only.
+  they saw `403` — over HTTP, in the SDKs, and in the `temper admin machine|connection|subscription`
+  JSON error code (`forbidden` → `not_found`). User-visible: no. Release relevance: signal-only.
 pr: self
 classes: additive,behavioral
-surfaces: http,clients
+surfaces: http,clients,cli-stdout
 status: signal-only
 - **The scoped operator routes enter the OpenAPI contract: admin ledger, machine clients, connections, subscriptions**
   The routes gated `is_system_admin OR <a scoped role>` — `GET /api/admin/ledger`, `/api/machine-clients`

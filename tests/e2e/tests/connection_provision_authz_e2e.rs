@@ -6,8 +6,10 @@
 //! `a_teamless_connection_is_admin_only_over_http` — a teamless connection is the one with no
 //! owning team to key a check on, and "no team to check" must never mean "nothing to deny".
 //!
-//! A connection reuses `machine_authz::authorize` verbatim, so what is being proven at this layer
-//! is that the *surface* actually reaches that gate — not that the predicate returns false.
+//! A connection reuses `MachineAuthority`'s policy verbatim (provisioning through
+//! `machine_authz::authorize`, every per-row act through `ConnectionControlAuthority`), so what is
+//! being proven at this layer is that the *surface* actually reaches that gate — not that the
+//! predicate returns false.
 
 mod common;
 

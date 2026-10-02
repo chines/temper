@@ -202,7 +202,7 @@ claim crates/temper-api/src/handlers/admin_directory.rs 4 is_system_admin
 claim crates/temper-api/src/handlers/admin_ledger.rs 2 is_system_admin,read_gates,grant,ledger_subject
 claim crates/temper-api/src/handlers/reblock.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/cognitive_maps.rs 4 require_cogmap_write_admin
-claim crates/temper-api/src/handlers/connections.rs 12 connection,machine,require_manage_on_team,can_manage
+claim crates/temper-api/src/handlers/connections.rs 13 connection,machine,require_manage_on_team,can_manage
 claim crates/temper-api/src/handlers/embed.rs 2 is_system_admin
 claim crates/temper-api/src/handlers/erasure.rs 6 is_system_admin
 claim crates/temper-api/src/handlers/machine_clients.rs 11 is_system_admin,machine,require_manage_on_team,can_manage
@@ -238,20 +238,20 @@ claim crates/temper-services/src/services/context_service.rs 14 context_admin
 claim crates/temper-services/src/services/erasure_service.rs 1 is_system_admin
 claim crates/temper-services/src/services/resource_erasure_service.rs 2 is_system_admin
 claim crates/temper-services/src/services/machine_authz.rs 7 machine
-claim crates/temper-services/src/services/machine_client_service.rs 5 machine
+claim crates/temper-services/src/services/machine_client_service.rs 6 machine
 claim crates/temper-services/src/services/machine_registration_service.rs 5 machine
 claim crates/temper-services/src/services/slack_disconnect_service.rs 2 -
 claim crates/temper-services/src/services/subscription_service.rs 6 subscription
 claim crates/temper-services/src/services/subscription_test_support.rs 1 subscription
 claim crates/temper-services/src/services/team_service.rs 2 require_manage_on_team,can_manage
 gate audit_gate 05a9b61226c4
-gate connection 228443088d36
+gate connection 30434edb8ee6
 gate context_admin 6bd5aa70ab69
 gate grant f1de797e6695
-gate machine 49f9833f1949
+gate machine 5a43dd016820
 gate read_gates 5b394645d054
 gate ledger_subject 595564c89c9c
-gate subscription c06ba6964096
+gate subscription 97b9a90d234d
 gate two_sided 4fb1fb73d559
 gate require_cogmap_write_admin 0e739e3f803f
 gate is_system_admin 1f8215393b50
