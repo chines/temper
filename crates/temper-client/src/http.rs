@@ -1508,7 +1508,10 @@ mod tests {
             .await
         {
             Err(ClientError::ResourceErased { id: got }) => assert_eq!(got, id),
-            other => panic!("expected ResourceErased, got {other:?}"),
+            // Names the outcome, never formats it: the client carries a bearer, and a formatted
+            // client result is what a cleartext-logging scan follows the token into.
+            Ok(_) => panic!("expected ResourceErased, got a block"),
+            Err(_) => panic!("expected ResourceErased, got another error"),
         }
     }
 
@@ -1542,7 +1545,9 @@ mod tests {
             .await
         {
             Ok(BlockRead::Folded { block_id, .. }) => assert_eq!(block_id, block),
-            other => panic!("expected BlockRead::Folded, got {other:?}"),
+            // Names the outcome, never formats it (see the erased-home test above).
+            Ok(_) => panic!("expected BlockRead::Folded, got another block shape"),
+            Err(_) => panic!("expected BlockRead::Folded, got an error"),
         }
     }
 
