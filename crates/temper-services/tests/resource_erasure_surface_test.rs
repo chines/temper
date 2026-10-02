@@ -1,30 +1,35 @@
 #![cfg(feature = "test-db")]
-//! Every scanned column a resource reaches is handled by the erasure act or declared out of scope;
-//! this test is the join that says so.
+//! Every carrier a resource reaches is handled by the erasure act or declared out of scope; this
+//! test is the join that says so.
 //!
 //! Under goal *"A single resource can be erased out of a live estate"* (spec D9, the table half;
-//! Witness 13). Three sources meet here, and only one of them is written for this test:
+//! Witness 13). Four sources meet here, and only one of them is written for this test:
 //!
-//! - **Which text is prose** comes from `scripts/sensitivity-scan-surface.txt`, read for its `scan`
-//!   lines. The sweep's manifest is the one definition; nothing here re-classifies a column.
-//! - **Which tables a resource reaches** comes from the live catalog: the five roots, plus every
-//!   base table whose `*_table` CHECK names `kb_resources`, plus every table holding a foreign key
-//!   into a reached table, recursively. Nothing enumerates tables by hand (ruled 2026-10-02), so a
-//!   new table is reached by construction rather than by someone remembering it.
-//! - **What the act does about each column** is declared in `scripts/resource-erasure-surface.txt`,
-//!   and every `handled` claim is checked against the live body of
-//!   `_resource_erasure_apply_redaction`, the D2 function.
+//! - **What a column holds** comes from the two sibling manifests. A carrier is a column
+//!   `scripts/sensitivity-scan-surface.txt` classes `scan`, or one
+//!   `scripts/personal-data-surface.txt` classes `content`, `incidental` or `derived` (ruled
+//!   2026-10-02). Nothing here re-classifies a column.
+//! - **Which tables a resource reaches** comes from the live catalog. A foreign key, or a
+//!   single-column CHECK on a `*_table` discriminator that enumerates tables, makes its table a
+//!   child of the table it names; the walk takes every child of a reached table, recursively, from
+//!   five roots, except below `kb_events` (ruled 2026-10-02). Nothing enumerates tables by hand, so
+//!   a new table is reached by construction rather than by someone remembering it.
+//! - **What the act does about each carrier** is declared in `scripts/resource-erasure-surface.txt`.
+//! - **Whether the act really does it** is read from the live body of
+//!   `_resource_erasure_apply_redaction`, the D2 function: a `handled` line must find an UPDATE of
+//!   its table assigning its column an erasure value.
 //!
 //! **Why the binding to the function body exists.** Without it, the manifest could say a column is
-//! handled while the act had stopped touching it, and every test here would stay green. Reverting
+//! handled while the act had stopped erasing it, and every test here would stay green. Reverting
 //! the joint-read fixes (`kb_chunks.header_path`, `kb_citation_audits.reason`) is the miss this
 //! fence exists for, and `reverting_the_joint_read_fixes_fails_the_fence` proves it turns red.
 //!
-//! **What this does not claim.** The binding is a token check that the function assigns the column
-//! in an UPDATE of its table (or deletes from that table). It proves the statement is there, not that
-//! its WHERE clause reaches every row of the resource; the erasure act's own witnesses own that. And
-//! the walk is blind to references spelled other than a foreign key or a CHECKed `*_table`
-//! discriminator, which the manifest header states.
+//! **What this does not claim.** The binding proves the statement is there and assigns an erasure
+//! value. It does not prove its WHERE clause reaches every row tied to the resource; the act's own
+//! witnesses own that, and the manifest's notes name the rows the act leaves. The walk is blind to
+//! references spelled neither as a foreign key nor as a CHECKed `*_table` discriminator; the
+//! manifest header lists them. The CHECK derivation here is a widened form of the personal-data
+//! fence's `poly` derivation (`personal_data_surface_test.rs`), which names `kb_profiles` only.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,48 +38,49 @@ use sqlx::PgPool;
 /// The declaration half. Read from the shipped file so the manifest and this test cannot drift.
 const MANIFEST: &str = include_str!("../../../scripts/resource-erasure-surface.txt");
 
-/// The one definition of which text is prose. Read for its `scan` lines only; its own test owns
-/// its format and its partition with the personal-data manifest.
+/// Which text is prose: read for its `scan` lines. Its own test owns its format.
 const SCAN_MANIFEST: &str = include_str!("../../../scripts/sensitivity-scan-surface.txt");
+
+/// Which non-text columns hold content: read for its `content`/`incidental`/`derived` lines. Its
+/// own test owns its format.
+const PERSONAL_MANIFEST: &str = include_str!("../../../scripts/personal-data-surface.txt");
+
+/// The personal-data classes that make a column a carrier. `identifier` and `reference` are about
+/// a person, not about what a resource says; `discriminator` and `none` hold nothing.
+const CARRIER_CLASSES: &[&str] = &["content", "incidental", "derived"];
 
 /// The D2 function: the one home of the content shape (spec D2).
 const REDACTION_FN: &str = "_resource_erasure_apply_redaction";
 
-/// The numbered D2 steps a `handled:D2.<step>` line may cite (spec D2, steps 1–9 and 7a).
+/// The numbered D2 steps a line may cite (spec D2, steps 1–9 and 7a).
 const D2_STEPS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "7a", "8", "9"];
 
-/// The tables a resource reaches, derived from the catalog.
-///
-/// Roots are the five tables the spec names plus the polymorphic owners, found by a CHECK on a
-/// `*_table` column that names `kb_resources`: the same structural test the personal-data fence's
-/// `poly` derivation uses for `kb_profiles`. The walk follows foreign keys INTO a reached table:
-/// a child row exists because of its parent, so the child is the parent's to account for.
-const REACHABLE_TABLES: &str = r#"
-WITH RECURSIVE
-roots(tbl) AS (
-  SELECT unnest(ARRAY['kb_resources','kb_content_blocks','kb_chunks','kb_block_revisions','kb_edges'])
-  UNION
-  SELECT DISTINCT c.conrelid::regclass::text
-    FROM pg_constraint c
-    JOIN unnest(c.conkey) k(attnum) ON true
-    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
-   WHERE c.contype = 'c' AND c.connamespace = 'public'::regnamespace
-     AND a.attname LIKE '%\_table'
-     AND pg_get_constraintdef(c.oid) LIKE '%''kb_resources''%'),
-fk AS (
-  SELECT DISTINCT conrelid::regclass::text child, confrelid::regclass::text parent
+/// The ledger. Reached, but never walked down from (ruled 2026-10-02): a foreign key into an event
+/// says which event caused a row, not that the row is the event's.
+const LEDGER: &str = "kb_events";
+
+/// The parent→child edges of the walk: every foreign key, and every single-column CHECK on a
+/// `*_table` discriminator, read as an edge to each public table it names.
+const EDGES: &str = r#"
+  SELECT DISTINCT conrelid::regclass::text AS child, confrelid::regclass::text AS parent
     FROM pg_constraint
-   WHERE contype = 'f' AND connamespace = 'public'::regnamespace),
-reach(tbl) AS (
-  SELECT tbl FROM roots
+   WHERE contype = 'f' AND connamespace = 'public'::regnamespace
   UNION
-  SELECT fk.child FROM fk JOIN reach ON fk.parent = reach.tbl)
-SELECT tbl FROM reach ORDER BY 1
+  SELECT DISTINCT c.conrelid::regclass::text, m[1]
+    FROM pg_constraint c
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+   CROSS JOIN LATERAL regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_][a-z0-9_]*)''', 'g') m
+   WHERE c.contype = 'c' AND c.connamespace = 'public'::regnamespace
+     AND cardinality(c.conkey) = 1 AND a.attname LIKE '%\_table'
+     AND m[1] IN (SELECT relname FROM pg_class
+                   WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p'))
 "#;
 
-/// Base-table `*_table` columns that carry no CHECK naming them. Such a discriminator could point
-/// at `kb_resources` without the roots ever seeing it.
-const UNCHECKED_DISCRIMINATORS: &str = r#"
+/// Base-table `*_table` columns with no single-column CHECK that enumerates a public table. A
+/// discriminator the walk cannot read as an edge could point at a resource unseen. A pairing CHECK
+/// (`(x_table IS NULL) = (x_id IS NULL)`) spans two columns, and a pattern or negation names no
+/// table it admits, so neither counts.
+const UNENUMERATED_DISCRIMINATORS: &str = r#"
 SELECT c.table_name || '.' || c.column_name
   FROM information_schema.columns c
   JOIN information_schema.tables t
@@ -83,19 +89,74 @@ SELECT c.table_name || '.' || c.column_name
    AND NOT EXISTS (
      SELECT 1
        FROM pg_constraint k
-       JOIN unnest(k.conkey) u(attnum) ON true
-       JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = u.attnum
+       JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = k.conkey[1]
+      CROSS JOIN LATERAL regexp_matches(pg_get_constraintdef(k.oid), '''([a-z_][a-z0-9_]*)''', 'g') m
       WHERE k.contype = 'c' AND k.conrelid = (quote_ident(c.table_name::text))::regclass
-        AND a.attname = c.column_name)
+        AND cardinality(k.conkey) = 1 AND a.attname = c.column_name
+        AND pg_get_constraintdef(k.oid) !~ '(<>|~|\mLIKE\M|\mNOT\M)'
+        AND m[1] IN (SELECT relname FROM pg_class
+                      WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')))
  ORDER BY 1
 "#;
+
+fn reachable_tables_sql() -> String {
+    format!(
+        "WITH RECURSIVE edge AS ({EDGES}),
+         reach(tbl) AS (
+           SELECT unnest(ARRAY['kb_resources','kb_content_blocks','kb_chunks',
+                               'kb_block_revisions','kb_edges'])
+           UNION
+           SELECT edge.child FROM edge JOIN reach ON edge.parent = reach.tbl
+            WHERE reach.tbl <> '{LEDGER}')
+         SELECT tbl FROM reach ORDER BY 1"
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Disposition {
     /// Emptied or sentineled by this D2 step.
-    Handled(String),
+    Handled { step: String },
+    /// Its citers are re-pointed through `via` (`table.column`) and the orphaned original deleted.
+    Repointed { step: String, via: String },
     /// Deliberately left; the note carries the reason.
     OutOfScope,
+}
+
+fn parse_step(step: &str, lineno: usize) -> String {
+    assert!(
+        D2_STEPS.contains(&step),
+        "resource-erasure-surface.txt:{lineno}: no D2 step {step:?} (known: {D2_STEPS:?})"
+    );
+    step.to_string()
+}
+
+fn parse_disposition(raw: &str, lineno: usize) -> Disposition {
+    if let Some(step) = raw.strip_prefix("handled:D2.") {
+        return Disposition::Handled {
+            step: parse_step(step, lineno),
+        };
+    }
+    if let Some(rest) = raw.strip_prefix("repointed:D2.") {
+        let (step, via) = rest.split_once(':').unwrap_or_else(|| {
+            panic!(
+                "resource-erasure-surface.txt:{lineno}: expected `repointed:D2.<step>:<table>.<column>`"
+            )
+        });
+        assert!(
+            via.split_once('.').is_some(),
+            "resource-erasure-surface.txt:{lineno}: {via:?} is not `table.column`"
+        );
+        return Disposition::Repointed {
+            step: parse_step(step, lineno),
+            via: via.to_string(),
+        };
+    }
+    assert!(
+        raw == "out-of-scope",
+        "resource-erasure-surface.txt:{lineno}: unknown disposition {raw:?} (known: \
+         `handled:D2.<step>`, `repointed:D2.<step>:<table>.<column>`, `out-of-scope`)"
+    );
+    Disposition::OutOfScope
 }
 
 /// `table.column` → (disposition, note), from the manifest's `[tables]` section. Panics with the
@@ -103,7 +164,8 @@ enum Disposition {
 fn declarations() -> BTreeMap<String, (Disposition, String)> {
     let mut out = BTreeMap::new();
     let mut section: Option<&str> = None;
-    for (lineno, raw) in MANIFEST.lines().enumerate() {
+    for (i, raw) in MANIFEST.lines().enumerate() {
+        let lineno = i + 1;
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -111,68 +173,57 @@ fn declarations() -> BTreeMap<String, (Disposition, String)> {
         if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             assert!(
                 name == "tables",
-                "resource-erasure-surface.txt:{}: unknown section [{name}] (cut 1 knows only \
-                 [tables]; the [payload] section lands with cut 2 and extends this parser)",
-                lineno + 1
+                "resource-erasure-surface.txt:{lineno}: unknown section [{name}] (cut 1 knows only \
+                 [tables]; the [payload] section lands with cut 2 and extends this parser)"
             );
             section = Some(name);
             continue;
         }
         assert!(
             section == Some("tables"),
-            "resource-erasure-surface.txt:{}: a declaration outside any section: {raw:?}",
-            lineno + 1
+            "resource-erasure-surface.txt:{lineno}: a declaration outside any section: {raw:?}"
         );
         let cols: Vec<&str> = line.split('|').map(str::trim).collect();
         assert!(
             cols.len() == 3,
-            "resource-erasure-surface.txt:{}: expected `table.column | disposition | note`, got {raw:?}",
-            lineno + 1
+            "resource-erasure-surface.txt:{lineno}: expected `table.column | disposition | note`, got {raw:?}"
         );
-        let (key, disposition, note) = (cols[0].to_string(), cols[1], cols[2]);
+        let key = cols[0].to_string();
         assert!(
             key.split_once('.')
                 .is_some_and(|(t, c)| !t.is_empty() && !c.is_empty()),
-            "resource-erasure-surface.txt:{}: {key:?} is not `table.column`",
-            lineno + 1
+            "resource-erasure-surface.txt:{lineno}: {key:?} is not `table.column`"
         );
-        let disposition = match disposition.strip_prefix("handled:D2.") {
-            Some(step) => {
-                assert!(
-                    D2_STEPS.contains(&step),
-                    "resource-erasure-surface.txt:{}: no D2 step {step:?} (known: {D2_STEPS:?})",
-                    lineno + 1
-                );
-                Disposition::Handled(step.to_string())
-            }
-            None if disposition == "out-of-scope" => Disposition::OutOfScope,
-            None => panic!(
-                "resource-erasure-surface.txt:{}: unknown disposition {disposition:?} \
-                 (known: `handled:D2.<step>`, `out-of-scope`)",
-                lineno + 1
-            ),
-        };
+        let disposition = parse_disposition(cols[1], lineno);
         assert!(
-            out.insert(key.clone(), (disposition, note.to_string()))
+            out.insert(key.clone(), (disposition, cols[2].to_string()))
                 .is_none(),
-            "resource-erasure-surface.txt:{}: {key} declared twice",
-            lineno + 1
+            "resource-erasure-surface.txt:{lineno}: {key} declared twice"
         );
     }
     out
 }
 
-/// Every column the sweep's manifest classes `scan`.
-fn scan_columns() -> BTreeSet<String> {
-    SCAN_MANIFEST
+/// `table.column` keys of `manifest` whose second field is in `classes`.
+fn keys_classed(manifest: &str, classes: &[&str]) -> BTreeSet<String> {
+    manifest
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .filter_map(|l| {
             let cols: Vec<&str> = l.split('|').map(str::trim).collect();
-            (cols.get(1) == Some(&"scan")).then(|| cols[0].to_string())
+            cols.get(1)
+                .is_some_and(|c| classes.contains(c))
+                .then(|| cols[0].to_string())
         })
         .collect()
+}
+
+/// Every carrier column, by the two sibling manifests.
+fn carriers() -> BTreeSet<String> {
+    let mut out = keys_classed(SCAN_MANIFEST, &["scan"]);
+    out.extend(keys_classed(PERSONAL_MANIFEST, CARRIER_CLASSES));
+    out
 }
 
 fn table_of(key: &str) -> &str {
@@ -180,7 +231,7 @@ fn table_of(key: &str) -> &str {
 }
 
 async fn reachable_tables(pool: &PgPool) -> BTreeSet<String> {
-    sqlx::query_scalar::<_, String>(REACHABLE_TABLES)
+    sqlx::query_scalar::<_, String>(&reachable_tables_sql())
         .fetch_all(pool)
         .await
         .expect("derive the tables a resource reaches")
@@ -197,48 +248,85 @@ async fn redaction_body(pool: &PgPool) -> String {
     .expect("read the D2 function's live definition")
 }
 
-/// Lowercased tokens of `sql` with `--` comments removed. Punctuation that separates an assignment
-/// (`,` `=` `(` `)` `;`) becomes its own token, so `SET a = 1, b = 2;` reads as
+/// Lowercased tokens of `sql`. `--` and `/* */` comments are dropped; a single-quoted literal
+/// (with `''` escapes) is ONE token, kept verbatim, so text inside a RAISE message can never read
+/// as a statement. `,` `=` `(` `)` `;` are tokens of their own, so `SET a = 1, b = 2;` reads as
 /// `set a = 1 , b = 2 ;`.
 fn tokens(sql: &str) -> Vec<String> {
+    let chars: Vec<char> = sql.chars().collect();
     let mut out = Vec::new();
-    for line in sql.lines() {
-        let code = line.find("--").map_or(line, |i| &line[..i]);
-        let mut cur = String::new();
-        for ch in code.chars() {
-            if ch.is_whitespace() || ",=();".contains(ch) {
-                if !cur.is_empty() {
-                    out.push(std::mem::take(&mut cur).to_lowercase());
-                }
-                if !ch.is_whitespace() {
-                    out.push(ch.to_string());
-                }
-            } else {
-                cur.push(ch);
-            }
-        }
+    let mut cur = String::new();
+    let mut i = 0;
+    let flush = |cur: &mut String, out: &mut Vec<String>| {
         if !cur.is_empty() {
-            out.push(cur.to_lowercase());
+            out.push(std::mem::take(cur).to_lowercase());
+        }
+    };
+    while i < chars.len() {
+        let ch = chars[i];
+        let next = chars.get(i + 1).copied();
+        if ch == '-' && next == Some('-') {
+            flush(&mut cur, &mut out);
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if ch == '/' && next == Some('*') {
+            flush(&mut cur, &mut out);
+            i += 2;
+            while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
+                i += 1;
+            }
+            i += 2;
+        } else if ch == '\'' {
+            flush(&mut cur, &mut out);
+            let mut lit = String::from('\'');
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == '\'' && chars.get(i + 1) == Some(&'\'') {
+                    lit.push_str("''");
+                    i += 2;
+                } else if chars[i] == '\'' {
+                    break;
+                } else {
+                    lit.push(chars[i]);
+                    i += 1;
+                }
+            }
+            lit.push('\'');
+            out.push(lit);
+            i += 1;
+        } else if ch.is_whitespace() || ",=();".contains(ch) {
+            flush(&mut cur, &mut out);
+            if !ch.is_whitespace() {
+                out.push(ch.to_string());
+            }
+            i += 1;
+        } else {
+            cur.push(ch);
+            i += 1;
         }
     }
+    flush(&mut cur, &mut out);
     out
 }
 
-/// Whether `body` writes `table.column`: an `UPDATE <table>` whose SET list assigns `<column>`, or
-/// a `DELETE FROM <table>`. An assignment target is a token right after `set` or `,` and right
-/// before `=`, within the statement (up to its `;`).
-fn writes_column(body: &str, key: &str) -> bool {
+/// Whether a SET value starting at `value` is an erasure value: NULL, an empty string or object,
+/// the property sentinel `'"erased"'`, or an `'erased…'` sentinel (`'erased-' || id`).
+fn is_erasure_value(value: Option<&String>) -> bool {
+    value.is_some_and(|v| {
+        v == "null" || v == "''" || v == "'{}'" || v == "'\"erased\"'" || v.starts_with("'erased")
+    })
+}
+
+/// Every value `body` assigns to `table.column` in an UPDATE of `table`, as the token that starts
+/// it. An assignment target is a token right after `set` or `,`, right before `=`, within the
+/// statement (up to its `;`).
+fn assignments<'a>(t: &'a [String], key: &str) -> Vec<Option<&'a String>> {
     let Some((table, column)) = key.split_once('.') else {
-        return false;
+        return Vec::new();
     };
-    let t = tokens(body);
+    let mut out = Vec::new();
     for i in 0..t.len() {
-        if t[i] == "delete"
-            && t.get(i + 1).is_some_and(|x| x == "from")
-            && t.get(i + 2).is_some_and(|x| x == table)
-        {
-            return true;
-        }
         if t[i] != "update" || t.get(i + 1).is_none_or(|x| x != table) {
             continue;
         }
@@ -252,107 +340,129 @@ fn writes_column(body: &str, key: &str) -> bool {
                     && matches!(t[j - 1].as_str(), "set" | ",")
                     && t.get(j + 1).is_some_and(|x| x == "=") =>
                 {
-                    return true;
+                    out.push(t.get(j + 2));
                 }
                 _ => {}
             }
         }
     }
-    false
+    out
 }
 
-/// `scan` columns in reachable tables with no line in the manifest. `scan` is a parameter, not
-/// read inside, so the Witness 13 probe can stand in for the sweep PR that would class its column.
-fn uncovered(reach: &BTreeSet<String>, scan: &BTreeSet<String>) -> Vec<String> {
+fn deletes_from(t: &[String], table: &str) -> bool {
+    t.windows(3)
+        .any(|w| w[0] == "delete" && w[1] == "from" && w[2] == table)
+}
+
+/// Whether `body` does what `disposition` claims for `key`.
+fn binds(body: &str, key: &str, disposition: &Disposition) -> bool {
+    let t = tokens(body);
+    match disposition {
+        Disposition::Handled { .. } => assignments(&t, key).into_iter().any(is_erasure_value),
+        Disposition::Repointed { via, .. } => {
+            !assignments(&t, via).is_empty() && deletes_from(&t, table_of(key))
+        }
+        Disposition::OutOfScope => true,
+    }
+}
+
+/// Carriers in reachable tables with no line in the manifest. `carriers` is a parameter, not read
+/// inside, so the Witness 13 probes can stand in for the sibling-manifest PR that would class them.
+fn uncovered(reach: &BTreeSet<String>, carriers: &BTreeSet<String>) -> Vec<String> {
     let declared = declarations();
-    scan.iter()
+    carriers
+        .iter()
         .filter(|k| reach.contains(table_of(k)) && !declared.contains_key(*k))
         .cloned()
         .collect()
 }
 
-/// `handled` lines whose column the D2 function does not write.
+/// Lines whose disposition the D2 function does not carry out.
 fn unbound(body: &str) -> Vec<String> {
     declarations()
         .into_iter()
-        .filter(|(k, (d, _))| matches!(d, Disposition::Handled(_)) && !writes_column(body, k))
+        .filter(|(k, (d, _))| !binds(body, k, d))
         .map(|(k, _)| k)
         .collect()
 }
 
-async fn unchecked_discriminators(pool: &PgPool) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(UNCHECKED_DISCRIMINATORS)
+async fn unenumerated_discriminators(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(UNENUMERATED_DISCRIMINATORS)
         .fetch_all(pool)
         .await
-        .expect("probe base-table *_table columns for a CHECK")
+        .expect("probe base-table *_table columns for an enumerating CHECK")
 }
 
-/// FAILS IF: a column the sweep classes `scan` sits in a table a resource reaches, and the manifest
-/// says nothing about what the erasure act does with it. This is the direction that matters: prose
-/// that survives an erasure while the act reports success.
+/// FAILS IF: a carrier sits in a table a resource reaches and the manifest says nothing about what
+/// the erasure act does with it. This is the direction that matters: content that survives an
+/// erasure while the act reports success.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn every_reachable_scan_column_is_handled_or_declared(pool: PgPool) {
-    let missing = uncovered(&reachable_tables(&pool).await, &scan_columns());
+async fn every_reachable_carrier_is_handled_or_declared(pool: PgPool) {
+    let missing = uncovered(&reachable_tables(&pool).await, &carriers());
     assert!(
         missing.is_empty(),
-        "these columns are classed `scan` in scripts/sensitivity-scan-surface.txt, sit in a table a \
+        "these columns are carriers (`scan` in scripts/sensitivity-scan-surface.txt, or \
+         content/incidental/derived in scripts/personal-data-surface.txt), sit in a table a \
          resource reaches, and have no line in scripts/resource-erasure-surface.txt.\n\
-         Either make `_resource_erasure_apply_redaction` empty or sentinel the column and declare it \
-         `handled:D2.<step>`, or declare it `out-of-scope` with the reason the act leaves it.\n\
+         Either make `{REDACTION_FN}` erase the column and declare it `handled:D2.<step>`, or \
+         declare it `out-of-scope` with the reason the act leaves it.\n\
          Uncovered: {missing:#?}"
     );
 }
 
-/// FAILS IF: a `handled` line claims a column the D2 function no longer writes. A manifest that
-/// says "handled" while the act moved on is the failure this fence exists to catch.
+/// FAILS IF: a line claims something the D2 function no longer does: a `handled` column it does not
+/// assign an erasure value, or a `repointed` column whose re-point or delete is gone.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn every_handled_declaration_is_written_by_the_redaction(pool: PgPool) {
+async fn every_handled_declaration_is_carried_out_by_the_redaction(pool: PgPool) {
     let broken = unbound(&redaction_body(&pool).await);
     assert!(
         broken.is_empty(),
         "scripts/resource-erasure-surface.txt declares these columns handled, but the live \
-         `{REDACTION_FN}` neither assigns them in an UPDATE of their table nor deletes from it.\n\
+         `{REDACTION_FN}` does not do what the line says: a `handled` column needs an UPDATE of its \
+         table assigning NULL, '', '{{}}', '\"erased\"' or an 'erased…' sentinel; a `repointed` \
+         one needs the re-point UPDATE and the DELETE.\n\
          Restore the step, or change the line to say what the act now does.\n\
          Unbound: {broken:#?}"
     );
 }
 
-/// FAILS IF: a line names a column the sweep does not class `scan` (the manifest's subject is the
-/// sweep's prose, nothing else), or an `out-of-scope` line names a table no resource reaches (there
-/// is nothing to be out of scope OF). A `handled` line outside the walk is allowed: the binding test
-/// checks it against the function body instead (today, `kb_remote_sources.uri`).
+/// FAILS IF: a line names a column that is not a carrier (the manifest's subject is the siblings'
+/// carriers, nothing else), or an `out-of-scope` line names a table no resource reaches (there is
+/// nothing to be out of scope OF). A `handled` or `repointed` line outside the walk is allowed:
+/// the binding test checks it against the function body instead (today, `kb_remote_sources.uri`).
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_declaration_is_live(pool: PgPool) {
-    let scan = scan_columns();
+    let carriers = carriers();
     let reach = reachable_tables(&pool).await;
     let stale: Vec<String> = declarations()
         .into_iter()
         .filter(|(k, (d, _))| {
-            !scan.contains(k) || (*d == Disposition::OutOfScope && !reach.contains(table_of(k)))
+            !carriers.contains(k) || (*d == Disposition::OutOfScope && !reach.contains(table_of(k)))
         })
         .map(|(k, _)| k)
         .collect();
     assert!(
         stale.is_empty(),
-        "scripts/resource-erasure-surface.txt declares columns that are not `scan` columns in the \
-         sweep's manifest, or are out of scope in a table no resource reaches. Delete the line, or \
-         (if the sweep reclassified the column) check the sweep's reason first.\n\
+        "scripts/resource-erasure-surface.txt declares columns that are not carriers in either \
+         sibling manifest, or are out of scope in a table no resource reaches. Delete the line, or \
+         (if a sibling reclassified the column) check that manifest's reason first.\n\
          Stale: {stale:#?}"
     );
 }
 
-/// FAILS IF: a base-table `*_table` discriminator carries no CHECK. The polymorphic roots are found
-/// by a CHECK naming `kb_resources`; a discriminator without one could point at a resource and the
-/// walk would never see the table.
+/// FAILS IF: a base-table `*_table` discriminator has no single-column CHECK enumerating the tables
+/// it may name. The walk reads polymorphic edges from those CHECKs; a discriminator without one
+/// could point at a resource and the walk would never see its table.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn every_polymorphic_discriminator_carries_a_check(pool: PgPool) {
-    let bare = unchecked_discriminators(&pool).await;
+async fn every_polymorphic_discriminator_enumerates_its_targets(pool: PgPool) {
+    let bare = unenumerated_discriminators(&pool).await;
     assert!(
         bare.is_empty(),
-        "these `*_table` columns carry no CHECK enumerating their targets, so the erasure fence \
-         cannot tell whether they reference kb_resources. Add the CHECK (the convention every other \
-         discriminator follows).\n\
-         Unchecked: {bare:#?}"
+        "these `*_table` columns carry no single-column CHECK enumerating their target tables \
+         (`col IN ('kb_a', 'kb_b')`), so the erasure fence cannot tell what they reference. A \
+         pairing CHECK, a pattern or a negation does not count. Add the enumerating CHECK, the \
+         convention every other discriminator follows.\n\
+         Unenumerated: {bare:#?}"
     );
 }
 
@@ -371,24 +481,29 @@ fn every_out_of_scope_line_states_its_reason() {
     );
 }
 
-/// Witness 13. FAILS IF: a `scan` column added to a resource-reachable table, in any of the three
-/// ways a table becomes reachable, is not reported until declared.
+/// Witness 13. FAILS IF: a carrier added to a resource-reachable table, in any of the ways a table
+/// becomes reachable, is not reported; or one added below the ledger is.
 ///
-/// The probes cover an existing table, a new table holding a foreign key into a root, a new table
-/// two keys away (the walk is transitive, ruled 2026-10-02), and a new polymorphic owner. The new
-/// tables are the case a hand-maintained table list would miss. The
-/// probe columns join the scan set here, standing in for the sweep PR that would class them `scan`.
-/// Each `sqlx::test` runs in its own database, so nothing escapes.
+/// The reachable probes are: a text column on an existing table, a jsonb column on one (the
+/// non-text carriers, ruled 2026-10-02), a new child of a root, a new grandchild (the walk is
+/// transitive), a new polymorphic owner of `kb_resources`, and a new polymorphic owner of
+/// `kb_content_blocks` alone (edges come from a CHECK naming any table). The new tables are the
+/// case a hand-maintained table list would miss. The last probe holds only a foreign key into
+/// `kb_events`, and must NOT be reported: the walk does not descend from the ledger.
+///
+/// The probe columns join the carrier set here, standing in for the sibling-manifest PR that would
+/// class them; the "until declared" half is `every_reachable_carrier_is_handled_or_declared`, which
+/// reads the shipped manifest. Each `sqlx::test` runs in its own database, so nothing escapes.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn an_added_scan_column_fails_the_fence_until_declared(pool: PgPool) {
-    let before = reachable_tables(&pool).await;
+async fn an_added_carrier_in_reach_is_reported(pool: PgPool) {
     assert!(
-        uncovered(&before, &scan_columns()).is_empty(),
+        uncovered(&reachable_tables(&pool).await, &carriers()).is_empty(),
         "precondition: the fence holds before the probes are added"
     );
 
     for ddl in [
         "ALTER TABLE kb_content_blocks ADD COLUMN erasure_fence_probe text",
+        "ALTER TABLE kb_content_blocks ADD COLUMN erasure_fence_probe_doc jsonb",
         "CREATE TABLE erasure_fence_probe_child (
              id uuid PRIMARY KEY,
              block_id uuid NOT NULL REFERENCES kb_content_blocks(id),
@@ -400,6 +515,13 @@ async fn an_added_scan_column_fails_the_fence_until_declared(pool: PgPool) {
              owner_table text NOT NULL CHECK (owner_table IN ('kb_resources', 'kb_cogmaps')),
              owner_id uuid NOT NULL,
              note text)",
+        "CREATE TABLE erasure_fence_probe_block_owner (
+             target_table text NOT NULL CHECK (target_table IN ('kb_content_blocks')),
+             target_id uuid NOT NULL,
+             note text)",
+        "CREATE TABLE erasure_fence_probe_caused (
+             caused_by_event_id uuid NOT NULL REFERENCES kb_events(id),
+             note text)",
     ] {
         sqlx::query(ddl)
             .execute(&pool)
@@ -407,40 +529,48 @@ async fn an_added_scan_column_fails_the_fence_until_declared(pool: PgPool) {
             .expect("apply probe DDL");
     }
 
-    let probes = [
+    let reported = [
+        "erasure_fence_probe_block_owner.note",
         "erasure_fence_probe_child.note",
         "erasure_fence_probe_grandchild.note",
         "erasure_fence_probe_owner.note",
         "kb_content_blocks.erasure_fence_probe",
+        "kb_content_blocks.erasure_fence_probe_doc",
     ];
-    let mut scan = scan_columns();
-    scan.extend(probes.iter().map(|p| p.to_string()));
+    let mut carriers = carriers();
+    carriers.extend(reported.iter().map(|p| p.to_string()));
+    carriers.insert("erasure_fence_probe_caused.note".to_string());
 
+    let reach = reachable_tables(&pool).await;
+    assert!(
+        reach.contains(LEDGER),
+        "the ledger itself is reached; only the walk below it stops"
+    );
     assert_eq!(
-        uncovered(&reachable_tables(&pool).await, &scan),
-        probes.map(String::from).to_vec(),
-        "every probe column must be reported, and only they"
+        uncovered(&reach, &carriers),
+        reported.map(String::from).to_vec(),
+        "every reachable probe must be reported, and the probe below the ledger must not"
     );
 }
 
 /// The done-when sanity check. FAILS IF: reverting the joint-read fixes leaves the fence green.
 ///
 /// The first draft of D2 missed `kb_chunks.header_path` and `kb_citation_audits.reason`. This
-/// rewrites the live function so those two UPDATEs assign something else, and asserts the binding
-/// reports exactly those two. Each rewrite must match exactly once, so the probe cannot silently
-/// test nothing.
+/// rewrites the live function so those two UPDATEs keep the column's own value, which still
+/// mentions and assigns the column but erases nothing, and asserts the binding reports exactly those
+/// two. Each rewrite must match exactly once, so the probe cannot silently test nothing.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn reverting_the_joint_read_fixes_fails_the_fence(pool: PgPool) {
     let body = redaction_body(&pool).await;
     assert!(
         unbound(&body).is_empty(),
-        "precondition: every handled line is bound"
+        "precondition: every line is bound"
     );
 
     let mut reverted = body.clone();
     for (fix, revert) in [
-        ("SET header_path = NULL", "SET resource_id = resource_id"),
-        ("SET reason = NULL", "SET block_id = block_id"),
+        ("SET header_path = NULL", "SET header_path = header_path"),
+        ("SET reason = NULL", "SET reason = reason"),
     ] {
         assert_eq!(
             reverted.matches(fix).count(),
@@ -464,48 +594,96 @@ async fn reverting_the_joint_read_fixes_fails_the_fence(pool: PgPool) {
     );
 }
 
-/// FAILS IF: a base-table `*_table` column without a CHECK is not reported by the guard.
+/// FAILS IF: a `*_table` column whose CHECKs enumerate nothing is not reported by the guard.
+///
+/// One probe per way a CHECK can fail to enumerate, and each of the last three NAMES a real table,
+/// so the only thing excluding it is the conjunct it witnesses: no CHECK at all; a CHECK spanning
+/// two columns (the single-column rule); a pattern match (the `~` rule); a negation (the `<>`
+/// rule).
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn an_unchecked_discriminator_fails_the_guard(pool: PgPool) {
+async fn an_unenumerated_discriminator_fails_the_guard(pool: PgPool) {
     assert!(
-        unchecked_discriminators(&pool).await.is_empty(),
+        unenumerated_discriminators(&pool).await.is_empty(),
         "precondition"
     );
-    sqlx::query("CREATE TABLE erasure_fence_probe_bare (owner_table text, owner_id uuid)")
-        .execute(&pool)
-        .await
-        .expect("create probe table");
+    for ddl in [
+        "CREATE TABLE erasure_fence_probe_bare (owner_table text, owner_id uuid)",
+        "CREATE TABLE erasure_fence_probe_paired (
+             owner_table text, owner_id uuid,
+             CHECK (owner_table = 'kb_resources' OR owner_id IS NULL))",
+        "CREATE TABLE erasure_fence_probe_pattern (
+             owner_table text CHECK (owner_table ~ 'kb_resources'), owner_id uuid)",
+        "CREATE TABLE erasure_fence_probe_negated (
+             owner_table text CHECK (owner_table <> 'kb_resources'), owner_id uuid)",
+    ] {
+        sqlx::query(ddl)
+            .execute(&pool)
+            .await
+            .expect("create probe table");
+    }
     assert_eq!(
-        unchecked_discriminators(&pool).await,
-        vec!["erasure_fence_probe_bare.owner_table".to_string()]
+        unenumerated_discriminators(&pool).await,
+        vec![
+            "erasure_fence_probe_bare.owner_table".to_string(),
+            "erasure_fence_probe_negated.owner_table".to_string(),
+            "erasure_fence_probe_paired.owner_table".to_string(),
+            "erasure_fence_probe_pattern.owner_table".to_string(),
+        ]
     );
 }
 
-/// The token check itself, on shapes the D2 function uses.
+/// The binding itself, on shapes the D2 function uses and shapes it must not be fooled by.
 #[test]
-fn writes_column_reads_assignments_not_mentions() {
+fn the_binding_reads_erasing_assignments_not_mentions() {
     let sql = "
         UPDATE kb_chunks c
            SET embedding = NULL, embedded_with = NULL -- header_path = NULL
          WHERE c.header_path = 'x';
+        /* UPDATE kb_chunk_content SET content = ''; */
+        RAISE EXCEPTION 'UPDATE kb_edges SET label = NULL;';
+        UPDATE kb_resources r
+           SET title = 'erased-' || r.id::text, origin_uri = r.origin_uri;
         WITH ranked AS (SELECT 1)
         UPDATE kb_properties p
            SET property_key   = 'erased-key-' || ranked.n::text,
                property_value = '\"erased\"'::jsonb
           FROM ranked;
+        UPDATE kb_block_provenance bp SET source_id = v;
         DELETE FROM kb_remote_sources r WHERE r.id = v;
     ";
-    assert!(writes_column(sql, "kb_chunks.embedding"));
-    assert!(writes_column(sql, "kb_chunks.embedded_with"));
+    let handled = Disposition::Handled { step: "9".into() };
+    for key in [
+        "kb_chunks.embedding",
+        "kb_chunks.embedded_with",
+        "kb_resources.title",
+        "kb_properties.property_key",
+        "kb_properties.property_value",
+    ] {
+        assert!(binds(sql, key, &handled), "{key} is erased here");
+    }
+    for (key, why) in [
+        ("kb_chunks.header_path", "a comment and a WHERE comparison"),
+        ("kb_chunk_content.content", "a block comment"),
+        ("kb_edges.label", "a string literal"),
+        ("kb_resources.origin_uri", "an assignment of its own value"),
+        (
+            "kb_remote_sources.uri",
+            "a DELETE is not a handled assignment",
+        ),
+    ] {
+        assert!(!binds(sql, key, &handled), "{key}: {why} is not an erasure");
+    }
+    let repointed = Disposition::Repointed {
+        step: "9".into(),
+        via: "kb_block_provenance.source_id".into(),
+    };
+    assert!(binds(sql, "kb_remote_sources.uri", &repointed));
     assert!(
-        !writes_column(sql, "kb_chunks.header_path"),
-        "a comment and a WHERE comparison are not assignments"
-    );
-    assert!(writes_column(sql, "kb_properties.property_key"));
-    assert!(writes_column(sql, "kb_properties.property_value"));
-    assert!(writes_column(sql, "kb_remote_sources.uri"));
-    assert!(
-        !writes_column(sql, "kb_chunk_content.content"),
-        "a table the SQL never writes"
+        !binds(
+            "DELETE FROM kb_remote_sources r WHERE r.id = v;",
+            "kb_remote_sources.uri",
+            &repointed
+        ),
+        "a delete without the re-point leaves the citers on the original URL"
     );
 }
