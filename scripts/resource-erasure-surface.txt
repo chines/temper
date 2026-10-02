@@ -1,0 +1,76 @@
+# The resource-erasure surface: what the act does with every scanned column a resource reaches.
+#
+# Under goal "A single resource can be erased out of a live estate" (spec: temper-artifacts
+# specs/2026-09-28-resource-erasure-design.md, D9). Sibling of scripts/personal-data-surface.txt and
+# scripts/sensitivity-scan-surface.txt.
+#
+# WHY THIS FILE EXISTS.
+#
+# The erasure act (`_resource_erasure_apply_redaction`, D2) names the columns it empties by hand. The
+# first draft of that list missed `kb_chunks.header_path` and `kb_citation_audits.reason`: both were
+# prose, both were reachable from the resource, and nothing said so until a joint read with the
+# sensitivity sweep. This file is where that question is answered for every such column, and
+# resource_erasure_surface_test.rs fails until it is.
+#
+# THE INVARIANT. Every column that sensitivity-scan-surface.txt classes `scan`, in a table a resource
+# reaches, has a line here: either handled by a numbered D2 step, or out-of-scope with its reason.
+#
+# NOTHING HERE DECIDES WHICH TEXT IS PROSE. The sweep's manifest is the one definition; this file
+# only says what the act does about the columns that definition marks `scan`. A third
+# classification would be a third thing to drift.
+#
+# NOTHING HERE LISTS TABLES. Reach is derived from the live catalog by the test (ruled 2026-10-02):
+#
+#   roots  kb_resources, kb_content_blocks, kb_chunks, kb_block_revisions, kb_edges, plus every base
+#          table with a CHECK on a `*_table` column naming 'kb_resources' (the polymorphic owners,
+#          which carry no foreign key: today kb_properties, kb_edges, kb_access_grants and
+#          kb_cogmap_region_members).
+#   walk   every table holding a foreign key into a reached table, recursively. A table added next
+#          week is reached the day it is added, and its `scan` columns fail here.
+#
+# A `*_table` discriminator with no CHECK would be invisible to the roots, so the test also fails on
+# any base-table `*_table` column that carries none.
+#
+# WHAT THE WALK DOES NOT SEE, STATED SO NOBODY INFERS COVERAGE FROM SILENCE.
+#   * Outbound references. kb_remote_sources is referenced by kb_block_provenance through
+#     (source_kind, source_id), with no foreign key and no `*_table` spelling. The walk follows
+#     neither. Its `uri` is declared below because D2 step 9 does reach it, and the test checks that
+#     claim against the function body instead of against the walk.
+#   * Discriminators spelled `*_kind` (kb_block_provenance.source_kind,
+#     kb_citation_audits.source_kind). Both tables are already reached through block_id, so nothing
+#     is missed today; a new `*_kind` reference into kb_resources would be.
+#
+# FORMAT (line-oriented; `#` comments and blank lines ignored)
+#   [tables]                                  section marker; cut 2 adds [payload] (D9's payload half)
+#   <table>.<column> | <disposition> | <note>
+#
+# disposition
+#   handled:D2.<step>   the D2 step that empties or sentinels the column. The test checks that the
+#                       live `_resource_erasure_apply_redaction` assigns the column in an UPDATE of
+#                       its table (or deletes from that table), so a claim the function stopped
+#                       keeping fails.
+#   out-of-scope        the act deliberately leaves it; the reason in the note is REQUIRED.
+
+[tables]
+
+# ── handled: the content shape (D2) ─────────────────────────────────────────────────────────
+kb_chunk_content.content                | handled:D2.1  | every chunk of the resource, current and superseded, emptied to ''
+kb_chunks.header_path                   | handled:D2.1  | joint-read fix: the heading trail is authored prose
+kb_block_content.content                | handled:D2.2  | every revision of every block, live and folded
+kb_workflow_jobs.last_error             | handled:D2.7  | every job scoped to the resource, in every status
+kb_ingestion_records.source_uri         | handled:D2.7a | the origin_uri class sentinel 'erased:<resource_id>'
+kb_citation_audits.reason               | handled:D2.8  | joint-read fix: every audit whose block is a block of the resource
+
+# ── handled: projection-side sentinels (D2 step 9, D4 classes) ──────────────────────────────
+kb_resources.title                      | handled:D2.9  | D4 title: 'erased-<resource_id>'
+kb_resources.origin_uri                 | handled:D2.9  | D4 origin_uri: 'erased:<resource_id>'
+kb_properties.property_key              | handled:D2.9  | D4 property key: 'erased-key-<n>', for properties of the resource and of every edge touching it
+kb_edges.label                          | handled:D2.9  | D4 edge label: NULL, on every edge touching the resource
+kb_remote_sources.uri                   | handled:D2.9  | outside the walk (see header). Provenance is re-pointed to a sentinel row; the original row is deleted only when nothing else cites it. A URL another resource still cites stays, named by id in the remainder (D8)
+
+# ── out of scope: reached only through a telos key ──────────────────────────────────────────
+kb_cogmaps.name                         | out-of-scope  | reached only through kb_cogmaps.telos_resource_id. The act refuses a charter resource (D5); map-grain charter erasure is its own filed task
+kb_cogmap_lenses.name                   | out-of-scope  | the same telos chain, through kb_cogmaps: the map's text, not the resource's
+kb_cogmap_regions.label                 | out-of-scope  | the same telos chain, through kb_cogmaps: the map's text, not the resource's
+kb_subscription_deliveries.rationale    | out-of-scope  | reached only through kb_invocations.telos_resource_id. A steward's judgement of a delivery, anchored to the invocation; its ledger copy is D8 cross-resource text, listed only (Q1)
+kb_subscription_deliveries.scope_reason | out-of-scope  | the same invocation chain: a caller's reason for a scope verdict, anchored to the delivery, not the resource
