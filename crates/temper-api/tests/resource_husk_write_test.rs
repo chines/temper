@@ -2611,11 +2611,12 @@ async fn a_goal_patch_waits_on_another_goal_patch_of_the_same_resource(pool: PgP
     );
 }
 
-/// A goal patch must not deadlock with an ordinary update of the same resource. The other update
-/// (held here) has folded a property row the goal patch also sets, and then writes the resource's
-/// own row — the order a title-and-meta update's projectors take. The goal patch, waiting on the
-/// property row, must hold nothing that resource-row write needs: both complete, neither answers
-/// a deadlock (`40P01`).
+/// The lock that serializes goal patches is never part of a deadlock with an ordinary update of
+/// the same resource. The other update (held here) has folded a property row the goal patch also
+/// sets, and then writes the resource's own row — the order a title-and-meta update's projectors
+/// take. The goal patch, waiting on the property row, must hold nothing that resource-row write
+/// needs: both complete, neither answers a deadlock (`40P01`). (Ordinary updates' own property
+/// and resource-row order is a separate matter, not pinned here.)
 ///
 /// FAILS IF goal patches serialize on a lock the resource-row write conflicts with. The bite: in
 /// `DbBackend::lock_goal_rows`, take the source `FOR NO KEY UPDATE` instead of the advisory lock.

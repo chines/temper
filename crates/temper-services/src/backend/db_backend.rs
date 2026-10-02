@@ -2894,18 +2894,20 @@ impl Backend for DbBackend {
         // erasure spec D13): the floor's `FOR KEY SHARE` holds until commit, so the write either
         // lands before an erasure or is refused after it — never separated from its check.
         let mut tx = self.begin_floored(ResourceId::from(new_id)).await?;
-        // LOCK ORDER (the rule for every floored write): lock every `kb_resources` row the write
-        // touches up front, before any other row lock. The source is locked by the floor above. A
-        // goal patch also touches the source's row again (to serialize goal patches) and the goal
-        // rows — the NEW goal's (a set), whose `FOR KEY SHARE` the edge's target clause
-        // (`check_endpoint_readable_in_tx`) takes, and the CURRENT goal's (a set or a clear), whose
-        // edge `fold_goal_edges` folds. `lock_goal_rows` takes them HERE, before the update and the
-        // goal-edge folds lock edge, block and remote-source rows. Taken after them, an erasure of
-        // a goal (which holds the goal's `FOR UPDATE` and then folds every edge touching it)
-        // deadlocks against this update. Taken first, the update either locks the goal before the
-        // act and the act waits for the commit, or waits on the act having written nothing and
-        // then reads its outcome: the target clause reads a new goal erased and refuses the whole
-        // update; `fold_goal_edges` reads the current goal's edge already folded and skips it.
+        // GOAL ROWS FIRST: a goal patch locks the goal rows it touches before the update and the
+        // goal-edge folds lock edge, block and remote-source rows — the NEW goal's (a set), whose
+        // `FOR KEY SHARE` the edge's target clause (`check_endpoint_readable_in_tx`) takes, and
+        // the CURRENT goal's (a set or a clear), whose edge `fold_goal_edges` folds — after the
+        // goal-patch advisory lock that serializes goal patches on this resource
+        // (`lock_goal_rows`). Taken after the edge rows, an erasure of a goal (which holds the
+        // goal's `FOR UPDATE` and then folds every edge touching it) deadlocks against this
+        // update. Taken first, the update either locks the goal before the act and the act waits
+        // for the commit, or waits on the act having written nothing and then reads its outcome:
+        // the target clause reads a new goal erased and refuses the whole update;
+        // `fold_goal_edges` reads the current goal's edge already folded and skips it. The source's
+        // own row is NOT re-locked here: the update's projectors take it `FOR NO KEY UPDATE` at
+        // their tail, after child rows, and an up-front row lock would deadlock with another
+        // update of this resource.
         if let Some(patch) = &cmd.goal {
             if let Err(refusal) = self.lock_goal_rows(&mut tx, new_id, patch).await {
                 return Err(write_floor::rollback_with(tx, refusal).await);
