@@ -198,7 +198,8 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         // denies with 404 so a refusal discloses nothing about the subject.
         .routes(routes!(handlers::admin_ledger::list))
         // Machine-principal registration (G3 Phase A). NOT admin-only: the gate is
-        // `is_system_admin OR owner of the machine's owning team` (`machine_authz::authorize`), so
+        // `is_system_admin OR owner of the machine's owning team` (`machine_authz::authorize` for
+        // provision/issue, `MachineClientControlAuthority` per row, which refuses as a missing id), so
         // any authenticated profile that owns any team can reach `provision`, `issue`, and
         // `apply_reach`. Only `rebind` is admin-only (`machine_registration_service::rebind`), and
         // it is mounted by the admin group (`admin.rs`), not here.
@@ -221,8 +222,9 @@ pub(super) fn gated_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::machine_clients::rotate_secret))
         // Connection provisioning (external systems as subscribed emitters, S1). Same shape as
         // machine-clients above and for the same reasons: gated inside the service
-        // (`machine_authz::authorize`, verbatim — a connection is a machine principal wearing an
-        // integration's clothes).
+        // (`MachineAuthority`'s policy, verbatim — a connection is a machine principal wearing an
+        // integration's clothes; per row through `ConnectionControlAuthority`, which refuses as a
+        // missing id).
         .routes(routes!(
             handlers::connections::list,
             handlers::connections::provision

@@ -364,7 +364,7 @@ class SubscriptionsApi:
     ) -> ConnectionSubscription:
         """Get a subscription
 
-        Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+        Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Subscription ID (required)
         :type id: UUID
@@ -438,7 +438,7 @@ class SubscriptionsApi:
     ) -> ApiResponse[ConnectionSubscription]:
         """Get a subscription
 
-        Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+        Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Subscription ID (required)
         :type id: UUID
@@ -512,7 +512,7 @@ class SubscriptionsApi:
     ) -> RESTResponseType:
         """Get a subscription
 
-        Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+        Returns one subscription. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Subscription ID (required)
         :type id: UUID
@@ -950,7 +950,7 @@ class SubscriptionsApi:
     ) -> ConnectionSubscription:
         """Revoke a subscription
 
-        Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+        Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Subscription ID (required)
         :type id: UUID
@@ -1024,7 +1024,7 @@ class SubscriptionsApi:
     ) -> ApiResponse[ConnectionSubscription]:
         """Revoke a subscription
 
-        Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+        Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Subscription ID (required)
         :type id: UUID
@@ -1098,7 +1098,7 @@ class SubscriptionsApi:
     ) -> RESTResponseType:
         """Revoke a subscription
 
-        Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team.
+        Revokes a subscription so it stops matching new events. The row is kept so past deliveries still resolve. Revoking an already-revoked subscription returns it unchanged. Requires a system admin or an owner or maintainer of the subscription's authoring team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
 
         :param id: Subscription ID (required)
         :type id: UUID

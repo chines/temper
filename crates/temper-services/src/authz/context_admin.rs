@@ -5,7 +5,8 @@
 //! the reason that module's doc records. The difference is that this one answers in **two**
 //! dialects — `403` to a principal who can read the context but does not administer it, `404` to
 //! one who cannot see it at all — which is what [`ScopedAuthority::denial_for`] exists for. This is
-//! its first and only consumer.
+//! its first consumer; `ConnectionAuthority` (`super::connection`) is the second, on the same
+//! argument.
 //!
 //! **This is not an oracle.** The `403` goes only to principals who already read the context — they
 //! learn nothing a `GET` would not already have told them. Refusal detail stays bounded by what the

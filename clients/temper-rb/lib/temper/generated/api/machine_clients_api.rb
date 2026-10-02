@@ -20,7 +20,7 @@ module Temper::Generated
       @api_client = api_client
     end
     # Get a machine client
-    # Returns one machine client. Requires a system admin or the owner of the machine's owning team.
+    # Returns one machine client. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Machine client ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -31,7 +31,7 @@ module Temper::Generated
     end
 
     # Get a machine client
-    # Returns one machine client. Requires a system admin or the owner of the machine&#39;s owning team.
+    # Returns one machine client. Requires a system admin or the owner of the machine&#39;s owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Machine client ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -307,7 +307,7 @@ module Temper::Generated
     end
 
     # Revoke a machine client
-    # Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team.
+    # Revokes a machine client so its credential no longer authenticates, and revokes the agent profile's standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Machine client ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -318,7 +318,7 @@ module Temper::Generated
     end
 
     # Revoke a machine client
-    # Revokes a machine client so its credential no longer authenticates, and revokes the agent profile&#39;s standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine&#39;s owning team.
+    # Revokes a machine client so its credential no longer authenticates, and revokes the agent profile&#39;s standing if it was approved. Team memberships and grants are left in place. Revoking an already-revoked client returns it unchanged. Requires a system admin or the owner of the machine&#39;s owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Machine client ID
     # @param [Hash] opts the optional parameters
     # @option opts [String] :x_temper_surface The calling surface, for event-ledger attribution. Accepted values are &#x60;cli&#x60; and &#x60;sdk&#x60;; an absent or unrecognized value attributes the write to &#x60;web&#x60;. This is provenance, never authorization — an unrecognized value degrades, it never rejects.
@@ -377,7 +377,7 @@ module Temper::Generated
     end
 
     # Rotate a machine client secret
-    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team.
+    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for `grace_seconds` (0 to 604800). The new `client_secret` in the response is shown once and never stored. Requires a system admin or the owner of the machine's owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Machine client ID
     # @param rotate_secret_request [RotateSecretRequest] 
     # @param [Hash] opts the optional parameters
@@ -389,7 +389,7 @@ module Temper::Generated
     end
 
     # Rotate a machine client secret
-    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for &#x60;grace_seconds&#x60; (0 to 604800). The new &#x60;client_secret&#x60; in the response is shown once and never stored. Requires a system admin or the owner of the machine&#39;s owning team.
+    # Installs a fresh secret for a temper-issued machine client. The previous secret stays valid for &#x60;grace_seconds&#x60; (0 to 604800). The new &#x60;client_secret&#x60; in the response is shown once and never stored. Requires a system admin or the owner of the machine&#39;s owning team. Any other caller with system access is answered 404, exactly as for an id that does not exist.
     # @param id [String] Machine client ID
     # @param rotate_secret_request [RotateSecretRequest] 
     # @param [Hash] opts the optional parameters

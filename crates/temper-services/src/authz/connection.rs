@@ -7,6 +7,15 @@
 //! Folding it into the shared resolver would mean parameterizing away everything that is actually
 //! shared.
 //!
+//! **Two refusal dialects, and this is not an oracle.** `ConnectionAuthority` answers `404` to a
+//! caller who does not control the connection — byte-identical to a missing connection, like every
+//! other per-row act through [`ConnectionControlAuthority`] — and `403` only to a caller who does
+//! control it but does not manage the receiving team. That `403` reaches only callers who can
+//! already `GET` the connection, so it discloses nothing a read would not. It is the argument a
+//! later "let's make the denials consistent" pass has to answer before collapsing the arms, as with
+//! `ContextAdminAuthority` (`super::context_admin`). "Indistinguishable" means the response, not
+//! the timing: a denied id runs the authority probes a missing id never reaches.
+//!
 //! It also must not route through `GrantAuthority`, despite writing a `kb_access_grants` row. That
 //! is stated at the call site and is load-bearing: *"the `can_grant` seam has no bootstrap holder
 //! for a connection subject"* (`connection_service.rs`, `grant_reach`'s doc). A connection has no
@@ -18,7 +27,7 @@ use uuid::Uuid;
 
 use super::{Principal, ScopedAuthority};
 use crate::error::{ApiError, ApiResult};
-use crate::services::connection_service;
+use crate::services::connection_service::{self, CONNECTION_REFUSAL};
 use crate::services::machine_authz::{self, MachineAuthority};
 
 /// The connection whose reach is being conferred, and the team receiving it.
@@ -53,7 +62,13 @@ impl ConnectionScope {
 /// must still succeed (spec §2.5).
 ///
 /// `ConnectionAuthority` **composes** this rather than re-asking, so there is exactly one place that
-/// knows the owning team is read from the row and handed to `MachineAuthority`.
+/// knows the owning team is read from the row and handed to `MachineAuthority`. It is also the gate
+/// for every other act on an existing connection: get, revoke, the credential, the webhook events
+/// and the tool manifest.
+///
+/// **Its refusal is `NotFound`, byte-identical to the missing-row refusal.** A `Forbidden` here told
+/// a caller probing ids that the connection exists — an existence oracle any approved bearer could
+/// run. Nothing is withheld from a caller who controls the connection: they can `GET` it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConnectionControlAuthority {
     /// A system admin.
@@ -84,7 +99,10 @@ impl ScopedAuthority for ConnectionControlAuthority {
             {
                 MachineAuthority::SystemAdmin => ConnectionControlAuthority::SystemAdmin,
                 MachineAuthority::TeamOwner => ConnectionControlAuthority::OwnerOfOwningTeam,
-                MachineAuthority::None => ConnectionControlAuthority::None,
+                MachineAuthority::None => {
+                    super::log_concealed_refusal(caller, "connection");
+                    ConnectionControlAuthority::None
+                }
             },
         )
     }
@@ -93,8 +111,10 @@ impl ScopedAuthority for ConnectionControlAuthority {
         matches!(self, ConnectionControlAuthority::None)
     }
 
+    /// `NotFound(CONNECTION_REFUSAL)` — the sentence `connection_service::get` renders for a missing
+    /// row, so a denied id and an absent one are indistinguishable.
     fn denial() -> ApiError {
-        ApiError::Forbidden
+        ApiError::NotFound(CONNECTION_REFUSAL.to_string())
     }
 }
 
@@ -124,9 +144,13 @@ pub(crate) enum ConnectionAuthority {
     /// system-admin leg on subscription writes) went the other way, closing a gap the docs already
     /// promised rather than lowering a bar.
     OwnerAndTargetManager,
-    /// Neither — failing closed on a teamless connection, on a caller who does not own the owning
-    /// team, and on a receiving team the caller does not manage.
-    None,
+    /// No control over the connection — a teamless connection (failing closed), or a caller who is
+    /// neither a system admin nor the owner of the owning team. Refused as `NotFound`, like every
+    /// other act on a connection the caller cannot control.
+    Invisible,
+    /// Controls the connection, but does not manage the receiving team. Refused as `Forbidden`:
+    /// this caller can `GET` the connection, so the `403` discloses nothing a read would not.
+    NotTargetManager,
 }
 
 #[async_trait]
@@ -160,7 +184,7 @@ impl ScopedAuthority for ConnectionAuthority {
         )
         .await?;
         if control.is_denial() {
-            return Ok(ConnectionAuthority::None);
+            return Ok(ConnectionAuthority::Invisible);
         }
 
         // `contain_target_team` still takes a `MachineAuthority`, so map back for the one call. The
@@ -171,7 +195,7 @@ impl ScopedAuthority for ConnectionAuthority {
             ConnectionControlAuthority::OwnerOfOwningTeam => MachineAuthority::TeamOwner,
             // Unreachable — the denial arm returned above. Enumerated rather than `_ =>` so a
             // future arm cannot land here and be silently authorized.
-            ConnectionControlAuthority::None => return Ok(ConnectionAuthority::None),
+            ConnectionControlAuthority::None => return Ok(ConnectionAuthority::Invisible),
         };
         let caller = caller.profile_id();
 
@@ -187,19 +211,34 @@ impl ScopedAuthority for ConnectionAuthority {
                 ConnectionControlAuthority::OwnerOfOwningTeam => {
                     ConnectionAuthority::OwnerAndTargetManager
                 }
-                ConnectionControlAuthority::None => ConnectionAuthority::None,
+                ConnectionControlAuthority::None => ConnectionAuthority::Invisible,
             }),
-            Err(ApiError::Forbidden) => Ok(ConnectionAuthority::None),
+            Err(ApiError::Forbidden) => Ok(ConnectionAuthority::NotTargetManager),
             Err(other) => Err(other),
         }
     }
 
     fn is_denial(&self) -> bool {
-        matches!(self, ConnectionAuthority::None)
+        matches!(
+            self,
+            ConnectionAuthority::Invisible | ConnectionAuthority::NotTargetManager
+        )
     }
 
-    /// `Forbidden`, as both underlying questions have always refused with.
+    /// The connection side's refusal, `NotFound(CONNECTION_REFUSAL)` — the same as
+    /// [`ConnectionControlAuthority`]'s, so a grant probes no more than a `GET` does.
     fn denial() -> ApiError {
-        ApiError::Forbidden
+        ApiError::NotFound(CONNECTION_REFUSAL.to_string())
+    }
+
+    /// One gate, two dialects — dispatched on the question that refused, after
+    /// `ContextAdminAuthority`'s precedent. `Invisible` (question 1) → the existence-hiding `404`.
+    /// `NotTargetManager` (question 2) → `Forbidden`: that caller controls the connection, so the
+    /// `403` names nothing they cannot already read.
+    fn denial_for(&self) -> ApiError {
+        match self {
+            ConnectionAuthority::NotTargetManager => ApiError::Forbidden,
+            _ => Self::denial(),
+        }
     }
 }
