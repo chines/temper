@@ -548,14 +548,17 @@ async fn cut_one_detects_no_contact_data(pool: PgPool) {
 async fn every_seeded_detector_finds_its_planted_value(pool: PgPool) {
     for (detector, text) in [
         ("private_key_block", "-----BEGIN OPENSSH PRIVATE KEY-----"),
-        ("cloud_saas_key", "key AKIAABCDEFGHIJKLMNOP here"),
+        (
+            "cloud_saas_key",
+            "key AKIAABCDEFGHIJKLMNOP here", // gitleaks:allow — a planted fake key the detector must find
+        ),
         (
             "connection_string_password",
             "postgres://app:hunter2@db:5432/x",
         ),
         (
             "jwt",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop", // gitleaks:allow — a planted unsigned sample JWT the detector must find
         ),
         ("payment_card", "card 4111 1111 1111 1111 exp"),
         ("aba_routing", "routing number: 021000021"),
