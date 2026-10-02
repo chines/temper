@@ -132,7 +132,13 @@ pub fn parse_mcp_config(
         toml::from_str(MCP_SERVER_TOML).map_err(McpConfigError::Toml)?;
     let mut oauth = server_file.oauth;
 
-    let mcp_base_url = get("MCP_BASE_URL").ok_or(McpConfigError::Missing("MCP_BASE_URL"))?;
+    // Trailing slashes trimmed so every `{base}/…` derivation is single-slashed — in particular the
+    // PRM's `authorization_servers` entry, which must equal the issuer temper-cloud serves (that
+    // side trims the same way; RFC 8414 §3.3 compares them as exact strings).
+    let mcp_base_url = get("MCP_BASE_URL")
+        .map(|v| v.trim_end_matches('/').to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or(McpConfigError::Missing("MCP_BASE_URL"))?;
     let mcp_client_id = get("MCP_CLIENT_ID");
 
     let as_mode = get("AS_ISSUER").is_some();
@@ -349,6 +355,16 @@ mod tests {
                 .any(|u| u.contains("temperkb.io")),
             "the compiled-in list must stand where AS_CLIENTS is not the authority"
         );
+    }
+
+    /// A trailing slash on `MCP_BASE_URL` is trimmed at parse. Kept, the PRM would advertise
+    /// `https://x//` as its authorization server while temper-cloud's AS metadata says
+    /// `https://x/`, and strict MCP clients abort discovery on that RFC 8414 §3.3 mismatch.
+    #[test]
+    fn a_trailing_slash_on_the_base_url_is_trimmed() {
+        let cfg = parse(vec![("MCP_BASE_URL", "https://temperkb.io//".to_string())])
+            .expect("a trailing slash is not a reason to refuse the boot");
+        assert_eq!(cfg.mcp_base_url, "https://temperkb.io");
     }
 
     /// A registry the authorization server would reject refuses the boot here too.

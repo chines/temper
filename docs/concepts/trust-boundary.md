@@ -61,7 +61,7 @@ The response includes a `resource` field carrying exactly the audience the HTTP 
 validates. For the hosted instance:
 
 ```json
-{ "issuer": "https://temperkb.us.auth0.com/",
+{ "issuer": "https://temperkb.io/",
   "resource": "https://temperkb.io/api" }
 ```
 

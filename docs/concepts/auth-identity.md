@@ -56,7 +56,7 @@ of them. An endpoint that belongs to the other mode answers `404` — it is abse
 | `/oauth/authorize`, `/oauth/token` | The loopback redirect proxy, which forwards to the IdP | The Temper AS |
 | `/api/auth/mcp-callback` | The proxy's relay, part of that forwarding | **`404`** — the AS runs the whole flow and redirects nothing here |
 | `/oauth/jwks` | **`404`** — the IdP publishes its own keys | The AS's public keys |
-| `/.well-known/oauth-authorization-server` | Describes the IdP | Describes the AS |
+| `/.well-known/oauth-authorization-server` | Describes the instance's proxy in front of the IdP (the instance is the advertised `issuer`) | Describes the AS |
 | `/api/auth/cli-callback` | Served — the CLI login relay is mode-independent | Served |
 
 The loopback redirect proxy exists because some IdP tenants reject the ephemeral

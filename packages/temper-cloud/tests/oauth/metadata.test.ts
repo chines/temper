@@ -252,12 +252,29 @@ describe("handleAuthorizationServer (RFC 8414 §3.1 path-suffixed form)", () => 
 
   it("serves the instance (MCP_BASE_URL) as issuer on the Auth0 arm, not AUTH_ISSUER", async () => {
     delete process.env.AS_ISSUER;
+    // The route no longer reads AUTH_ISSUER at all; unset, it must still serve.
+    delete process.env.AUTH_ISSUER;
     const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
     const res = await handleAuthorizationServer(requestFor(""));
     const body = (await res.json()) as { issuer: string };
 
     expect(res.status).toBe(200);
     expect(body.issuer).toBe("https://temper.example.com/");
+  });
+
+  // The suffix is derived from MCP_BASE_URL — the issuer this arm serves — not AUTH_ISSUER. A
+  // pathless AUTH_ISSUER beside a path-bearing base is the witness: deriving from AUTH_ISSUER
+  // would serve the bare well-known and 404 the suffix the advertised issuer implies.
+  it("derives the Auth0 arm's well-known suffix from MCP_BASE_URL, not AUTH_ISSUER", async () => {
+    delete process.env.AS_ISSUER;
+    process.env.MCP_BASE_URL = "https://host.example.com/tenants/acme";
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+
+    expect((await handleAuthorizationServer(requestFor(""))).status).toBe(404);
+    const res = await handleAuthorizationServer(requestFor("tenants/acme"));
+    const body = (await res.json()) as { issuer: string };
+    expect(res.status).toBe(200);
+    expect(body.issuer).toBe("https://host.example.com/tenants/acme/");
   });
 
   it("404s suffixed requests on the Auth0 arm (the instance base is pathless)", async () => {

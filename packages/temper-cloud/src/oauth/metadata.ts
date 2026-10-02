@@ -89,7 +89,8 @@ export function buildAuth0AsMetadata(cfg: { base: string; audience: string }): A
   const base = cfg.base.replace(/\/+$/, "");
 
   return {
-    // Byte-equal to the PRM's `authorization_servers` entry (`format!("{base}/")`).
+    // Byte-equal to the PRM's `authorization_servers` entry (`format!("{base}/")`); both sides
+    // trim trailing slashes from MCP_BASE_URL (`crates/temper-mcp/src/config.rs`).
     issuer: `${base}/`,
     // Authorize and token endpoints are proxied through temperkb.io so loopback
     // redirect_uris (http://127.0.0.1:<port>/callback) can be rewritten to the
