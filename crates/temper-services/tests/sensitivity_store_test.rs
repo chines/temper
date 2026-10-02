@@ -730,7 +730,7 @@ async fn backfill_bookkeeping_lives_on_the_backfill_lane_only(pool: PgPool) {
     );
 }
 
-// ── Q21: dispositions ─────────────────────────────────────────────────────────────────────────
+// ── Q21 and Q25: dispositions ─────────────────────────────────────────────────────────────────────────
 
 async fn a_finding(pool: &PgPool) -> Uuid {
     sqlx::query_scalar(
@@ -745,36 +745,25 @@ async fn a_finding(pool: &PgPool) -> Uuid {
     .unwrap()
 }
 
-/// One disposition row. `Default` is every column NULL, so each case names only what it sets.
+/// One disposition row. `Default` leaves every optional column NULL.
 #[derive(Default, Clone)]
 struct Disposition {
     state: &'static str,
     finding: Option<Uuid>,
-    detector: Option<&'static str>,
-    fingerprint: Option<Vec<u8>>,
-    content_hash: Option<&'static str>,
     expires_in_days: Option<i32>,
 }
 
 async fn dispose(pool: &PgPool, d: Disposition) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO sensitivity.dispositions \
-           (state, finding_id, detector_id, fingerprint, content_hash, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6))",
+        "INSERT INTO sensitivity.dispositions (state, finding_id, expires_at) \
+         VALUES ($1, $2, now() + make_interval(days => $3))",
     )
     .bind(d.state)
     .bind(d.finding)
-    .bind(d.detector)
-    .bind(d.fingerprint)
-    .bind(d.content_hash)
     .bind(d.expires_in_days)
     .execute(pool)
     .await
     .map(|_| ())
-}
-
-fn a_fingerprint() -> Option<Vec<u8>> {
-    Some(vec![7; 32])
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -794,7 +783,6 @@ async fn accepted_risk_carries_a_clock_and_nothing_else_does(pool: PgPool) {
                 state: "acknowledged",
                 finding: f,
                 expires_in_days: Some(30),
-                ..Default::default()
             },
             "an expiry on another state",
         ),
@@ -808,87 +796,69 @@ async fn accepted_risk_carries_a_clock_and_nothing_else_does(pool: PgPool) {
             state: "accepted_risk",
             finding: f,
             expires_in_days: Some(30),
-            ..Default::default()
         },
     )
     .await
     .unwrap();
 }
 
-/// A false positive is a ruling about a matched value, recorded by fingerprint or by content hash
-/// so it clears the same string everywhere. Every other state is about one finding.
+/// Q25: every state, `false_positive` included, is about one finding. The table has no column that
+/// could key a ruling by value, so a test number ruled benign in one team's content cannot hide the
+/// same digits where they are real. A value benign everywhere is a versioned detector change.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_false_positive_names_a_value_and_every_other_state_names_a_finding(pool: PgPool) {
-    let f = Some(a_finding(&pool).await);
-    let fp = Disposition {
-        state: "false_positive",
-        detector: Some("jwt"),
-        ..Default::default()
-    };
-    for admitted in [
+async fn a_disposition_names_one_finding_and_never_a_value(pool: PgPool) {
+    let columns: BTreeSet<String> = sqlx::query_scalar(
+        "SELECT column_name::text FROM information_schema.columns \
+          WHERE table_schema = 'sensitivity' AND table_name = 'dispositions'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .collect();
+    let expect: BTreeSet<String> = ["id", "finding_id", "state", "expires_at", "decided_at"]
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
+    assert_eq!(columns, expect);
+
+    for state in ["acknowledged", "actioned", "false_positive"] {
+        let err = dispose(
+            &pool,
+            Disposition {
+                state,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(code_of(&err).as_deref(), Some("23502"), "{state}: {err}");
+    }
+}
+
+/// The same value in two places: ruling one a false positive leaves the other with no disposition,
+/// which is what "open" means (Q21).
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_false_positive_in_one_place_leaves_the_other_open(pool: PgPool) {
+    let (here, there) = (a_finding(&pool).await, a_finding(&pool).await);
+    dispose(
+        &pool,
         Disposition {
-            content_hash: Some(A_HASH),
-            ..fp.clone()
-        },
-        Disposition {
-            fingerprint: a_fingerprint(),
-            ..fp.clone()
-        },
-        Disposition {
-            state: "acknowledged",
-            finding: f,
+            state: "false_positive",
+            finding: Some(here),
             ..Default::default()
         },
-    ] {
-        dispose(&pool, admitted).await.unwrap();
-    }
-
-    for (d, why) in [
-        (
-            Disposition {
-                finding: f,
-                content_hash: Some(A_HASH),
-                ..fp.clone()
-            },
-            "false positive on a finding",
-        ),
-        (
-            Disposition {
-                detector: None,
-                content_hash: Some(A_HASH),
-                ..fp.clone()
-            },
-            "false positive, no detector",
-        ),
-        (
-            Disposition {
-                fingerprint: a_fingerprint(),
-                content_hash: Some(A_HASH),
-                ..fp.clone()
-            },
-            "both fingerprint and hash",
-        ),
-        (fp.clone(), "neither fingerprint nor hash"),
-        (
-            Disposition {
-                state: "actioned",
-                ..Default::default()
-            },
-            "actioned with no finding",
-        ),
-        (
-            Disposition {
-                state: "actioned",
-                finding: f,
-                detector: Some("jwt"),
-                ..Default::default()
-            },
-            "actioned naming a detector",
-        ),
-    ] {
-        let err = dispose(&pool, d).await.unwrap_err();
-        assert_check_violation(&err, "dispositions_subject", why);
-    }
+    )
+    .await
+    .unwrap();
+    let open: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT f.id FROM sensitivity.findings f \
+          WHERE NOT EXISTS (SELECT 1 FROM sensitivity.dispositions d WHERE d.finding_id = f.id)",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(open, vec![there]);
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]

@@ -125,25 +125,18 @@ CREATE TABLE sensitivity.runs (
     by_category     jsonb NOT NULL DEFAULT '{}' CHECK (sensitivity.is_category_tally(by_category))
 );
 
--- Append-only; "open" is the absence of a row (Q21). A false positive names the matched value by
--- fingerprint or content hash, so one ruling clears it everywhere; every other state names a finding.
+-- Append-only; "open" is the absence of a row (Q21). Every state, false_positive included, is about
+-- one finding (Q25): a value ruled benign in one team's content stays visible in another's. A value
+-- benign everywhere is a versioned detector change, not a disposition.
 CREATE TABLE sensitivity.dispositions (
-    id           uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
-    state        text NOT NULL
-                 CHECK (state IN ('acknowledged', 'actioned', 'accepted_risk', 'false_positive')),
-    finding_id   uuid REFERENCES sensitivity.findings (id),
-    detector_id  text REFERENCES sensitivity.detectors (id),
-    fingerprint  bytea CHECK (octet_length(fingerprint) = 32),
-    content_hash text CHECK (content_hash ~ '^[0-9a-f]{64}$'),
-    expires_at   timestamptz,
-    decided_at   timestamptz NOT NULL DEFAULT now(),
+    id         uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
+    finding_id uuid NOT NULL REFERENCES sensitivity.findings (id),
+    state      text NOT NULL
+               CHECK (state IN ('acknowledged', 'actioned', 'accepted_risk', 'false_positive')),
+    expires_at timestamptz,
+    decided_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT dispositions_expiry_iff_accepted_risk
-        CHECK ((state = 'accepted_risk') = (expires_at IS NOT NULL)),
-    CONSTRAINT dispositions_subject CHECK (CASE state
-        WHEN 'false_positive' THEN finding_id IS NULL AND detector_id IS NOT NULL
-                               AND num_nonnulls(fingerprint, content_hash) = 1
-        ELSE finding_id IS NOT NULL AND num_nonnulls(detector_id, fingerprint, content_hash) = 0
-    END)
+        CHECK ((state = 'accepted_risk') = (expires_at IS NOT NULL))
 );
 
 CREATE FUNCTION sensitivity.dispositions_append_only() RETURNS trigger
