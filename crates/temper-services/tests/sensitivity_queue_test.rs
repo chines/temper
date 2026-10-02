@@ -9,8 +9,10 @@
 //! personas.
 //!
 //! Spec witnesses 13 (single-flight on an anchorless job), 15 (the payload is a work order) and 16
-//! (anchorless completion), plus the plan's P1 guard: the zero-anchor arm of
-//! `ck_workflow_jobs_one_scope` admits only the declared system personas.
+//! (anchorless completion). Also the plan's P1 guard: the scope CHECK keeps system personas
+//! anchorless-only and everyone else exactly-one-anchor. Plus the guards the two review passes asked
+//! for: payload values held to their shape, in-progress-only completion, and no incumbent door
+//! reaching an anchorless job.
 
 use serde_json::json;
 use sqlx::PgPool;
@@ -18,10 +20,8 @@ use uuid::Uuid;
 
 use temper_core::types::workflow_job::{DispatchType, Persona, SensitivityJobPayload};
 use temper_services::services::workflow_job_service::{
-    claim_system, complete_system, enqueue_system, reap,
+    claim_resource, claim_system, complete_system, enqueue_system, reap,
 };
-
-const SENSITIVITY: &str = "sensitivity";
 
 fn persona() -> &'static str {
     Persona::Sensitivity.as_str()
@@ -55,11 +55,56 @@ async fn status_of(pool: &PgPool, id: Uuid) -> String {
         .unwrap()
 }
 
-/// The persona string the SQL guards name and the one the Rust enum writes are the same string.
-/// The CHECKs key on a literal, so a renamed variant would otherwise slip past them silently.
-#[test]
-fn the_enum_writes_the_persona_the_checks_name() {
-    assert_eq!(persona(), SENSITIVITY);
+async fn a_resource(pool: &PgPool) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ('doc', '') RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Enqueue and claim one system job, returning its id in progress.
+async fn an_in_progress_job(pool: &PgPool) -> Uuid {
+    enqueue_system(pool, persona(), dispatch(), &work_order())
+        .await
+        .unwrap()
+        .expect("enqueue creates a row");
+    let claimed = claim_system::<SensitivityJobPayload>(pool, persona(), dispatch(), 10, 600)
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+    claimed[0].id
+}
+
+fn is_check_violation(e: &sqlx::Error, constraint: &str) -> bool {
+    matches!(e, sqlx::Error::Database(db)
+        if db.code().as_deref() == Some("23514") && db.constraint() == Some(constraint))
+}
+
+/// The CHECKs name the persona by a string literal, so the string the Rust enum writes must be the
+/// string in the LIVE constraint definitions. Comparing against a constant in this file would only
+/// prove two hand-copied strings agree.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_live_checks_name_the_persona_the_enum_writes(pool: PgPool) {
+    let literal = format!("'{}'", persona());
+    for constraint in [
+        "ck_workflow_jobs_one_scope",
+        "ck_workflow_jobs_sensitivity_work_order",
+    ] {
+        let def: String = sqlx::query_scalar(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint \
+              WHERE conrelid = 'kb_workflow_jobs'::regclass AND conname = $1",
+        )
+        .bind(constraint)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            def.contains(&literal),
+            "{constraint} does not name {literal}: {def}"
+        );
+    }
 }
 
 // ── Witness 13: single-flight on an anchorless job ─────────────────────────────────────────────
@@ -77,7 +122,7 @@ async fn concurrent_anchorless_enqueues_yield_one_job(pool: PgPool) {
         1,
         "exactly one of two concurrent enqueues creates a row; the other reads as already queued"
     );
-    assert_eq!(jobs_for(&pool, SENSITIVITY).await, 1);
+    assert_eq!(jobs_for(&pool, persona()).await, 1);
 }
 
 /// The bite. Spec F7.3: Postgres treats NULLs in a unique index as distinct, so the incumbent
@@ -96,15 +141,12 @@ async fn without_the_system_index_two_anchorless_jobs_coexist(pool: PgPool) {
     enqueue_system(&pool, persona(), dispatch(), &work_order())
         .await
         .unwrap();
-    assert_eq!(jobs_for(&pool, SENSITIVITY).await, 2);
+    assert_eq!(jobs_for(&pool, persona()).await, 2);
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn a_completed_job_frees_the_slot(pool: PgPool) {
-    let id = enqueue_system(&pool, persona(), dispatch(), &work_order())
-        .await
-        .unwrap()
-        .expect("first enqueue creates a row");
+    let id = an_in_progress_job(&pool).await;
     complete_system(&pool, id, persona(), dispatch())
         .await
         .unwrap();
@@ -121,18 +163,12 @@ async fn a_completed_job_frees_the_slot(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn complete_system_completes_by_job_id(pool: PgPool) {
-    enqueue_system(&pool, persona(), dispatch(), &work_order())
+    let id = an_in_progress_job(&pool).await;
+    let done = complete_system(&pool, id, persona(), dispatch())
         .await
         .unwrap();
-    let claimed = claim_system::<SensitivityJobPayload>(&pool, persona(), dispatch(), 10, 600)
-        .await
-        .unwrap();
-    assert_eq!(claimed.len(), 1);
-    let done = complete_system(&pool, claimed[0].id, persona(), dispatch())
-        .await
-        .unwrap();
-    assert_eq!(done, Some(claimed[0].id));
-    assert_eq!(status_of(&pool, claimed[0].id).await, "done");
+    assert_eq!(done, Some(id));
+    assert_eq!(status_of(&pool, id).await, "done");
 }
 
 /// None of the three incumbent completers can complete an anchorless job, which is what makes
@@ -141,16 +177,12 @@ async fn complete_system_completes_by_job_id(pool: PgPool) {
 ///
 /// `complete_anchor` is the subtle one. It matches with `IS NOT DISTINCT FROM`, so before this
 /// migration a call with both anchors NULL would have completed ANY anchorless job of the tuple: a
-/// door into the system family from outside it. That door was unreachable while the CHECK forbade
-/// anchorless rows. The migration that makes them legal also gives `complete_anchor` the same
-/// `num_nonnulls(cogmap_id, context_id) = 1` guard its own claim already carries, and this asserts
-/// the guard.
+/// door into the system family from outside it. The migration that makes anchorless rows legal also
+/// gives `complete_anchor` the `num_nonnulls(cogmap_id, context_id) = 1` guard its own claim already
+/// carries, and this asserts the guard.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn the_incumbent_completers_cannot_complete_an_anchorless_job(pool: PgPool) {
-    let id = enqueue_system(&pool, persona(), dispatch(), &work_order())
-        .await
-        .unwrap()
-        .unwrap();
+    let id = an_in_progress_job(&pool).await;
     for door in [
         "SELECT workflow_job_complete(NULL, $1, $2)",
         "SELECT workflow_job_complete_resource(NULL, $1, $2)",
@@ -164,39 +196,27 @@ async fn the_incumbent_completers_cannot_complete_an_anchorless_job(pool: PgPool
             .unwrap();
         assert_eq!(hit, None, "{door} matched an anchorless row");
     }
-    assert_eq!(status_of(&pool, id).await, "pending");
+    assert_eq!(status_of(&pool, id).await, "in_progress");
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn complete_system_never_completes_another_tuples_job(pool: PgPool) {
-    let id = enqueue_system(&pool, persona(), dispatch(), &work_order())
-        .await
-        .unwrap()
-        .unwrap();
+    let id = an_in_progress_job(&pool).await;
     let hit = complete_system(&pool, id, persona(), "some-other-dispatch")
         .await
         .unwrap();
     assert_eq!(hit, None, "a job id under the wrong tuple is not completed");
-    assert_eq!(status_of(&pool, id).await, "pending");
+    assert_eq!(status_of(&pool, id).await, "in_progress");
 }
 
-/// The id is the handle, but not a skeleton key. An anchored job's id handed to the system door is
-/// refused, so a stray id cannot complete another family's job.
+/// A pending job is work nobody has dispatched yet. Completing it would cancel the next sweep tick
+/// with nothing recording that it happened, the hazard `workflow_job_complete_claimed` was narrowed
+/// against in `20260724000130`.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn complete_system_never_completes_an_anchored_job(pool: PgPool) {
-    let resource: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_resources (title, origin_uri) VALUES ('doc', '') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let id: Uuid = sqlx::query_scalar("SELECT workflow_job_enqueue_resource($1, $2, $3, $4)")
-        .bind(resource)
-        .bind(persona())
-        .bind(dispatch())
-        .bind(serde_json::to_value(work_order()).unwrap())
-        .fetch_one(&pool)
+async fn complete_system_never_completes_a_pending_job(pool: PgPool) {
+    let id = enqueue_system(&pool, persona(), dispatch(), &work_order())
         .await
+        .unwrap()
         .unwrap();
     let hit = complete_system(&pool, id, persona(), dispatch())
         .await
@@ -205,7 +225,26 @@ async fn complete_system_never_completes_an_anchored_job(pool: PgPool) {
     assert_eq!(status_of(&pool, id).await, "pending");
 }
 
-// ── The claim ──────────────────────────────────────────────────────────────────────────────────
+/// The id is the handle, but not a skeleton key. An anchored job's id handed to the system door,
+/// under its own tuple, is refused, so a stray id cannot complete another family's job.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn complete_system_never_completes_an_anchored_job(pool: PgPool) {
+    let resource = a_resource(&pool).await;
+    sqlx::query("SELECT workflow_job_enqueue_resource($1, 'embed', 'embed')")
+        .bind(resource)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let claimed = claim_resource(&pool, "embed", "embed", 10, 600)
+        .await
+        .unwrap();
+    let id = claimed[0].id;
+    let hit = complete_system(&pool, id, "embed", "embed").await.unwrap();
+    assert_eq!(hit, None);
+    assert_eq!(status_of(&pool, id).await, "in_progress");
+}
+
+// ── The claims ─────────────────────────────────────────────────────────────────────────────────
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn claim_system_leases_and_returns_the_work_order(pool: PgPool) {
@@ -225,29 +264,37 @@ async fn claim_system_leases_and_returns_the_work_order(pool: PgPool) {
     assert!(again.is_empty(), "in_progress is not re-claimable");
 }
 
-/// The system claim takes anchorless rows only. A resource-anchored row under the same tuple belongs
-/// to the resource family's claim, and handing it out here would give the worker a scope it does not
-/// know it has.
+/// The system claim takes anchorless rows only. Called with an incumbent tuple, it must not hand
+/// out that family's anchored jobs; the worker would receive a job with a scope it does not know it
+/// has.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn claim_system_never_claims_an_anchored_row(pool: PgPool) {
-    let resource: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_resources (title, origin_uri) VALUES ('doc', '') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    sqlx::query("SELECT workflow_job_enqueue_resource($1, $2, $3, $4)")
+    let resource = a_resource(&pool).await;
+    sqlx::query("SELECT workflow_job_enqueue_resource($1, 'embed', 'embed')")
         .bind(resource)
-        .bind(persona())
-        .bind(dispatch())
-        .bind(serde_json::to_value(work_order()).unwrap())
         .execute(&pool)
         .await
         .unwrap();
-    let claimed = claim_system::<SensitivityJobPayload>(&pool, persona(), dispatch(), 10, 600)
+    let claimed = claim_system::<serde_json::Value>(&pool, "embed", "embed", 10, 600)
         .await
         .unwrap();
     assert!(claimed.is_empty());
+}
+
+/// The other direction. The cogmap claim had no anchor predicate, and with no principal (its
+/// documented unscoped default) it would hand out an anchorless job. It now takes cogmap rows only.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_unscoped_cogmap_claim_never_takes_an_anchorless_job(pool: PgPool) {
+    enqueue_system(&pool, persona(), dispatch(), &work_order())
+        .await
+        .unwrap();
+    let taken: i64 = sqlx::query_scalar("SELECT count(*) FROM workflow_job_claim($1, $2, 10, 600)")
+        .bind(persona())
+        .bind(dispatch())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(taken, 0);
 }
 
 /// Inherited unchanged (spec D8): the reaper is anchor-agnostic, so a system job whose lease
@@ -276,9 +323,12 @@ async fn raw_enqueue(pool: &PgPool, payload: serde_json::Value) -> Result<(), sq
         .map(|_| ())
 }
 
-fn is_check_violation(e: &sqlx::Error, constraint: &str) -> bool {
-    matches!(e, sqlx::Error::Database(db)
-        if db.code().as_deref() == Some("23514") && db.constraint() == Some(constraint))
+async fn assert_refused_as_a_work_order(pool: &PgPool, payload: serde_json::Value) {
+    let err = raw_enqueue(pool, payload.clone()).await.unwrap_err();
+    assert!(
+        is_check_violation(&err, "ck_workflow_jobs_sensitivity_work_order"),
+        "{payload}: {err}"
+    );
 }
 
 /// Spec D8 constraint 1: no resource id, no hash, no category, no count. A convenience field added
@@ -288,13 +338,9 @@ async fn a_payload_carrying_anything_beyond_the_work_order_is_refused(pool: PgPo
     for extra in ["resource_id", "content_hash", "category", "new_findings"] {
         let mut payload = serde_json::to_value(work_order()).unwrap();
         payload[extra] = json!("x");
-        let err = raw_enqueue(&pool, payload).await.unwrap_err();
-        assert!(
-            is_check_violation(&err, "ck_workflow_jobs_sensitivity_work_order"),
-            "{extra}: {err}"
-        );
+        assert_refused_as_a_work_order(&pool, payload).await;
     }
-    assert_eq!(jobs_for(&pool, SENSITIVITY).await, 0);
+    assert_eq!(jobs_for(&pool, persona()).await, 0);
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
@@ -304,11 +350,63 @@ async fn a_payload_missing_part_of_the_work_order_is_refused(pool: PgPool) {
         json!({"surface": "kb_resources.title", "budget": 10}),
         json!(["surface", "cursor_from", "budget"]),
     ] {
-        let err = raw_enqueue(&pool, payload.clone()).await.unwrap_err();
-        assert!(
-            is_check_violation(&err, "ck_workflow_jobs_sensitivity_work_order"),
-            "{payload}: {err}"
-        );
+        assert_refused_as_a_work_order(&pool, payload).await;
+    }
+}
+
+/// The keys alone are not the guarantee. Each of these was accepted when only the key set was
+/// checked, and the security review enqueued exactly this kind of row: content travelling under a
+/// legitimate key. Each value is now held to the shape its key promises.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn content_under_a_legitimate_key_is_refused(pool: PgPool) {
+    for (key, value) in [
+        (
+            "surface",
+            json!({"resource_id": "x", "content": "jane@example.com"}),
+        ),
+        ("surface", json!("jane.doe@example.com")),
+        ("surface", json!("kb_resources.title SSN 123-45-6789")),
+        ("budget", json!("Jane Doe DOB 1980-01-01")),
+        ("budget", json!(-1)),
+        ("budget", json!(1.5)),
+        ("budget", json!(10_000_000_000_i64)),
+        ("cursor_from", json!("jane.doe@example.com called 555-1234")),
+        ("cursor_from", json!("123-45-6789")),
+        ("cursor_from", json!({"id": "x"})),
+        ("cursor_from", json!(42)),
+    ] {
+        let mut payload = serde_json::to_value(work_order()).unwrap();
+        payload[key] = value;
+        assert_refused_as_a_work_order(&pool, payload).await;
+    }
+    assert_eq!(jobs_for(&pool, persona()).await, 0);
+}
+
+/// The two watermark kinds spec D4 names, and the first-tick null, are what the shape admits.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_two_cursor_kinds_and_a_first_tick_are_accepted(pool: PgPool) {
+    for cursor in [
+        None,
+        Some("01a0e9e6-959b-7780-af70-25ceb0f632e3".to_string()),
+        Some("2026-10-01T21:30:10.123456Z".to_string()),
+        Some("2026-10-01T21:30:10+00:00".to_string()),
+    ] {
+        let order = SensitivityJobPayload {
+            surface: "kb_resources.title".into(),
+            cursor_from: cursor.clone(),
+            budget: 0,
+        };
+        let id = enqueue_system(&pool, persona(), dispatch(), &order)
+            .await
+            .unwrap_or_else(|e| panic!("{cursor:?}: {e}"))
+            .expect("the slot is free");
+        let claimed = claim_system::<SensitivityJobPayload>(&pool, persona(), dispatch(), 1, 600)
+            .await
+            .unwrap();
+        complete_system(&pool, claimed[0].id, persona(), dispatch())
+            .await
+            .unwrap();
+        assert_eq!(status_of(&pool, id).await, "done");
     }
 }
 
@@ -323,59 +421,64 @@ async fn every_enqueued_sensitivity_payload_is_exactly_the_work_order(pool: PgPo
         "SELECT array_agg(k ORDER BY k) FROM kb_workflow_jobs j, jsonb_object_keys(j.payload) k \
           WHERE j.persona = $1 GROUP BY j.id",
     )
-    .bind(SENSITIVITY)
+    .bind(persona())
     .fetch_all(&pool)
     .await
     .unwrap();
     assert_eq!(keys, vec![vec!["budget", "cursor_from", "surface"]]);
 }
 
-// ── P1: the zero-anchor arm admits only the declared system personas ───────────────────────────
+// ── P1: the scope CHECK, in both directions ────────────────────────────────────────────────────
 
 /// The incumbent wrappers say an anchorless row of their family "should be unreachable"
 /// (`workflow_job_service.rs`, `claim_anchor`). Widening the CHECK must not make it reachable: a NULL
 /// passed by mistake to the embed path still raises rather than queueing a job with no scope.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_incumbent_persona_still_cannot_write_an_anchorless_job(pool: PgPool) {
-    let err = sqlx::query("SELECT workflow_job_enqueue_resource(NULL, 'embed', 'embed')")
-        .execute(&pool)
-        .await
-        .unwrap_err();
-    assert!(
-        is_check_violation(&err, "ck_workflow_jobs_one_scope"),
-        "{err}"
-    );
-
-    let err = sqlx::query("SELECT workflow_job_enqueue_system('steward', 'steward', '{}'::jsonb)")
-        .execute(&pool)
-        .await
-        .unwrap_err();
-    assert!(
-        is_check_violation(&err, "ck_workflow_jobs_one_scope"),
-        "{err}"
-    );
+    for call in [
+        "SELECT workflow_job_enqueue_resource(NULL, 'embed', 'embed')",
+        "SELECT workflow_job_enqueue_system('steward', 'steward', '{}'::jsonb)",
+    ] {
+        let err = sqlx::query(call).execute(&pool).await.unwrap_err();
+        assert!(
+            is_check_violation(&err, "ck_workflow_jobs_one_scope"),
+            "{call}: {err}"
+        );
+    }
     assert_eq!(
         jobs_for(&pool, "embed").await + jobs_for(&pool, "steward").await,
         0
     );
 }
 
-/// The other half of "exactly one": two anchors stay refused for every persona, system ones
-/// included.
+/// The gate's other direction, and the one both reviews found missing. A sensitivity job carrying
+/// a resource anchor would be handed out by the unscoped resource claim with a resource id on it.
+/// It would also make that resource unerasable: the erasure act sets `payload = '{}'` on every job
+/// of the resource, `'{}'` fails the work-order CHECK, and the act rolls back. So the row cannot be
+/// written at all.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_sensitivity_job_can_never_carry_an_anchor(pool: PgPool) {
+    let resource = a_resource(&pool).await;
+    let err = sqlx::query("SELECT workflow_job_enqueue_resource($1, $2, $3, $4)")
+        .bind(resource)
+        .bind(persona())
+        .bind(dispatch())
+        .bind(serde_json::to_value(work_order()).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert!(
+        is_check_violation(&err, "ck_workflow_jobs_one_scope"),
+        "{err}"
+    );
+    assert_eq!(jobs_for(&pool, persona()).await, 0);
+}
+
+/// Two anchors stay refused for every persona.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn two_anchors_stay_refused(pool: PgPool) {
-    let resource: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_resources (title, origin_uri) VALUES ('doc', '') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let telos: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_resources (title, origin_uri) VALUES ('telos', '') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let resource = a_resource(&pool).await;
+    let telos = a_resource(&pool).await;
     let cogmap: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('m', $1) RETURNING id",
     )
@@ -384,14 +487,11 @@ async fn two_anchors_stay_refused(pool: PgPool) {
     .await
     .unwrap();
     let err = sqlx::query(
-        "INSERT INTO kb_workflow_jobs (resource_id, cogmap_id, persona, dispatch_type, payload) \
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO kb_workflow_jobs (resource_id, cogmap_id, persona, dispatch_type) \
+         VALUES ($1, $2, 'embed', 'embed')",
     )
     .bind(resource)
     .bind(cogmap)
-    .bind(persona())
-    .bind(dispatch())
-    .bind(serde_json::to_value(work_order()).unwrap())
     .execute(&pool)
     .await
     .unwrap_err();

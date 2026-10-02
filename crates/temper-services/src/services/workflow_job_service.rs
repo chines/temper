@@ -466,10 +466,14 @@ pub async fn claim_system<P: serde::de::DeserializeOwned>(
     .await?;
     rows.into_iter()
         .map(|r| {
+            // serde's message quotes the offending value, and a system job is one whose payload
+            // must never carry content into a log. So the category goes in the error and the
+            // value never does.
             let payload = serde_json::from_value(r.payload).map_err(|e| {
                 ApiError::Internal(format!(
-                    "workflow job {} carries an unreadable system payload: {e}",
-                    r.id
+                    "workflow job {} carries an unreadable system payload ({:?} error)",
+                    r.id,
+                    e.classify()
                 ))
             })?;
             Ok(ClaimedSystemJob {
@@ -481,8 +485,9 @@ pub async fn claim_system<P: serde::de::DeserializeOwned>(
         .collect()
 }
 
-/// Transition one active system-scoped job to done, **by job id**. Returns the id if the job was
-/// active under this tuple.
+/// Transition one in-progress system-scoped job to done, **by job id**. Returns the id if the job
+/// was in progress under this tuple. A pending job is not completed: that would cancel work never
+/// dispatched, the narrowing `workflow_job_complete_claimed` made for the same reason.
 ///
 /// The id is the only handle an anchorless job has. Every incumbent completer matches on its
 /// anchor, and `NULL = NULL` is never true, so none of them can complete this job.
