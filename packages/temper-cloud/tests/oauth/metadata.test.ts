@@ -62,12 +62,11 @@ describe("buildAuth0AsMetadata", () => {
   it("points authorize and token at the instance (proxied), not Auth0 directly", () => {
     const meta = buildAuth0AsMetadata({
       base: "https://temperkb.io",
-      auth0Domain: "https://tenant.auth0.com/",
       audience: "https://api.temperkb.io",
     });
 
     expect(meta).toEqual({
-      issuer: "https://tenant.auth0.com/",
+      issuer: "https://temperkb.io/",
       authorization_endpoint: "https://temperkb.io/oauth/authorize",
       token_endpoint: "https://temperkb.io/oauth/token",
       registration_endpoint: "https://temperkb.io/oauth/register",
@@ -82,7 +81,6 @@ describe("buildAuth0AsMetadata", () => {
   it("advertises client_credentials for M2M agent principals (Stage 4a)", () => {
     const meta = buildAuth0AsMetadata({
       base: "https://temperkb.io",
-      auth0Domain: "https://tenant.auth0.com/",
       audience: "https://api.temperkb.io",
     });
     expect(meta.grant_types_supported).toContain("client_credentials");
@@ -90,14 +88,24 @@ describe("buildAuth0AsMetadata", () => {
     expect(meta.grant_types_supported).toContain("refresh_token");
   });
 
-  it("trims a trailing slash from both auth0Domain and base before building endpoints", () => {
+  // RFC 8414 §3.3: the PRM names `${base}/` as the authorization server, so the document a
+  // client fetches from that origin must carry exactly that issuer. Advertising the Auth0 domain
+  // here made strict MCP clients (opencode) abort fresh auth with "Issuer mismatch".
+  it("advertises the instance as issuer, byte-equal to the PRM's authorization_servers entry", () => {
+    const meta = buildAuth0AsMetadata({
+      base: "https://temperkb.io",
+      audience: "https://api.temperkb.io",
+    });
+    expect(meta.issuer).toBe("https://temperkb.io/");
+  });
+
+  it("trims a trailing slash from base before building the issuer and endpoints", () => {
     const meta = buildAuth0AsMetadata({
       base: "https://temperkb.io/",
-      auth0Domain: "https://tenant.auth0.com",
       audience: "https://api.temperkb.io",
     });
 
-    expect(meta.issuer).toBe("https://tenant.auth0.com/");
+    expect(meta.issuer).toBe("https://temperkb.io/");
     expect(meta.authorization_endpoint).toBe("https://temperkb.io/oauth/authorize");
     expect(meta.token_endpoint).toBe("https://temperkb.io/oauth/token");
     expect(meta.registration_endpoint).toBe("https://temperkb.io/oauth/register");
@@ -242,7 +250,34 @@ describe("handleAuthorizationServer (RFC 8414 §3.1 path-suffixed form)", () => 
     expect(body.issuer).toBe("https://temper.example.com");
   });
 
-  it("404s suffixed requests on the Auth0 arm (the Auth0 domain is pathless)", async () => {
+  it("serves the instance (MCP_BASE_URL) as issuer on the Auth0 arm, not AUTH_ISSUER", async () => {
+    delete process.env.AS_ISSUER;
+    // The route no longer reads AUTH_ISSUER at all; unset, it must still serve.
+    delete process.env.AUTH_ISSUER;
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+    const res = await handleAuthorizationServer(requestFor(""));
+    const body = (await res.json()) as { issuer: string };
+
+    expect(res.status).toBe(200);
+    expect(body.issuer).toBe("https://temper.example.com/");
+  });
+
+  // The suffix is derived from MCP_BASE_URL — the issuer this arm serves — not AUTH_ISSUER. A
+  // pathless AUTH_ISSUER beside a path-bearing base is the witness: deriving from AUTH_ISSUER
+  // would serve the bare well-known and 404 the suffix the advertised issuer implies.
+  it("derives the Auth0 arm's well-known suffix from MCP_BASE_URL, not AUTH_ISSUER", async () => {
+    delete process.env.AS_ISSUER;
+    process.env.MCP_BASE_URL = "https://host.example.com/tenants/acme";
+    const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
+
+    expect((await handleAuthorizationServer(requestFor(""))).status).toBe(404);
+    const res = await handleAuthorizationServer(requestFor("tenants/acme"));
+    const body = (await res.json()) as { issuer: string };
+    expect(res.status).toBe(200);
+    expect(body.issuer).toBe("https://host.example.com/tenants/acme/");
+  });
+
+  it("404s suffixed requests on the Auth0 arm (the instance base is pathless)", async () => {
     delete process.env.AS_ISSUER;
     const { handleAuthorizationServer } = await import("../../src/oauth/metadata.js");
     const res = await handleAuthorizationServer(requestFor("tenants/acme"));

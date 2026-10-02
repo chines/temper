@@ -5,7 +5,9 @@
 //! our pre-registered client_id. The RFC 8414 authorization-server metadata
 //! (`/.well-known/oauth-authorization-server`) is served by the temper-cloud
 //! AS layer instead, so a single handler can advertise either the Temper AS
-//! (SAML instances) or Auth0 (legacy instances) from one shared deployment.
+//! (SAML instances) or the instance's own proxy in front of an external IdP
+//! (Auth0/Okta instances) from one shared deployment. On both arms that
+//! document's `issuer` must equal the `authorization_servers` entry below.
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
