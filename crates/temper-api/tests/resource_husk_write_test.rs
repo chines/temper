@@ -2526,11 +2526,13 @@ async fn goal_edge(pool: &PgPool, source: Uuid) -> Uuid {
 /// and once the act commits reads the edge already folded. One `relationship_folded` for the
 /// edge, the act's — never two.
 ///
-/// FAILS IF the update does not lock the current goal's row before folding. The bite: in
-/// `DbBackend::lock_goal_rows`, start `rows` empty instead of from the current goal edges'
-/// targets. The clear then reads the edge unfolded on its own snapshot, fires its fold, waits on
-/// the act's lock on the edge row, and appends a second `relationship_folded` once the act
-/// commits — the count reads 2.
+/// FAILS IF neither of the two guards holds — the update's lock on the current goal's row, and
+/// `fold_goal_edges`' lock-and-recheck of the edge. Either alone keeps the count at 1, so the bite
+/// removes both: start `rows` empty in `DbBackend::lock_goal_rows` AND drop `FOR UPDATE OF e` from
+/// `fold_goal_edges`. The clear then reads the edge unfolded on its own snapshot, fires its fold,
+/// waits in the projector on the act's lock on the edge row, and appends a second
+/// `relationship_folded` once the act commits — the count reads 2. The fold's guard alone is
+/// pinned by `a_goal_clear_never_folds_an_edge_folded_under_it`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_goal_clear_racing_the_acts_erasure_of_the_goal_folds_the_edge_once(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -2569,6 +2571,95 @@ async fn a_goal_clear_racing_the_acts_erasure_of_the_goal_folds_the_edge_once(po
         fold_events(&app.pool, edge).await,
         1,
         "the edge was folded once — by the act — and the clear did not fold it again"
+    );
+}
+
+// ── WITNESS: goal patches on one resource serialize, and a fold never folds a folded edge ─────
+
+/// A goal patch on R waits while another transaction holds R `FOR NO KEY UPDATE` — the lock a
+/// goal patch takes on its own source (`DbBackend::lock_goal_rows`) — and lands once it is
+/// released. Two goal patches on one resource therefore cannot both read the same current goal
+/// edge, both fold it, and both assert their own goal (two live goal edges on one resource).
+///
+/// FAILS IF goal patches do not serialize on the source. The bite: delete the `FOR NO KEY UPDATE`
+/// select at the head of `lock_goal_rows`. A goal-only PATCH writes no `kb_resources` row, so it
+/// then takes nothing that conflicts with the held lock and completes while it is held.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_goal_patch_waits_on_another_goal_patch_of_the_same_resource(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+    let goal = ingest_typed(&app, &owner, own_context, "goal").await;
+
+    let mut held = app.pool.begin().await.expect("begin the holder");
+    sqlx::query("SELECT 1 FROM kb_resources WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(resource)
+        .execute(&mut *held)
+        .await
+        .expect("hold the source as a goal patch does");
+    let request = spawn_request(
+        &app,
+        &owner,
+        Method::PATCH,
+        &format!("/api/resources/{resource}"),
+        Some(json!({ "goal": goal })),
+    );
+    a_backend_waits_on_a_lock(&app.pool, &request, "PATCH goal").await;
+    held.rollback().await.expect("release the source");
+    let (status, body) = request.await.expect("the goal patch must not panic");
+    assert_eq!(
+        status, 200,
+        "the goal patch lands once released; body: {body}"
+    );
+}
+
+/// R's goal edge is folded by another transaction that has not yet committed (it holds the edge
+/// row). A goal clear on R waits on that row, and once the other transaction commits it reads the
+/// edge folded and does not fold it again: no `relationship_folded` from the clear. Whoever folded
+/// it first — the erasure act, or a concurrent write — the clear never appends a second one.
+///
+/// FAILS IF `fold_goal_edges` reads the edges without locking them. The bite: drop `FOR UPDATE OF
+/// e` from its select. The clear then reads the edge unfolded on its own snapshot, fires its fold,
+/// waits in the projector on the held row, and appends a `relationship_folded` once released.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_goal_clear_never_folds_an_edge_folded_under_it(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+    let goal = ingest_typed(&app, &owner, own_context, "goal").await;
+    let (status, body) = call(
+        &app,
+        &owner,
+        Method::PATCH,
+        format!("/api/resources/{resource}"),
+        Some(json!({ "goal": goal })),
+    )
+    .await;
+    assert_eq!(status, 200, "precondition: the goal is set; body: {body}");
+    let edge = goal_edge(&app.pool, resource).await;
+
+    let mut held = app.pool.begin().await.expect("begin the folder");
+    sqlx::query("UPDATE kb_edges SET is_folded = true WHERE id = $1")
+        .bind(edge)
+        .execute(&mut *held)
+        .await
+        .expect("fold the edge, uncommitted");
+    let request = spawn_request(
+        &app,
+        &owner,
+        Method::PATCH,
+        &format!("/api/resources/{resource}"),
+        Some(json!({ "clear_goal": true })),
+    );
+    a_backend_waits_on_a_lock(&app.pool, &request, "PATCH clear_goal").await;
+    held.commit().await.expect("commit the fold");
+    let (status, body) = request.await.expect("the clear must not panic");
+
+    assert_eq!(status, 200, "the clear lands; body: {body}");
+    assert_eq!(
+        fold_events(&app.pool, edge).await,
+        0,
+        "the clear read the edge already folded and appended no fold of its own"
     );
 }
 
@@ -2659,18 +2750,30 @@ async fn the_remaining_write_doors_complete_on_a_single_connection_pool(pool: Pg
         probes.push((door.name.to_string(), status, body));
     }
 
+    // A goal REPLACEMENT, so the patch serializes on the source, locks the current goal, folds its
+    // edge and asserts the new one — every step of a goal patch, on one connection.
     let resource = ingest(&app, &owner, own_context).await;
-    let goal = ingest(&app, &owner, own_context).await;
+    let first = ingest_typed(&app, &owner, own_context, "goal").await;
+    let goal = ingest_typed(&app, &owner, own_context, "goal").await;
     let (status, body) = call(
         &app,
         &owner,
         Method::PATCH,
         format!("/api/resources/{resource}"),
-        Some(json!({ "title": "goal-set on one connection", "goal": goal })),
+        Some(json!({ "goal": first })),
+    )
+    .await;
+    assert_eq!(status, 200, "precondition: a first goal; body: {body}");
+    let (status, body) = call(
+        &app,
+        &owner,
+        Method::PATCH,
+        format!("/api/resources/{resource}"),
+        Some(json!({ "title": "goal replaced on one connection", "goal": goal })),
     )
     .await;
     probes.push((
-        "PATCH /api/resources/{id} (goal set)".to_string(),
+        "PATCH /api/resources/{id} (goal replaced)".to_string(),
         status,
         body,
     ));

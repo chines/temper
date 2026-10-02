@@ -47,7 +47,13 @@
 //! caller who knows an id could delay its erasure. So every entry point that locks a row on a
 //! caller's behalf asks its admission (or read check) unlocked first, on the same connection, and
 //! locks only a caller that passes; the check under the lock then decides. An unlocked refusal is
-//! the answer the write would have had ordered before a concurrent act — never a wrong one.
+//! the answer the write would have had ordered before a concurrent act — never a wrong one. The one
+//! exception is a goal patch's CURRENT goal rows (`DbBackend::lock_goal_rows`): rows the caller's own
+//! resource already links to, locked without a read check because the update folds their edges.
+//!
+//! **What this does not bound.** A caller who can READ a resource may still lock it — an edge into
+//! it, a blob relation onto it — so a reader, not only a writer, can delay its erasure. Bounding
+//! that wait is a lock-timeout question, not an admission one.
 //!
 //! **An admission without the lock** — [`modify_admission_unlocked`] — is the same admission and
 //! the same classification on the pool, for a door that must not let a refused caller take a row

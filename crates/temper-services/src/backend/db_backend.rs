@@ -1616,28 +1616,39 @@ impl DbBackend {
         Ok(EdgeId::from(edge.uuid()))
     }
 
-    /// Fold the source resource's outgoing `advances`→goal edges (at most one under the
-    /// one-goal-per-resource model; folds all defensively). Used by the update path to
-    /// retract (`GoalPatch::Clear`) or replace (`GoalPatch::Set`) a goal.
+    /// Lock, up front, every row a goal patch on `src` depends on, before the update writes:
     ///
-    /// The `doc_type='goal'` join is load-bearing: a single resource may hold BOTH a
-    /// session→task `advances` edge and a →goal `advances` edge (same kind+label), and
-    /// only the latter must be folded — so the target's doc-type property gates it.
+    /// 1. `src` itself `FOR NO KEY UPDATE`, so goal patches on one resource SERIALIZE. Two
+    ///    concurrent patches otherwise each read the same current goal edge, each fold it (two
+    ///    `relationship_folded` for one edge), and each assert their own goal — two live goal edges
+    ///    on one resource. `FOR NO KEY UPDATE` does not conflict with the `FOR KEY SHARE` every
+    ///    other writer's floor takes, so only goal patches (and writes that update `src`'s own row)
+    ///    wait on it. `src` is a `kb_resources` row and is taken first, so the lock order holds.
+    /// 2. Then, `FOR KEY SHARE` in id order, the goal rows: the targets of `src`'s current goal
+    ///    edges (read now, after step 1, so no other goal patch can change them), and, for a set,
+    ///    the new goal when the caller can read it. An erasure of a current goal then waits for this
+    ///    update, or this update waits for it and reads its outcome — never an act that meets an
+    ///    edge folded under it. A new goal the caller cannot read is NOT locked and NOT refused
+    ///    here: the edge's own clauses refuse it later, in their load-bearing order (container-write
+    ///    `403` before the target's `404`), and the target clause's read check is unlocked-first.
     ///
-    /// Runs on the update's own transaction (`conn`), so a goal-set whose assert is refused rolls
-    /// the folds back with the rest of the update.
-    /// Lock, `FOR KEY SHARE` and in id order, every goal row a goal patch on `src` touches: the
-    /// targets of `src`'s current goal edges (the rows [`Self::fold_goal_edges`] folds away from)
-    /// and, for a set, the new goal. The new goal is read-checked unlocked first, so a caller who
-    /// cannot read it is refused (`NotFound`, the target clause's answer) without taking its lock
-    /// (`write_floor`'s "a refused caller takes no lock"). The current goals need no such check:
-    /// the caller was admitted to modify `src`, and these are rows `src` already links to.
+    /// The current goals are locked without a read check: the caller was admitted to modify `src`,
+    /// and these are rows `src` already links to, whose edges this update folds. Read standing on a
+    /// goal can lapse after its edge was set, so this is the one lock in the update a caller may
+    /// take on a row it cannot read — bounded to rows its own resource links to.
     async fn lock_goal_rows(
         &self,
         conn: &mut sqlx::PgConnection,
         src: uuid::Uuid,
         patch: &GoalPatch,
     ) -> Result<(), TemperError> {
+        sqlx::query!(
+            "SELECT 1 AS locked FROM kb_resources WHERE id = $1 FOR NO KEY UPDATE",
+            src,
+        )
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(api_err)?;
         let mut rows: Vec<uuid::Uuid> = sqlx::query_scalar!(
             "SELECT e.target_id FROM kb_edges e \
              JOIN kb_properties p \
@@ -1655,9 +1666,13 @@ impl DbBackend {
         .await
         .map_err(api_err)?;
         if let GoalPatch::Set(goal) = patch {
-            self.endpoint_readable_on(&mut *conn, "kb_resources", goal.uuid())
-                .await?;
-            rows.push(goal.uuid());
+            if self
+                .endpoint_readable_on(&mut *conn, "kb_resources", goal.uuid())
+                .await
+                .is_ok()
+            {
+                rows.push(goal.uuid());
+            }
         }
         rows.sort_unstable();
         rows.dedup();
@@ -1667,6 +1682,24 @@ impl DbBackend {
         Ok(())
     }
 
+    /// Fold the source resource's outgoing `advances`→goal edges (at most one under the
+    /// one-goal-per-resource model; folds all defensively). Used by the update path to
+    /// retract (`GoalPatch::Clear`) or replace (`GoalPatch::Set`) a goal.
+    ///
+    /// The `doc_type='goal'` join is load-bearing: a single resource may hold BOTH a
+    /// session→task `advances` edge and a →goal `advances` edge (same kind+label), and
+    /// only the latter must be folded — so the target's doc-type property gates it.
+    ///
+    /// **The select locks what it folds, and re-checks it.** `FOR UPDATE OF e` with `NOT
+    /// e.is_folded` in the same statement: under READ COMMITTED a row whose lock had to wait is
+    /// re-evaluated against its committed version, so an edge someone else folded meanwhile (the
+    /// erasure act, or a goal edge asserted and folded by a concurrent write) drops out instead of
+    /// being folded a second time. `_project_relationship_folded` updates with no `is_folded`
+    /// predicate, so this select is the only place a duplicate `relationship_folded` is stopped.
+    /// The act's own fold loop takes the same lock the same way.
+    ///
+    /// Runs on the update's own transaction (`conn`), so a goal-set whose assert is refused rolls
+    /// the folds back with the rest of the update.
     async fn fold_goal_edges(
         conn: &mut sqlx::PgConnection,
         src_next: uuid::Uuid,
@@ -1682,7 +1715,9 @@ impl DbBackend {
                AND e.target_table = 'kb_resources' \
                AND e.edge_kind = 'leads_to' AND e.label = $2 \
                AND p.property_value #>> '{}' = 'goal' \
-               AND NOT e.is_folded",
+               AND NOT e.is_folded \
+             ORDER BY e.id \
+             FOR UPDATE OF e",
             src_next,
             GOAL_EDGE_LABEL,
         )
@@ -2855,17 +2890,16 @@ impl Backend for DbBackend {
         let mut tx = self.begin_floored(ResourceId::from(new_id)).await?;
         // LOCK ORDER (the rule for every floored write): lock every `kb_resources` row the write
         // touches up front, before any other row lock. The source is locked by the floor above. A
-        // goal patch also touches goal rows: the NEW goal's (a set), whose `FOR KEY SHARE` the
-        // edge's target clause (`check_endpoint_readable_in_tx`) takes, and the CURRENT goal's (a
-        // set or a clear), whose edge `fold_goal_edges` folds. Both are taken HERE, before the
-        // update and the goal-edge folds lock edge, block and remote-source rows, in id order.
-        // Taken after them, an erasure of a goal (which holds the goal's `FOR UPDATE` and then
-        // folds every edge touching it) deadlocks against this update. Taken first, the update
-        // either locks the goal before the act and the act waits for the commit, or waits on the
-        // act having written nothing and then reads its outcome: the target clause reads a new
-        // goal erased and refuses the whole update; `fold_goal_edges` reads the current goal's edge
-        // already folded and does not fold it again (no second `relationship_folded`). A lock on
-        // an unknown id locks nothing; the target clause answers it.
+        // goal patch also touches the source's row again (to serialize goal patches) and the goal
+        // rows — the NEW goal's (a set), whose `FOR KEY SHARE` the edge's target clause
+        // (`check_endpoint_readable_in_tx`) takes, and the CURRENT goal's (a set or a clear), whose
+        // edge `fold_goal_edges` folds. `lock_goal_rows` takes them HERE, before the update and the
+        // goal-edge folds lock edge, block and remote-source rows. Taken after them, an erasure of
+        // a goal (which holds the goal's `FOR UPDATE` and then folds every edge touching it)
+        // deadlocks against this update. Taken first, the update either locks the goal before the
+        // act and the act waits for the commit, or waits on the act having written nothing and
+        // then reads its outcome: the target clause reads a new goal erased and refuses the whole
+        // update; `fold_goal_edges` reads the current goal's edge already folded and skips it.
         if let Some(patch) = &cmd.goal {
             if let Err(refusal) = self.lock_goal_rows(&mut tx, new_id, patch).await {
                 return Err(write_floor::rollback_with(tx, refusal).await);

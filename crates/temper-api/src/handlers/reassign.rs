@@ -27,7 +27,7 @@ use temper_services::state::AppState;
         (status = 400, description = "The caller owns the resource, but it is homed in a cognitive map (map interiors are not reassignable)", body = ErrorBody),
         (status = 403, description = "Forbidden: not the owner and no admin reach over the resource and target. An unknown id answers the same 403"),
         (status = 404, description = "Not answered: an unknown id answers 403, as a resource the caller has no authority over"),
-        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered to its owner, who holds the erased resource; everyone else, an admin with reach included, gets 403", body = ErrorBody),
+        (status = 410, description = "The resource was erased (code RESOURCE_ERASED); answered to a caller with authority who also holds the erased resource (its owner, or an admin with reach who holds a read grant on it); everyone else gets 403", body = ErrorBody),
     )
 )]
 pub async fn reassign_resource(
