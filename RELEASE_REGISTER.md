@@ -23,6 +23,21 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **Auth0-fronted instances advertise themselves as the RFC 8414 `issuer`**
+  `GET /.well-known/oauth-authorization-server` on an instance without `AS_ISSUER` answers
+  `issuer: "<MCP_BASE_URL>/"` where it answered the Auth0 tenant domain. The document's shape and
+  every endpoint in it are unchanged; the issuer now equals the `authorization_servers` entry the
+  protected-resource metadata names, as RFC 8414 §3.3 requires, so MCP clients that validate it
+  complete discovery instead of aborting with an issuer mismatch. Access and ID tokens still carry
+  the Auth0 `iss`, and the API's token validation is unchanged. `MCP_BASE_URL` is now read with
+  trailing slashes trimmed on the MCP side too, so the two documents agree for that shape as well.
+  Who observes: MCP clients and anything else reading the Auth0-arm metadata document; SAML/AS
+  instances are unaffected. User-visible: yes
+  (fresh MCP authorization succeeds on strict clients). Release relevance: signal-only.
+pr: self
+classes: behavioral
+surfaces: http
+status: signal-only
 - **Resource erasure 2c: write doors refuse an erased resource with `410 RESOURCE_ERASED`, checked inside the write**
   The resource write doors (`PATCH /api/resources/{id}`, `PUT /api/resources/{id}/meta`,
   `PUT /api/ingest/{id}`, `DELETE /api/resources/{id}`, `POST /api/resources/{id}/provenance`,
