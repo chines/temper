@@ -1618,14 +1618,17 @@ impl DbBackend {
 
     /// Lock, up front, every row a goal patch on `src` depends on, before the update writes:
     ///
-    /// 1. `src` itself `FOR NO KEY UPDATE`, so goal patches on one resource SERIALIZE. Two
-    ///    concurrent patches otherwise each read the same current goal edge, each fold it (two
-    ///    `relationship_folded` for one edge), and each assert their own goal — two live goal edges
-    ///    on one resource. `FOR NO KEY UPDATE` does not conflict with the `FOR KEY SHARE` every
-    ///    other writer's floor takes, so only goal patches (and writes that update `src`'s own row)
-    ///    wait on it. `src` is a `kb_resources` row and is taken first, so the lock order holds.
+    /// 1. A transaction-scoped advisory lock keyed on `src` (`goal_patch:<src>`), so goal patches on
+    ///    one resource SERIALIZE: two concurrent patches would otherwise each read the same current
+    ///    goal edge and each assert their own goal — two live goal edges on one resource. An
+    ///    advisory lock, not a row lock on `src`: an ordinary update of `src` takes `src`'s row
+    ///    `FOR NO KEY UPDATE` at its TAIL (the title projector, the body-hash recompute), after
+    ///    locking child rows a goal patch may also want, so a goal patch holding that row lock up
+    ///    front would deadlock with it. Only goal patches take this lock, and it conflicts with no
+    ///    row lock.
     /// 2. Then, `FOR KEY SHARE` in id order, the goal rows: the targets of `src`'s current goal
-    ///    edges (read now, after step 1, so no other goal patch can change them), and, for a set,
+    ///    edges (read now, after step 1, so no other goal patch can change them; another door can
+    ///    still assert an edge meanwhile, which the fold's own lock-and-recheck covers), and, for a set,
     ///    the new goal when the caller can read it. An erasure of a current goal then waits for this
     ///    update, or this update waits for it and reads its outcome — never an act that meets an
     ///    edge folded under it. A new goal the caller cannot read is NOT locked and NOT refused
@@ -1643,10 +1646,10 @@ impl DbBackend {
         patch: &GoalPatch,
     ) -> Result<(), TemperError> {
         sqlx::query!(
-            "SELECT 1 AS locked FROM kb_resources WHERE id = $1 FOR NO KEY UPDATE",
-            src,
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            format!("goal_patch:{src}"),
         )
-        .fetch_optional(&mut *conn)
+        .fetch_one(&mut *conn)
         .await
         .map_err(api_err)?;
         let mut rows: Vec<uuid::Uuid> = sqlx::query_scalar!(
@@ -1666,12 +1669,15 @@ impl DbBackend {
         .await
         .map_err(api_err)?;
         if let GoalPatch::Set(goal) = patch {
-            if self
+            // Readable → lock it now; unreadable (`NotFound`) → leave it to the edge's clauses;
+            // anything else is a fault, never an answer.
+            match self
                 .endpoint_readable_on(&mut *conn, "kb_resources", goal.uuid())
                 .await
-                .is_ok()
             {
-                rows.push(goal.uuid());
+                Ok(()) => rows.push(goal.uuid()),
+                Err(TemperError::NotFound(_)) => {}
+                Err(fault) => return Err(fault),
             }
         }
         rows.sort_unstable();

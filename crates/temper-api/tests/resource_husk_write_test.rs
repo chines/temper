@@ -2574,14 +2574,14 @@ async fn a_goal_clear_racing_the_acts_erasure_of_the_goal_folds_the_edge_once(po
 
 // ── WITNESS: goal patches on one resource serialize, and a fold never folds a folded edge ─────
 
-/// A goal patch on R waits while another transaction holds R `FOR NO KEY UPDATE` — the lock a
-/// goal patch takes on its own source (`DbBackend::lock_goal_rows`) — and lands once it is
-/// released. Two goal patches on one resource therefore cannot both read the same current goal
-/// edge, both fold it, and both assert their own goal (two live goal edges on one resource).
+/// A goal patch on R waits while another transaction holds R's goal-patch lock — the
+/// transaction-scoped advisory lock keyed `goal_patch:<R>` that `DbBackend::lock_goal_rows` takes —
+/// and lands once it is released. Two goal patches on one resource therefore cannot both read the
+/// same current goal edge and both assert their own goal (two live goal edges on one resource).
 ///
-/// FAILS IF goal patches do not serialize on the source. The bite: delete the `FOR NO KEY UPDATE`
-/// select at the head of `lock_goal_rows`. A goal-only PATCH writes no `kb_resources` row, so it
-/// then takes nothing that conflicts with the held lock and completes while it is held.
+/// FAILS IF goal patches do not serialize. The bite: delete the `pg_advisory_xact_lock` select at
+/// the head of `lock_goal_rows`. A goal-only PATCH then takes nothing the held lock conflicts with
+/// and completes while it is held.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_goal_patch_waits_on_another_goal_patch_of_the_same_resource(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
@@ -2590,11 +2590,11 @@ async fn a_goal_patch_waits_on_another_goal_patch_of_the_same_resource(pool: PgP
     let goal = ingest_typed(&app, &owner, own_context, "goal").await;
 
     let mut held = app.pool.begin().await.expect("begin the holder");
-    sqlx::query("SELECT 1 FROM kb_resources WHERE id = $1 FOR NO KEY UPDATE")
-        .bind(resource)
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("goal_patch:{resource}"))
         .execute(&mut *held)
         .await
-        .expect("hold the source as a goal patch does");
+        .expect("hold the goal-patch lock as another goal patch does");
     let request = spawn_request(
         &app,
         &owner,
@@ -2603,11 +2603,78 @@ async fn a_goal_patch_waits_on_another_goal_patch_of_the_same_resource(pool: PgP
         Some(json!({ "goal": goal })),
     );
     a_backend_waits_on_a_lock(&app.pool, &request, "PATCH goal").await;
-    held.rollback().await.expect("release the source");
+    held.rollback().await.expect("release the goal-patch lock");
     let (status, body) = request.await.expect("the goal patch must not panic");
     assert_eq!(
         status, 200,
         "the goal patch lands once released; body: {body}"
+    );
+}
+
+/// A goal patch must not deadlock with an ordinary update of the same resource. The other update
+/// (held here) has folded a property row the goal patch also sets, and then writes the resource's
+/// own row — the order a title-and-meta update's projectors take. The goal patch, waiting on the
+/// property row, must hold nothing that resource-row write needs: both complete, neither answers
+/// a deadlock (`40P01`).
+///
+/// FAILS IF goal patches serialize on a lock the resource-row write conflicts with. The bite: in
+/// `DbBackend::lock_goal_rows`, take the source `FOR NO KEY UPDATE` instead of the advisory lock.
+/// The goal patch then holds that row lock while waiting on the property row, the held update's
+/// resource-row write waits on it, and Postgres aborts one of the two.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_goal_patch_does_not_deadlock_with_an_update_of_the_same_resource(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (owner, own_context) = caller(&app.pool, "owner").await;
+    let resource = ingest(&app, &owner, own_context).await;
+    let goal = ingest_typed(&app, &owner, own_context, "goal").await;
+    let (status, body) = call(
+        &app,
+        &owner,
+        Method::PATCH,
+        format!("/api/resources/{resource}"),
+        Some(json!({ "open_meta": { "note": "first" } })),
+    )
+    .await;
+    assert_eq!(status, 200, "precondition: a live `note`; body: {body}");
+
+    let mut held = app.pool.begin().await.expect("begin the other update");
+    sqlx::query(
+        "SELECT id FROM kb_properties \
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 \
+            AND property_key = 'note' AND NOT is_folded \
+          FOR UPDATE",
+    )
+    .bind(resource)
+    .execute(&mut *held)
+    .await
+    .expect("hold the `note` row");
+    let request = spawn_request(
+        &app,
+        &owner,
+        Method::PATCH,
+        &format!("/api/resources/{resource}"),
+        Some(json!({ "goal": goal, "open_meta": { "note": "second" } })),
+    );
+    a_backend_waits_on_a_lock(&app.pool, &request, "PATCH goal + note").await;
+
+    let wrote = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        sqlx::query("UPDATE kb_resources SET title = title WHERE id = $1")
+            .bind(resource)
+            .execute(&mut *held),
+    )
+    .await
+    .expect("the other update's resource-row write must not hang");
+    assert!(
+        wrote.is_ok(),
+        "the other update's resource-row write must not deadlock with the goal patch: {wrote:?}"
+    );
+    held.commit().await.expect("commit the other update");
+
+    let (status, body) = request.await.expect("the goal patch must not panic");
+    assert_eq!(
+        status, 200,
+        "the goal patch lands after the other update; body: {body}"
     );
 }
 
