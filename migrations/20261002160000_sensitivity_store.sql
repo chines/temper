@@ -28,7 +28,14 @@ LANGUAGE sql IMMUTABLE STRICT AS $$
            SELECT 1 FROM jsonb_each(p) e
             WHERE NOT sensitivity.is_category(e.key)
                OR jsonb_typeof(e.value) <> 'number'
-               OR e.value::text !~ '^[0-9]{1,9}$');
+               OR e.value::text !~ '^[0-9]{1,6}$');
+$$;
+
+-- A detector's regexes must compile and must not match the empty string, which would count every
+-- position. An invalid regex raises here, at write time, rather than mid-scan.
+CREATE FUNCTION sensitivity.is_usable_pattern(p text) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT AS $$
+    SELECT '' !~ p;
 $$;
 
 CREATE TABLE sensitivity.surfaces (
@@ -48,28 +55,30 @@ CREATE TABLE sensitivity.detectors (
     pattern   text NOT NULL,
     validator text CHECK (validator IN ('ssn_valid', 'luhn_valid', 'aba_routing_valid')),
     enabled   boolean NOT NULL DEFAULT true,
-    note      text NOT NULL
+    note      text NOT NULL,
+    CONSTRAINT detectors_patterns_usable
+        CHECK (sensitivity.is_usable_pattern(prefilter) AND sensitivity.is_usable_pattern(pattern))
 );
 
--- Every text column is held to a non-content shape, so "no column can hold content" (R1) is a
--- property of the constraints, not only of the column names the gate asserts.
+-- One row per value, per detector version, per place (Q22): a decision about one place never
+-- silences another. Text columns are held to non-prose shapes and counts to six digits; a hex hash,
+-- a fingerprint or a uuid can still carry digits if a writer mis-binds, which is the writer's contract.
 CREATE TABLE sensitivity.findings (
     id               uuid PRIMARY KEY DEFAULT uuid_generate_v7(),
     surface          text NOT NULL REFERENCES sensitivity.surfaces (surface),
-    target_table     text CHECK (target_table ~ '^kb_[a-z0-9_]{1,60}$'),
-    target_id        uuid,
+    target_table     text NOT NULL CHECK (target_table ~ '^kb_[a-z0-9_]{1,60}$'),
+    target_id        uuid NOT NULL,
     resource_id      uuid,
     content_hash     text NOT NULL CHECK (content_hash ~ '^[0-9a-f]{64}$'),
     detector_id      text NOT NULL REFERENCES sensitivity.detectors (id),
     detector_version int NOT NULL CHECK (detector_version >= 1),
     category         text NOT NULL CHECK (sensitivity.is_category(category)),
     severity         smallint NOT NULL CHECK (severity BETWEEN 1 AND 4),
-    match_count      int NOT NULL CHECK (match_count >= 1),
+    match_count      int NOT NULL CHECK (match_count BETWEEN 1 AND 100000),
     fingerprint      bytea CHECK (octet_length(fingerprint) = 32),
     first_seen       timestamptz NOT NULL DEFAULT now(),
     last_seen        timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT findings_target_pair CHECK (num_nonnulls(target_table, target_id) IN (0, 2)),
-    UNIQUE (content_hash, detector_id, detector_version)
+    UNIQUE (surface, target_id, content_hash, detector_id, detector_version)
 );
 
 COMMENT ON TABLE sensitivity.findings IS
@@ -108,11 +117,11 @@ CREATE TABLE sensitivity.runs (
     surface         text NOT NULL REFERENCES sensitivity.surfaces (surface),
     started_at      timestamptz NOT NULL DEFAULT now(),
     finished_at     timestamptz CHECK (finished_at >= started_at),
-    rows_examined   int NOT NULL DEFAULT 0 CHECK (rows_examined >= 0),
-    hashes_examined int NOT NULL DEFAULT 0 CHECK (hashes_examined >= 0),
-    cache_hits      int NOT NULL DEFAULT 0 CHECK (cache_hits >= 0),
-    new_findings    int NOT NULL DEFAULT 0 CHECK (new_findings >= 0),
-    cursor_advances int NOT NULL DEFAULT 0 CHECK (cursor_advances >= 0),
+    rows_examined   int NOT NULL DEFAULT 0 CHECK (rows_examined BETWEEN 0 AND 100000),
+    hashes_examined int NOT NULL DEFAULT 0 CHECK (hashes_examined BETWEEN 0 AND 100000),
+    cache_hits      int NOT NULL DEFAULT 0 CHECK (cache_hits BETWEEN 0 AND 100000),
+    new_findings    int NOT NULL DEFAULT 0 CHECK (new_findings BETWEEN 0 AND 100000),
+    cursor_advances int NOT NULL DEFAULT 0 CHECK (cursor_advances BETWEEN 0 AND 100000),
     by_category     jsonb NOT NULL DEFAULT '{}' CHECK (sensitivity.is_category_tally(by_category))
 );
 
@@ -237,6 +246,8 @@ INSERT INTO sensitivity.surfaces (surface, cursor_kind, enabled) VALUES
     ('kb_connections.reach_affirmation',           NULL,                false);
 
 -- Cut 1's corpus (D5, Q18). No `contact` detector: email is deferred (Q16).
+-- Cards match whole groupings: a loose `[ -]?` lets the longest match absorb an adjacent CVV or
+-- expiry, Luhn then rejects the whole run, and no shorter match is tried.
 INSERT INTO sensitivity.detectors (id, category, severity, prefilter, pattern, validator, note) VALUES
     ('private_key_block', 'secret_material', 4, 'PRIVATE KEY',
      '-----BEGIN [A-Z ]*PRIVATE KEY-----', NULL, 'PEM private key header'),
@@ -250,7 +261,8 @@ INSERT INTO sensitivity.detectors (id, category, severity, prefilter, pattern, v
      'eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}', NULL,
      'three base64url segments, JSON header'),
     ('payment_card', 'payment_card', 4, '[0-9]{4}',
-     '(?<![0-9])[0-9]([ -]?[0-9]){12,18}(?![0-9])', 'luhn_valid', '13-19 digits behind Luhn'),
+     '(?<![0-9])([0-9]{13,19}|[0-9]{4}( [0-9]{4}){3}|[0-9]{4}(-[0-9]{4}){3}|[0-9]{4} [0-9]{6} [0-9]{4,5}|[0-9]{4}-[0-9]{6}-[0-9]{4,5})(?![0-9])',
+     'luhn_valid', 'contiguous, or in card groupings with one separator, behind Luhn'),
     ('aba_routing', 'financial', 3, '[Rr][Oo][Uu][Tt][Ii][Nn][Gg]|ABA|aba|RTN|rtn',
      '([Rr][Oo][Uu][Tt][Ii][Nn][Gg]|(?<![A-Za-z])(ABA|aba|RTN|rtn)(?![A-Za-z]))[^0-9]{0,20}(?<![0-9])[0-9]{9}(?![0-9])',
      'aba_routing_valid', 'nine digits after a routing keyword, ABA mod-10'),

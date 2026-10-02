@@ -102,38 +102,81 @@ async fn the_findings_columns_are_exactly_the_d1_allowlist(pool: PgPool) {
     );
 }
 
+/// Insert one finding built from a JSON row, so each case changes exactly one column.
+async fn insert_finding(pool: &PgPool, row: &serde_json::Value) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO sensitivity.findings (surface, target_table, target_id, content_hash, \
+           detector_id, detector_version, category, severity, match_count) \
+         SELECT r->>'surface', r->>'target_table', (r->>'target_id')::uuid, r->>'content_hash', \
+                r->>'detector_id', 1, r->>'category', 4, (r->>'match_count')::int \
+           FROM (SELECT $1::jsonb r) x",
+    )
+    .bind(row)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+fn a_finding_row(target: Uuid) -> serde_json::Value {
+    json!({
+        "surface": "kb_resources.title",
+        "target_table": "kb_resources",
+        "target_id": target,
+        "content_hash": A_HASH,
+        "detector_id": "us_ssn_delimited",
+        "category": "national_id",
+        "match_count": 1,
+    })
+}
+
 /// The column names are not the whole guarantee: a `text` column can carry anything. Each text
-/// column of `findings` is held to a non-content shape by a CHECK or a foreign key, and a planted
-/// value under each is refused.
+/// column of `findings` is held to a non-prose shape, and each count to six digits, so a planted
+/// value is refused by the constraint that names it. The unmodified row is admitted first, so no
+/// refusal below can be about a row that could never be written.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn content_under_a_findings_text_column_is_refused(pool: PgPool) {
-    for (column, value) in [
-        ("content_hash", "SSN 219-45-6789"),
-        ("target_table", "kb_resources Jane Doe"),
-        ("category", "national_id 219-45-6789"),
-        ("surface", "kb_resources.title 219-45-6789"),
-        ("detector_id", "us_ssn_delimited 219-45-6789"),
-    ] {
-        let mut row = json!({
-            "surface": "kb_resources.title",
-            "content_hash": A_HASH,
-            "detector_id": "us_ssn_delimited",
-            "category": "national_id",
-            "target_table": "kb_resources",
-        });
-        row[column] = json!(value);
-        let err = sqlx::query(
-            "INSERT INTO sensitivity.findings (surface, target_table, target_id, content_hash, \
-               detector_id, detector_version, category, severity, match_count) \
-             SELECT r->>'surface', r->>'target_table', gen_random_uuid(), r->>'content_hash', \
-                    r->>'detector_id', 1, r->>'category', 4, 1 FROM (SELECT $1::jsonb r) x",
-        )
-        .bind(row)
-        .execute(&pool)
+async fn content_under_a_findings_column_is_refused(pool: PgPool) {
+    insert_finding(&pool, &a_finding_row(Uuid::now_v7()))
         .await
-        .unwrap_err();
-        assert!(
-            matches!(code_of(&err).as_deref(), Some("23514" | "23503")),
+        .expect("the base row is admitted");
+    for (column, value, constraint) in [
+        (
+            "content_hash",
+            json!("SSN 219-45-6789"),
+            "findings_content_hash_check",
+        ),
+        (
+            "target_table",
+            json!("kb_resources Jane Doe"),
+            "findings_target_table_check",
+        ),
+        (
+            "category",
+            json!("national_id 219-45-6789"),
+            "findings_category_check",
+        ),
+        (
+            "surface",
+            json!("kb_resources.title 219-45-6789"),
+            "findings_surface_fkey",
+        ),
+        (
+            "detector_id",
+            json!("us_ssn_delimited 219-45-6789"),
+            "findings_detector_id_fkey",
+        ),
+        // An SSN with its dashes stripped fits an int; a count of matches never needs to.
+        (
+            "match_count",
+            json!(219_456_789),
+            "findings_match_count_check",
+        ),
+    ] {
+        let mut row = a_finding_row(Uuid::now_v7());
+        row[column] = value;
+        let err = insert_finding(&pool, &row).await.unwrap_err();
+        assert_eq!(
+            constraint_of(&err).as_deref(),
+            Some(constraint),
             "{column}: {err}"
         );
     }
@@ -141,32 +184,32 @@ async fn content_under_a_findings_text_column_is_refused(pool: PgPool) {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(n, 0);
+    assert_eq!(n, 1, "only the base row");
 }
 
-/// The positive control for the test above: a well-formed finding is admitted, so the refusals are
-/// about the planted values and not about a row that could never be written.
+/// Q22: a finding is one value, by one detector version, in one place. The same value in two
+/// places is two findings, so a decision about one never silences the other; the same value seen
+/// twice in one place is one.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_well_formed_finding_is_admitted_once_per_hash_and_detector_version(pool: PgPool) {
-    let insert =
-        "INSERT INTO sensitivity.findings (surface, target_table, target_id, content_hash, \
-                    detector_id, detector_version, category, severity, match_count, fingerprint) \
-                  VALUES ('kb_resources.title', 'kb_resources', $1, $2, 'us_ssn_delimited', 1, \
-                          'national_id', 4, 1, sha256('x'::bytea))";
-    sqlx::query(insert)
-        .bind(Uuid::now_v7())
-        .bind(A_HASH)
-        .execute(&pool)
+async fn a_finding_is_one_value_in_one_place(pool: PgPool) {
+    let here = Uuid::now_v7();
+    insert_finding(&pool, &a_finding_row(here)).await.unwrap();
+    insert_finding(&pool, &a_finding_row(Uuid::now_v7()))
         .await
-        .unwrap();
-    // Hash grain (D2): the same hash under the same detector version is one finding.
-    let err = sqlx::query(insert)
-        .bind(Uuid::now_v7())
-        .bind(A_HASH)
-        .execute(&pool)
+        .expect("the same value elsewhere is its own finding");
+    let err = insert_finding(&pool, &a_finding_row(here))
         .await
         .unwrap_err();
     assert_eq!(code_of(&err).as_deref(), Some("23505"), "{err}");
+
+    let mut no_place = a_finding_row(here);
+    no_place["target_id"] = json!(null);
+    let err = insert_finding(&pool, &no_place).await.unwrap_err();
+    assert_eq!(
+        code_of(&err).as_deref(),
+        Some("23502"),
+        "a finding names its place: {err}"
+    );
 }
 
 // ── Q19: the surface registry is the manifest's scan lines ────────────────────────────────────
@@ -515,6 +558,62 @@ async fn luhn_and_aba_adjudicate_what_the_patterns_nominate(pool: PgPool) {
     assert_eq!(matches(&pool, "aba_routing", "database 021000021").await, 0);
 }
 
+/// The commonest pasted forms carry a card's neighbours with it. A loose grouping let the longest
+/// match absorb them, Luhn rejected the whole run, and the card went unfound.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_card_beside_its_cvv_expiry_or_other_digits_is_found(pool: PgPool) {
+    for text in [
+        "card 4111 1111 1111 1111 123",
+        "4111 1111 1111 1111 12/27",
+        "item 12 4111 1111 1111 1111",
+        "4111-1111-1111-1111 cvv 123",
+        "4111111111111111 123",
+        "amex 3782 822463 10005 exp 01/28",
+    ] {
+        assert_eq!(matches(&pool, "payment_card", text).await, 1, "{text}");
+    }
+    // Mixed separators are not a card grouping.
+    assert_eq!(
+        matches(&pool, "payment_card", "4111 1111-1111 1111").await,
+        0
+    );
+}
+
+/// A detector is operator data (D5), so a bad regex must fail when it is written, not mid-scan,
+/// where the error would land in a tick's error column.
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_detector_pattern_must_compile_and_never_match_empty(pool: PgPool) {
+    let insert =
+        "INSERT INTO sensitivity.detectors (id, category, severity, prefilter, pattern, note) \
+                  VALUES ('probe', 'credential', 2, $1, $2, 'probe')";
+    for (prefilter, pattern) in [("x", ".*"), ("[0-9]*", "x[0-9]+")] {
+        let err = sqlx::query(insert)
+            .bind(prefilter)
+            .bind(pattern)
+            .execute(&pool)
+            .await
+            .unwrap_err();
+        assert_check_violation(&err, "detectors_patterns_usable", pattern);
+    }
+    let err = sqlx::query(insert)
+        .bind("x")
+        .bind("x(")
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        code_of(&err).as_deref(),
+        Some("2201B"),
+        "invalid regex: {err}"
+    );
+    sqlx::query(insert)
+        .bind("x")
+        .bind("x[0-9]+")
+        .execute(&pool)
+        .await
+        .expect("a usable pattern is admitted");
+}
+
 // ── Q20: a cursor's watermark is typed by its surface's kind ──────────────────────────────────
 
 async fn insert_cursor(
@@ -635,9 +734,10 @@ async fn backfill_bookkeeping_lives_on_the_backfill_lane_only(pool: PgPool) {
 
 async fn a_finding(pool: &PgPool) -> Uuid {
     sqlx::query_scalar(
-        "INSERT INTO sensitivity.findings (surface, content_hash, detector_id, detector_version, \
-           category, severity, match_count) \
-         VALUES ('kb_resources.title', $1, 'jwt', 1, 'credential', 3, 1) RETURNING id",
+        "INSERT INTO sensitivity.findings (surface, target_table, target_id, content_hash, \
+           detector_id, detector_version, category, severity, match_count) \
+         VALUES ('kb_resources.title', 'kb_resources', gen_random_uuid(), $1, 'jwt', 1, \
+                 'credential', 3, 1) RETURNING id",
     )
     .bind(A_HASH)
     .fetch_one(pool)
@@ -828,6 +928,7 @@ async fn a_runs_tally_holds_only_categories_and_counts(pool: PgPool) {
         json!({"219-45-6789": 1}),
         json!({"national_id": "219-45-6789"}),
         json!({"national_id": 123_456_789_012_i64}),
+        json!({"national_id": 219_456_789}),
         json!(["national_id"]),
     ] {
         let err = sqlx::query(insert)
