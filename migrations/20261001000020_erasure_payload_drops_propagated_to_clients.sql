@@ -1,7 +1,7 @@
 -- The principal_erased and resource_erased payloads drop `propagated_to_clients` (ruled
 -- 2026-10-01). The key named a client-propagation mechanism that does not exist and that no
--- design plans; no code read it. Erasure has never run in production, so no ledger holds an
--- event carrying it.
+-- design plans; no code read it. An event already carrying it stays valid against the
+-- re-registered schemas (point 1).
 --
 -- 1. The principal_erased and resource_erased payload_schemas (registered by 20260909000015
 --    and 20260929000010) are re-registered without the property. Each literal below is the

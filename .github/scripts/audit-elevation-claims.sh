@@ -126,9 +126,8 @@ fingerprint() {
 #
 # The `fn` gates are named here because each was READ, not because it matched a pattern:
 # `reconcile_regime` (`DbBackend::authorize_reconcile` + the structural `cogmap_write_requires_admin`)
-# is the gate whose no-op branch once made four cogmap surfaces false — it replaced the deleted
-# `require_cogmap_write_admin` when reconcile's authority moved into the backend (2026-10-01), and
-# `require_manage_on_team` is the bar three `admin` subcommands were said to exceed.
+# decides who may reconcile a cognitive map, and `require_manage_on_team` is the bar three `admin`
+# subcommands were said to exceed.
 read -r -d '' GATES <<'EOF' || true
 audit_gate|file:crates/temper-services/src/authz/audit_gate.rs
 connection|file:crates/temper-services/src/authz/connection.rs

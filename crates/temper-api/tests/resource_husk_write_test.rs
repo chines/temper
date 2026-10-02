@@ -2578,8 +2578,8 @@ async fn a_goal_clear_racing_the_acts_erasure_of_the_goal_folds_the_edge_once(po
 /// connection from the same pool (hold-and-wait). The app here runs on a pool of exactly ONE
 /// connection with a short acquire timeout: a door that resolves its profile or emitter (or runs
 /// any other query) on the pool between `begin()` and `commit()` waits on the connection its own
-/// transaction holds, times out, and answers `500`. Production's serverless pools are five
-/// connections wide, so five concurrent writes stall the same way. Every door here is driven by
+/// transaction holds, times out, and answers `500`. A small pool stalls the same way under a
+/// handful of concurrent writes. Every door here is driven by
 /// the owner against a fresh live resource; any non-`500` answer (a state refusal on the
 /// segmented doors included) proves the door completed on one connection. The bite: in
 /// `DbBackend::resolve_actor_in_tx` (or any converted door), resolve on `&self.pool` instead of
