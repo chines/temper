@@ -3,9 +3,9 @@
 //!
 //! Under goal *"Personal data that lands in the corpus by accident is found"*, sensitivity-sweep spec
 //! D2, D4, D5, D8 and D11 and rulings Q28-Q33. Spec witnesses 1 (the planted half), 3, 4, 5, 6, 7,
-//! 14, 27 (the fingerprint half; the survey half is the erasure bridge's) and 28, plus the two-phase
-//! tick: a claim that commits before the scan, so a tick that never finishes keeps its attempt and
-//! leaves its run behind.
+//! 14, 27 (the fingerprint half; the survey half is the erasure bridge's) and 28. Witness 3's second
+//! clause, that a block and its chunk windows do not double-count, belongs to 3b's read model
+//! (Q36). Also the two-phase tick, salt-keyed hashes (Q34), and the review round's fixes.
 //!
 //! Content is planted with raw inserts, not the write path: these witnesses are about what the scan
 //! reads, and every source it reads is a plain table.
@@ -13,7 +13,7 @@
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-const SALT: &[u8] = b"witness-salt";
+const SALT: &[u8] = b"witness-salt-of-sixteen-plus";
 const SSN_A: &str = "219-45-6789";
 const SSN_B: &str = "536-22-8147";
 const NO_LAG: &str = "0 seconds";
@@ -206,6 +206,20 @@ async fn a_planted_ssn_yields_a_finding_and_nothing_the_sweep_wrote_holds_it(poo
     let found = findings_at(&pool, r).await;
     assert_eq!(found.len(), 1, "one finding for the one SSN: {found:?}");
     assert_eq!(found[0].1, "us_ssn_delimited");
+    let keyed: bool = sqlx::query_scalar(
+        "SELECT content_hash = encode(sha256($2 || convert_to(r.title, 'UTF8')), 'hex') \
+                AND content_hash <> encode(sha256(convert_to(r.title, 'UTF8')), 'hex') \
+           FROM sensitivity.findings f JOIN kb_resources r ON r.id = f.target_id WHERE f.id = $1",
+    )
+    .bind(found[0].0)
+    .bind(SALT)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        keyed,
+        "the stored hash is keyed by the salt, never a bare hash of the unit (Q34)"
+    );
     assert_holds_none_of(
         &everything_the_sweep_wrote(&pool).await,
         SSN_A,
@@ -232,15 +246,10 @@ async fn identical_prose_in_three_resources_scans_once_and_yields_three_findings
     let t = tick(&pool, "kb_block_content.content").await;
 
     assert_eq!(t.rows_examined, 3);
-    assert_eq!(
-        t.hashes_examined, detectors,
-        "the shared hash is scanned once per detector"
-    );
-    assert_eq!(
-        t.cache_hits,
-        2 * detectors,
-        "the other two places are served by the memo"
-    );
+    // The detectors that find nothing scan the shared unit once; the one that matches re-runs at
+    // each place, because a fingerprint is minted from the match (Q34).
+    assert_eq!(t.hashes_examined, detectors + 2, "{t:?}");
+    assert_eq!(t.cache_hits, 2 * (detectors - 1), "{t:?}");
     let hashes: Vec<String> = sqlx::query_scalar(
         "SELECT DISTINCT content_hash FROM sensitivity.findings WHERE target_id = ANY($1)",
     )
@@ -323,23 +332,35 @@ async fn a_row_committed_after_a_tick_beneath_its_watermark_is_still_found(pool:
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_transaction_that_has_only_read_does_not_hold_the_head_back(pool: PgPool) {
-    tick(&pool, "kb_remote_sources.uri").await;
-    let mut reader = pool.begin().await.unwrap();
-    sqlx::query("SELECT count(*) FROM kb_remote_sources")
-        .execute(&mut *reader)
+async fn a_transaction_that_reads_first_then_writes_beneath_the_watermark_is_still_found(
+    pool: PgPool,
+) {
+    let target = resource(&pool, "Onboarding notes").await;
+    tick(&pool, "kb_resources.title").await;
+
+    // `updated` is stamped at the transaction's start, before it holds an xid.
+    let mut slow = pool.begin().await.unwrap();
+    sqlx::query("SELECT count(*) FROM kb_resources")
+        .execute(&mut *slow)
         .await
         .unwrap();
-    let fresh = remote_source(&pool, &format!("https://hr.example/{SSN_B}")).await;
-
-    tick(&pool, "kb_remote_sources.uri").await;
+    let other = resource(&pool, "Roadmap").await;
+    retitle(&pool, other, "Roadmap, revised").await;
+    tick(&pool, "kb_resources.title").await;
+    sqlx::query("UPDATE kb_resources SET title = $2, updated = now() WHERE id = $1")
+        .bind(target)
+        .bind(format!("Onboarding notes {SSN_B}"))
+        .execute(&mut *slow)
+        .await
+        .unwrap();
+    slow.commit().await.unwrap();
+    tick(&pool, "kb_resources.title").await;
 
     assert_eq!(
-        findings_at(&pool, fresh).await.len(),
+        findings_at(&pool, target).await.len(),
         1,
-        "an idle reader cannot stall the head"
+        "a reader may still write beneath the head"
     );
-    reader.rollback().await.unwrap();
 }
 
 // ── Witness 6: a mutable surface ───────────────────────────────────────────────────────────────
@@ -358,6 +379,13 @@ async fn a_title_only_update_is_detected(pool: PgPool) {
         "the head re-reads the updated row and only it"
     );
     assert_eq!(findings_at(&pool, r).await.len(), 1);
+    let (head, backfill): (i32, i32) = sqlx::query_as(
+        "SELECT new_findings_head, new_findings_backfill FROM sensitivity.runs ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((head, backfill), (1, 0), "the run says which lane found it");
 }
 
 // ── Witness 7: a version bump backfills one detector without re-running the others ────────────
@@ -434,21 +462,19 @@ async fn a_tick_that_fails_on_a_planted_row_writes_a_code_and_never_the_value(po
         "the sweep's job and store",
     );
 
-    let raw =
-        sqlx::query("UPDATE kb_workflow_jobs SET last_error = $1 WHERE persona = 'sensitivity'")
-            .bind(format!("cannot store {SSN_A}"))
-            .execute(&pool)
+    // Q32: a raw message is rewritten to a code, not refused, so nothing echoes it and no reap
+    // fails on it.
+    sqlx::query("UPDATE kb_workflow_jobs SET last_error = $1 WHERE persona = 'sensitivity'")
+        .bind(format!("cannot store {SSN_A}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error: String =
+        sqlx::query_scalar("SELECT last_error FROM kb_workflow_jobs WHERE persona = 'sensitivity'")
+            .fetch_one(&pool)
             .await
-            .unwrap_err();
-    let constraint = match &raw {
-        sqlx::Error::Database(db) => db.constraint().map(str::to_string),
-        _ => None,
-    };
-    assert_eq!(
-        constraint.as_deref(),
-        Some("ck_workflow_jobs_sensitivity_last_error_coded"),
-        "{raw}"
-    );
+            .unwrap();
+    assert_eq!(error, "scan_failed");
 }
 
 // ── The two-phase tick: a tick that never finishes keeps its attempt and leaves its run ────────
@@ -579,19 +605,65 @@ async fn a_block_with_two_ssns_keeps_both_fingerprints_and_a_quote_of_either_mat
 }
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn an_unsalted_or_capped_fingerprint_set_says_so(pool: PgPool) {
-    let unsalted = block(&pool, resource(&pool, "u").await, SSN_A).await;
-    tick_salted(&pool, "kb_block_content.content", None).await;
-    let found = findings_at(&pool, unsalted).await;
-    assert_eq!(found[0].4, "unsalted");
-    assert!(fingerprints(&pool, found[0].0).await.is_empty());
+async fn a_tick_without_a_salt_scans_nothing_and_says_why(pool: PgPool) {
+    let place = block(&pool, resource(&pool, "u").await, SSN_A).await;
+    for salt in [None, Some(&b"short"[..])] {
+        let t = tick_salted(&pool, "kb_block_content.content", salt).await;
+        assert!(t.failed, "{salt:?}");
+        let error: String = sqlx::query_scalar(
+            "SELECT last_error FROM kb_workflow_jobs WHERE persona = 'sensitivity' ORDER BY enqueued_at DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(error, "salt_missing");
+        sqlx::query("UPDATE kb_workflow_jobs SET status = 'dead' WHERE persona = 'sensitivity'")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    assert!(
+        findings_at(&pool, place).await.is_empty(),
+        "an unkeyed hash is never written"
+    );
+}
 
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_capped_fingerprint_set_says_it_is_truncated(pool: PgPool) {
     let many: Vec<String> = (100..165).map(|area| format!("{area}-01-0001")).collect();
     let capped = block(&pool, resource(&pool, "c").await, &many.join(" ")).await;
     tick(&pool, "kb_block_content.content").await;
     let found = findings_at(&pool, capped).await;
     assert_eq!((found[0].3, found[0].4.as_str()), (65, "truncated"));
     assert_eq!(fingerprints(&pool, found[0].0).await.len(), 64);
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_header_only_match_is_not_fingerprinted(pool: PgPool) {
+    let key = |body: &str| {
+        format!("-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----")
+    };
+    let one = block(
+        &pool,
+        resource(&pool, "k1").await,
+        &key("MIIEpAIBAAKCAQEAone"),
+    )
+    .await;
+    let two = block(
+        &pool,
+        resource(&pool, "k2").await,
+        &key("MIIEowIBAAKCAQEAtwo"),
+    )
+    .await;
+    tick(&pool, "kb_block_content.content").await;
+    for place in [one, two] {
+        let found = findings_at(&pool, place).await;
+        assert_eq!(
+            found[0].4, "not_fingerprinted",
+            "two different keys would share one print"
+        );
+        assert!(fingerprints(&pool, found[0].0).await.is_empty());
+    }
 }
 
 // ── Witness 28: acknowledgement survives re-reads and bumps, not recurrences ───────────────────
@@ -650,4 +722,192 @@ async fn an_acknowledged_title_stays_acknowledged_until_the_value_comes_back(poo
         last_seen_after_decision(&pool, found[1].0, ack).await,
         "the value came back"
     );
+}
+
+// ── The review round: claims, oversize units, declared hashes, the column sets ────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_run_from_an_earlier_claim_of_the_same_job_is_refused(pool: PgPool) {
+    let (stale, job): (Uuid, Uuid) =
+        sqlx::query_as("SELECT run_id, job_id FROM sensitivity_sweep_claim()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "UPDATE kb_workflow_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1",
+    )
+    .bind(job)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("SELECT workflow_job_reap('lease expired')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE kb_workflow_jobs SET next_visible_at = now() WHERE id = $1")
+        .bind(job)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (fresh, again): (Uuid, Uuid) =
+        sqlx::query_as("SELECT run_id, job_id FROM sensitivity_sweep_claim()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(again, job, "the same job, claimed a second time");
+
+    let late: Option<bool> =
+        sqlx::query_scalar("SELECT failed FROM sensitivity_sweep_tick($1, $2, $3)")
+            .bind(stale)
+            .bind(job)
+            .bind(SALT)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        late, None,
+        "the first claim's run cannot take the second claim's work"
+    );
+    let current: Option<bool> =
+        sqlx::query_scalar("SELECT failed FROM sensitivity_sweep_tick($1, $2, $3)")
+            .bind(fresh)
+            .bind(job)
+            .bind(SALT)
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
+    assert_eq!(current, Some(false));
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_oversize_unit_is_named_as_unscanned(pool: PgPool) {
+    let big = format!("{SSN_A} {}", "x".repeat(1_048_577));
+    let place = block(&pool, resource(&pool, "dump").await, &big).await;
+
+    let t = tick(&pool, "kb_block_content.content").await;
+
+    assert!(findings_at(&pool, place).await.is_empty());
+    let named: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM sensitivity.unscanned_places WHERE target_id = $1 AND reason = 'oversize')",
+    )
+    .bind(place)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        named,
+        "a skipped place is named, so it never reads as clean"
+    );
+    let oversize: i32 =
+        sqlx::query_scalar("SELECT units_oversize FROM sensitivity.runs ORDER BY id DESC LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((oversize, t.failed), (1, false));
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_declared_hash_cannot_steer_the_memo(pool: PgPool) {
+    block(&pool, resource(&pool, "clean").await, "hello world").await;
+    tick(&pool, "kb_block_content.content").await;
+
+    // A chunk whose declared hash is the clean text's, over content that is not.
+    let r = resource(&pool, "chunked").await;
+    let rev = block(&pool, r, "placeholder").await;
+    let chunk: Uuid = sqlx::query_scalar(
+        "WITH c AS (
+             INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+             SELECT br.block_id, $1, 0, encode(sha256(convert_to('hello world', 'UTF8')), 'hex')
+               FROM kb_block_revisions br WHERE br.id = $2 RETURNING id)
+         INSERT INTO kb_chunk_content (chunk_id, content) SELECT id, $3 FROM c RETURNING chunk_id",
+    )
+    .bind(r)
+    .bind(rev)
+    .bind(format!("SSN {SSN_A}"))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    tick(&pool, "kb_chunk_content.content").await;
+
+    assert_eq!(
+        findings_at(&pool, chunk).await.len(),
+        1,
+        "the sweep hashes what it reads (Q34)"
+    );
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn sightings_never_carry_across_a_category_change(pool: PgPool) {
+    let r = resource(&pool, &format!("Employee {SSN_A}")).await;
+    tick(&pool, "kb_resources.title").await;
+    for category in ["identifier", "national_id"] {
+        sqlx::query(
+            "UPDATE sensitivity.detectors SET version = version + 1, category = $1 WHERE id = 'us_ssn_delimited'",
+        )
+        .bind(category)
+        .execute(&pool)
+        .await
+        .unwrap();
+        tick(&pool, "kb_resources.title").await;
+    }
+    let seen: Vec<(i32, bool)> = sqlx::query_as(
+        "SELECT detector_version, first_seen = (SELECT first_seen FROM sensitivity.findings \
+                 WHERE target_id = $1 AND detector_version = 1) \
+           FROM sensitivity.findings WHERE target_id = $1 ORDER BY detector_version",
+    )
+    .bind(r)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        seen,
+        vec![(1, true), (2, false), (3, false)],
+        "version 3 does not reach past version 2's category change to inherit from version 1"
+    );
+}
+
+/// Spec D1's argument applied to every table the scan adds: none can hold a value, and a later
+/// text column fails here rather than in review (Q28).
+const SCAN_TABLE_COLUMNS: &[(&str, &str, &str)] = &[
+    ("finding_fingerprints", "finding_id", "uuid"),
+    ("finding_fingerprints", "fingerprint", "bytea"),
+    ("memo", "content_hash", "text"),
+    ("memo", "detector_id", "text"),
+    ("memo", "detector_version", "integer"),
+    ("place_observations", "surface", "text"),
+    ("place_observations", "target_id", "uuid"),
+    ("place_observations", "content_hash", "text"),
+    (
+        "place_observations",
+        "observed_at",
+        "timestamp with time zone",
+    ),
+    ("unscanned_places", "surface", "text"),
+    ("unscanned_places", "target_id", "uuid"),
+    ("unscanned_places", "reason", "text"),
+    (
+        "unscanned_places",
+        "recorded_at",
+        "timestamp with time zone",
+    ),
+];
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn the_scan_tables_hold_exactly_their_columns(pool: PgPool) {
+    let live: std::collections::BTreeSet<(String, String, String)> = sqlx::query_as(
+        "SELECT table_name::text, column_name::text, data_type::text FROM information_schema.columns \
+          WHERE table_schema = 'sensitivity' \
+            AND table_name IN ('finding_fingerprints', 'memo', 'place_observations', 'unscanned_places')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .collect();
+    let allowed = SCAN_TABLE_COLUMNS
+        .iter()
+        .map(|(t, c, d)| (t.to_string(), c.to_string(), d.to_string()))
+        .collect();
+    assert_eq!(live, allowed);
 }
