@@ -23,6 +23,26 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **`GET /api/contexts/resolve` — a context ref resolved to its id, for the caller (the route-first half of the network door's teardown)**
+  A new route, nothing changed beside it: `GET /api/contexts/resolve?context_ref=<ref>` answers
+  `{ "context_id": <uuid> }` (`ContextResolution`) for `@me/<slug>`, `@<handle>/<slug>`,
+  `+<team>/<slug>` or a bare UUID. It is `context_service::resolve_context_ref` behind a route —
+  the resolver every ref-accepting route already uses — so each ref form keeps exactly the answer
+  it has elsewhere: a context the caller cannot read answers as one that does not exist (uniform
+  404 on the UUID and `@<handle>` arms, an unknown handle included), a malformed ref answers 400
+  with the shared parser's sentence, and the `+<team>` arm keeps its existing non-member 403. The
+  ref grammar is the one `parse_context_ref`; no server-side dialect. Typed client method
+  `ContextClient::resolve` (temperkb-client), with the ref in the query string, not the logged
+  path. `openapi.json` gains the path and the schema (86 lines added, none removed); the three
+  SDKs and the ts-rs `context.ts` regenerate with the addition only. Why: the MCP
+  `context_anchor` resolver (`cognitive_maps.rs`, `reblock.rs`) is the last database read in a
+  tool module; this route is what it relays to in teardown, one call per anchored tool. Who
+  observes: API and SDK callers, who gain a route and a client method; no existing request or
+  response shape changes. User-visible: no. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: http,clients
+status: signal-only
 - **Beat 5: the steward pair crosses the network door — `steward_ingest_delta` and `steward_advance_watermark` forward to `/api/steward`; no MCP tool executes on the direct binding**
   The last two direct handlers stop executing in-process and forward to
   `GET /api/steward/{cogmap}/delta` and `POST /api/steward/{cogmap}/watermark` as

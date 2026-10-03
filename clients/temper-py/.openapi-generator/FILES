@@ -146,6 +146,7 @@ temper/generated/models/context_owner_ref.py
 temper/generated/models/context_owner_ref_one_of.py
 temper/generated/models/context_owner_ref_one_of1.py
 temper/generated/models/context_panorama.py
+temper/generated/models/context_resolution.py
 temper/generated/models/context_row.py
 temper/generated/models/context_row_with_counts.py
 temper/generated/models/create_cogmap_outcome.py

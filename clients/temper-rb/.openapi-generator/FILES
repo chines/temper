@@ -144,6 +144,7 @@ lib/temper/generated/models/context_owner_ref.rb
 lib/temper/generated/models/context_owner_ref_one_of.rb
 lib/temper/generated/models/context_owner_ref_one_of1.rb
 lib/temper/generated/models/context_panorama.rb
+lib/temper/generated/models/context_resolution.rb
 lib/temper/generated/models/context_row.rb
 lib/temper/generated/models/context_row_with_counts.rb
 lib/temper/generated/models/create_cogmap_outcome.rb

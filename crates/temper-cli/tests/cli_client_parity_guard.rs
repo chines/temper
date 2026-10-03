@@ -53,6 +53,16 @@ const INFRA_FILES: &[&str] = &[
 /// audit. Sorted; a hit here is a RULING, not an omission.
 const CLIENT_ONLY: &[(&str, &str)] = &[
     (
+        "contexts.rs",
+        // The relay seam for the MCP tool layer: `GET /api/contexts/resolve` exists so the
+        // tools' `context_anchor` can turn a ref into an id without a database read (the
+        // network door's teardown). The CLI resolves refs client-side today, over the
+        // visible-contexts list (`context_cmd::resolve_context_id_for_read`,
+        // `projection::resolve_context_row`); moving those onto this route is its own change,
+        // not the additive one that introduced it.
+        "resolve",
+    ),
+    (
         "data_artifacts.rs",
         // The home-type-keyed dispatch conveniences — MCP's `home_type` is a
         // vocabulary, not a route. The CLI calls the typed arms

@@ -168,6 +168,7 @@ __all__ = [
     "ContextOwnerRefOneOf",
     "ContextOwnerRefOneOf1",
     "ContextPanorama",
+    "ContextResolution",
     "ContextRow",
     "ContextRowWithCounts",
     "CreateCogmapOutcome",
@@ -623,6 +624,7 @@ from temper.generated.models.context_owner_ref import ContextOwnerRef as Context
 from temper.generated.models.context_owner_ref_one_of import ContextOwnerRefOneOf as ContextOwnerRefOneOf
 from temper.generated.models.context_owner_ref_one_of1 import ContextOwnerRefOneOf1 as ContextOwnerRefOneOf1
 from temper.generated.models.context_panorama import ContextPanorama as ContextPanorama
+from temper.generated.models.context_resolution import ContextResolution as ContextResolution
 from temper.generated.models.context_row import ContextRow as ContextRow
 from temper.generated.models.context_row_with_counts import ContextRowWithCounts as ContextRowWithCounts
 from temper.generated.models.create_cogmap_outcome import CreateCogmapOutcome as CreateCogmapOutcome

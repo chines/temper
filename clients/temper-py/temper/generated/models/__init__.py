@@ -124,6 +124,7 @@ from temper.generated.models.context_owner_ref import ContextOwnerRef
 from temper.generated.models.context_owner_ref_one_of import ContextOwnerRefOneOf
 from temper.generated.models.context_owner_ref_one_of1 import ContextOwnerRefOneOf1
 from temper.generated.models.context_panorama import ContextPanorama
+from temper.generated.models.context_resolution import ContextResolution
 from temper.generated.models.context_row import ContextRow
 from temper.generated.models.context_row_with_counts import ContextRowWithCounts
 from temper.generated.models.create_cogmap_outcome import CreateCogmapOutcome
