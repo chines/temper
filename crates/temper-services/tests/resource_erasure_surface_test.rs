@@ -12,8 +12,9 @@
 //! - **Which tables a resource reaches** comes from the live catalog. A foreign key, or a
 //!   single-column CHECK on a `*_table` discriminator that enumerates tables, makes its table a
 //!   child of the table it names; the walk takes every child of a reached table, recursively, from
-//!   five roots, except below `kb_events` (ruled 2026-10-02). Nothing enumerates tables by hand, so
-//!   a new table is reached by construction rather than by someone remembering it.
+//!   five roots, the ledger included (ruled 2026-10-02, amended 2026-10-03). Nothing enumerates
+//!   tables by hand, so a new table is reached by construction rather than by someone remembering
+//!   it.
 //! - **What the act does about each carrier** is declared in `scripts/resource-erasure-surface.txt`.
 //! - **Whether the act really does it** is read from the live body of
 //!   `_resource_erasure_apply_redaction`, the D2 function: a `handled` line must find an UPDATE of
@@ -55,10 +56,6 @@ const REDACTION_FN: &str = "_resource_erasure_apply_redaction";
 /// The numbered D2 steps a line may cite (spec D2, steps 1–9 and 7a).
 const D2_STEPS: &[&str] = &["1", "2", "3", "4", "5", "6", "7", "7a", "8", "9"];
 
-/// The ledger. Reached, but never walked down from (ruled 2026-10-02): a foreign key into an event
-/// says which event caused a row, not that the row is the event's.
-const LEDGER: &str = "kb_events";
-
 /// The parent→child edges of the walk: every foreign key, and every single-column CHECK on a
 /// `*_table` discriminator, read as an edge to each public table it names.
 const EDGES: &str = r#"
@@ -76,10 +73,14 @@ const EDGES: &str = r#"
                    WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p'))
 "#;
 
-/// Base-table `*_table` columns with no single-column CHECK that enumerates a public table. A
-/// discriminator the walk cannot read as an edge could point at a resource unseen. A pairing CHECK
-/// (`(x_table IS NULL) = (x_id IS NULL)`) spans two columns, and a pattern or negation names no
-/// table it admits, so neither counts.
+/// Base-table `*_table` columns with no CHECK that ENUMERATES the tables they may name. A
+/// discriminator the walk cannot read as an edge could point at a resource unseen.
+///
+/// "Enumerates" is a positive match on the two shapes Postgres prints for `col IN ('a', 'b')` and
+/// `col = 'a'`, once casts, parentheses and whitespace are stripped: `CHECK col=ANY ARRAY['a','b']`
+/// and `CHECK col='a'`. Anything else (a pairing CHECK, a pattern, a negation, `IS DISTINCT FROM`,
+/// an OR with an open arm) does not confine the column and does not count. At least one literal
+/// must name a public table.
 const UNENUMERATED_DISCRIMINATORS: &str = r#"
 SELECT c.table_name || '.' || c.column_name
   FROM information_schema.columns c
@@ -89,11 +90,12 @@ SELECT c.table_name || '.' || c.column_name
    AND NOT EXISTS (
      SELECT 1
        FROM pg_constraint k
-       JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = k.conkey[1]
-      CROSS JOIN LATERAL regexp_matches(pg_get_constraintdef(k.oid), '''([a-z_][a-z0-9_]*)''', 'g') m
+      CROSS JOIN LATERAL regexp_replace(pg_get_constraintdef(k.oid),
+                                        '::[a-z ]+(\[\])?|[()\s]', '', 'g') AS def(shape)
+      CROSS JOIN LATERAL regexp_matches(def.shape, '''([a-z_][a-z0-9_]*)''', 'g') m
       WHERE k.contype = 'c' AND k.conrelid = (quote_ident(c.table_name::text))::regclass
-        AND cardinality(k.conkey) = 1 AND a.attname = c.column_name
-        AND pg_get_constraintdef(k.oid) !~ '(<>|~|\mLIKE\M|\mNOT\M)'
+        AND def.shape ~ ('^CHECK' || c.column_name
+                         || '=(ANYARRAY\[(''[a-z_][a-z0-9_]*'',?)+\]|''[a-z_][a-z0-9_]*'')$')
         AND m[1] IN (SELECT relname FROM pg_class
                       WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')))
  ORDER BY 1
@@ -106,8 +108,7 @@ fn reachable_tables_sql() -> String {
            SELECT unnest(ARRAY['kb_resources','kb_content_blocks','kb_chunks',
                                'kb_block_revisions','kb_edges'])
            UNION
-           SELECT edge.child FROM edge JOIN reach ON edge.parent = reach.tbl
-            WHERE reach.tbl <> '{LEDGER}')
+           SELECT edge.child FROM edge JOIN reach ON edge.parent = reach.tbl)
          SELECT tbl FROM reach ORDER BY 1"
     )
 }
@@ -310,18 +311,57 @@ fn tokens(sql: &str) -> Vec<String> {
     out
 }
 
-/// Whether a SET value starting at `value` is an erasure value: NULL, an empty string or object,
-/// the property sentinel `'"erased"'`, or an `'erased…'` sentinel (`'erased-' || id`).
-fn is_erasure_value(value: Option<&String>) -> bool {
-    value.is_some_and(|v| {
-        v == "null" || v == "''" || v == "'{}'" || v == "'\"erased\"'" || v.starts_with("'erased")
-    })
+/// The constant erasure values: NULL, an empty string or object, and the property sentinel.
+const ERASURE_CONSTANTS: &[&str] = &["null", "''", "'{}'", "'\"erased\"'"];
+
+/// Whether `token` names the row's own identity or the act's resource: `p_resource`, `<alias>.id`
+/// or a key number `<alias>.n`, optionally cast to text. These are what a sentinel may carry.
+fn is_identity(token: &str) -> bool {
+    let bare = token.strip_suffix("::text").unwrap_or(token);
+    bare == "p_resource"
+        || bare
+            .split_once('.')
+            .is_some_and(|(alias, col)| !alias.is_empty() && matches!(col, "id" | "n"))
 }
 
-/// Every value `body` assigns to `table.column` in an UPDATE of `table`, as the token that starts
-/// it. An assignment target is a token right after `set` or `,`, right before `=`, within the
-/// statement (up to its `;`).
-fn assignments<'a>(t: &'a [String], key: &str) -> Vec<Option<&'a String>> {
+/// Whether a whole SET value expression erases. Two shapes only:
+///
+/// - a constant from [`ERASURE_CONSTANTS`], optionally cast (`'{}'::jsonb`);
+/// - an `'erased…'` literal joined by `||` to an identity (`'erased-' || r.id::text`).
+///
+/// Anything else is not an erasure, however it starts: `'erased-' || r.title` keeps the title,
+/// `'' || content` keeps the content, and `'{}'::jsonb || payload` keeps the payload.
+fn is_erasure_value(expr: &[String]) -> bool {
+    match expr {
+        [v] => ERASURE_CONSTANTS.contains(&v.as_str()),
+        [v, cast] => ERASURE_CONSTANTS.contains(&v.as_str()) && cast.starts_with("::"),
+        [v, op, id] => v.starts_with("'erased") && op == "||" && is_identity(id),
+        _ => false,
+    }
+}
+
+/// The tokens of a SET value starting at `start`, up to the `,` that ends it, the `;` that ends the
+/// statement, or the `where` / `from` / `returning` that ends the SET list, all at paren depth 0.
+fn value_expr(t: &[String], start: usize) -> &[String] {
+    let mut depth = 0usize;
+    let mut end = start;
+    while let Some(tok) = t.get(end) {
+        match tok.as_str() {
+            "(" => depth += 1,
+            ")" if depth == 0 => break,
+            ")" => depth -= 1,
+            "," | ";" | "where" | "from" | "returning" if depth == 0 => break,
+            _ => {}
+        }
+        end += 1;
+    }
+    &t[start..end]
+}
+
+/// Every value expression `body` assigns to `table.column` in an UPDATE of `table`. An assignment
+/// target is a token right after `set` or `,`, right before `=`, within the statement (up to its
+/// `;`).
+fn assignments<'a>(t: &'a [String], key: &str) -> Vec<&'a [String]> {
     let Some((table, column)) = key.split_once('.') else {
         return Vec::new();
     };
@@ -340,13 +380,23 @@ fn assignments<'a>(t: &'a [String], key: &str) -> Vec<Option<&'a String>> {
                     && matches!(t[j - 1].as_str(), "set" | ",")
                     && t.get(j + 1).is_some_and(|x| x == "=") =>
                 {
-                    out.push(t.get(j + 2));
+                    out.push(value_expr(t, j + 2));
                 }
                 _ => {}
             }
         }
     }
     out
+}
+
+/// Whether `expr` reads `column`, bare or qualified: an assignment of the column's own value.
+fn reads_column(expr: &[String], column: &str) -> bool {
+    expr.iter().any(|tok| {
+        tok == column
+            || tok
+                .rsplit_once('.')
+                .is_some_and(|(_, col)| col.split("::").next() == Some(column))
+    })
 }
 
 fn deletes_from(t: &[String], table: &str) -> bool {
@@ -360,7 +410,11 @@ fn binds(body: &str, key: &str, disposition: &Disposition) -> bool {
     match disposition {
         Disposition::Handled { .. } => assignments(&t, key).into_iter().any(is_erasure_value),
         Disposition::Repointed { via, .. } => {
-            !assignments(&t, via).is_empty() && deletes_from(&t, table_of(key))
+            let via_column = via.split_once('.').map_or(via.as_str(), |(_, c)| c);
+            assignments(&t, via)
+                .into_iter()
+                .any(|expr| !expr.is_empty() && !reads_column(expr, via_column))
+                && deletes_from(&t, table_of(key))
         }
         Disposition::OutOfScope => true,
     }
@@ -450,18 +504,17 @@ async fn every_declaration_is_live(pool: PgPool) {
     );
 }
 
-/// FAILS IF: a base-table `*_table` discriminator has no single-column CHECK enumerating the tables
-/// it may name. The walk reads polymorphic edges from those CHECKs; a discriminator without one
+/// FAILS IF: a base-table `*_table` discriminator has no CHECK enumerating the tables it may name. The walk reads polymorphic edges from those CHECKs; a discriminator without one
 /// could point at a resource and the walk would never see its table.
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn every_polymorphic_discriminator_enumerates_its_targets(pool: PgPool) {
     let bare = unenumerated_discriminators(&pool).await;
     assert!(
         bare.is_empty(),
-        "these `*_table` columns carry no single-column CHECK enumerating their target tables \
-         (`col IN ('kb_a', 'kb_b')`), so the erasure fence cannot tell what they reference. A \
-         pairing CHECK, a pattern or a negation does not count. Add the enumerating CHECK, the \
-         convention every other discriminator follows.\n\
+        "these `*_table` columns carry no CHECK enumerating their target tables \
+         (`col IN ('kb_a', 'kb_b')` or `col = 'kb_a'`), so the erasure fence cannot tell what they \
+         reference. A pairing CHECK, a pattern, a negation or `IS DISTINCT FROM` does not count. \
+         Add the enumerating CHECK, the convention every other discriminator follows.\n\
          Unenumerated: {bare:#?}"
     );
 }
@@ -482,14 +535,16 @@ fn every_out_of_scope_line_states_its_reason() {
 }
 
 /// Witness 13. FAILS IF: a carrier added to a resource-reachable table, in any of the ways a table
-/// becomes reachable, is not reported; or one added below the ledger is.
+/// becomes reachable, is not reported; or one added to an unreached table is.
 ///
 /// The reachable probes are: a text column on an existing table, a jsonb column on one (the
 /// non-text carriers, ruled 2026-10-02), a new child of a root, a new grandchild (the walk is
-/// transitive), a new polymorphic owner of `kb_resources`, and a new polymorphic owner of
-/// `kb_content_blocks` alone (edges come from a CHECK naming any table). The new tables are the
-/// case a hand-maintained table list would miss. The last probe holds only a foreign key into
-/// `kb_events`, and must NOT be reported: the walk does not descend from the ledger.
+/// transitive), a new polymorphic owner of `kb_resources`, a new polymorphic owner of a root other
+/// than `kb_resources`, a new polymorphic owner of a reached table that is not a root (edges come
+/// from a CHECK naming ANY table), and a new table holding only a foreign key into `kb_events` (the
+/// walk descends from the ledger, ruled 2026-10-03). The new tables are the case a hand-maintained
+/// table list would miss. The last probe references only `kb_teams`, which no resource reaches, and
+/// must NOT be reported: reach is not everything.
 ///
 /// The probe columns join the carrier set here, standing in for the sibling-manifest PR that would
 /// class them; the "until declared" half is `every_reachable_carrier_is_handled_or_declared`, which
@@ -519,8 +574,15 @@ async fn an_added_carrier_in_reach_is_reported(pool: PgPool) {
              target_table text NOT NULL CHECK (target_table IN ('kb_content_blocks')),
              target_id uuid NOT NULL,
              note text)",
+        "CREATE TABLE erasure_fence_probe_artifact_owner (
+             target_table text NOT NULL CHECK (target_table IN ('kb_data_artifacts')),
+             target_id uuid NOT NULL,
+             note text)",
         "CREATE TABLE erasure_fence_probe_caused (
              caused_by_event_id uuid NOT NULL REFERENCES kb_events(id),
+             note text)",
+        "CREATE TABLE erasure_fence_probe_unrelated (
+             team_id uuid NOT NULL REFERENCES kb_teams(id),
              note text)",
     ] {
         sqlx::query(ddl)
@@ -530,7 +592,9 @@ async fn an_added_carrier_in_reach_is_reported(pool: PgPool) {
     }
 
     let reported = [
+        "erasure_fence_probe_artifact_owner.note",
         "erasure_fence_probe_block_owner.note",
+        "erasure_fence_probe_caused.note",
         "erasure_fence_probe_child.note",
         "erasure_fence_probe_grandchild.note",
         "erasure_fence_probe_owner.note",
@@ -539,17 +603,12 @@ async fn an_added_carrier_in_reach_is_reported(pool: PgPool) {
     ];
     let mut carriers = carriers();
     carriers.extend(reported.iter().map(|p| p.to_string()));
-    carriers.insert("erasure_fence_probe_caused.note".to_string());
+    carriers.insert("erasure_fence_probe_unrelated.note".to_string());
 
-    let reach = reachable_tables(&pool).await;
-    assert!(
-        reach.contains(LEDGER),
-        "the ledger itself is reached; only the walk below it stops"
-    );
     assert_eq!(
-        uncovered(&reach, &carriers),
+        uncovered(&reachable_tables(&pool).await, &carriers),
         reported.map(String::from).to_vec(),
-        "every reachable probe must be reported, and the probe below the ledger must not"
+        "every reachable probe must be reported, and the unrelated one must not"
     );
 }
 
@@ -594,12 +653,14 @@ async fn reverting_the_joint_read_fixes_fails_the_fence(pool: PgPool) {
     );
 }
 
-/// FAILS IF: a `*_table` column whose CHECKs enumerate nothing is not reported by the guard.
+/// FAILS IF: a `*_table` column whose CHECKs do not enumerate public tables is not reported by the
+/// guard.
 ///
-/// One probe per way a CHECK can fail to enumerate, and each of the last three NAMES a real table,
-/// so the only thing excluding it is the conjunct it witnesses: no CHECK at all; a CHECK spanning
-/// two columns (the single-column rule); a pattern match (the `~` rule); a negation (the `<>`
-/// rule).
+/// One probe per way a CHECK can fail. The guard has two conjuncts, the enumeration shape and "at
+/// least one literal names a public table", and each probe is excluded by exactly one: no CHECK at
+/// all; a CHECK with a second column in it; a pattern; a negation; `IS DISTINCT FROM` (each of
+/// these names a real table, so only the shape excludes it); and a well-shaped enumeration of a
+/// name that is no table (only the public-table conjunct excludes it).
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_unenumerated_discriminator_fails_the_guard(pool: PgPool) {
     assert!(
@@ -615,6 +676,10 @@ async fn an_unenumerated_discriminator_fails_the_guard(pool: PgPool) {
              owner_table text CHECK (owner_table ~ 'kb_resources'), owner_id uuid)",
         "CREATE TABLE erasure_fence_probe_negated (
              owner_table text CHECK (owner_table <> 'kb_resources'), owner_id uuid)",
+        "CREATE TABLE erasure_fence_probe_distinct (
+             owner_table text CHECK (owner_table IS DISTINCT FROM 'kb_resources'), owner_id uuid)",
+        "CREATE TABLE erasure_fence_probe_nontable (
+             owner_table text CHECK (owner_table IN ('kb_no_such_table')), owner_id uuid)",
     ] {
         sqlx::query(ddl)
             .execute(&pool)
@@ -625,30 +690,36 @@ async fn an_unenumerated_discriminator_fails_the_guard(pool: PgPool) {
         unenumerated_discriminators(&pool).await,
         vec![
             "erasure_fence_probe_bare.owner_table".to_string(),
+            "erasure_fence_probe_distinct.owner_table".to_string(),
             "erasure_fence_probe_negated.owner_table".to_string(),
+            "erasure_fence_probe_nontable.owner_table".to_string(),
             "erasure_fence_probe_paired.owner_table".to_string(),
             "erasure_fence_probe_pattern.owner_table".to_string(),
         ]
     );
 }
 
-/// The binding itself, on shapes the D2 function uses and shapes it must not be fooled by.
+/// The binding itself, on the shapes the D2 function uses and the shapes it must not be fooled by.
+/// Each negative case is excluded by exactly one rule, named beside it.
 #[test]
 fn the_binding_reads_erasing_assignments_not_mentions() {
     let sql = "
         UPDATE kb_chunks c
-           SET embedding = NULL, embedded_with = NULL -- header_path = NULL
-         WHERE c.header_path = 'x';
-        /* UPDATE kb_chunk_content SET content = ''; */
+           SET embedding = NULL, embedded_with = NULL
+         WHERE header_path = NULL;
+        -- UPDATE kb_chunk_content SET content = NULL;
+        /* UPDATE kb_block_content SET content = ''; */
         RAISE EXCEPTION 'UPDATE kb_edges SET label = NULL;';
         UPDATE kb_resources r
-           SET title = 'erased-' || r.id::text, origin_uri = r.origin_uri;
+           SET title = 'erased-' || r.id::text, origin_uri = 'erased:' || r.origin_uri;
+        UPDATE kb_ingestion_records SET source_uri = '' || source_uri;
+        UPDATE kb_workflow_jobs j SET payload = '{}'::jsonb || j.payload, last_error = 'erased';
         WITH ranked AS (SELECT 1)
         UPDATE kb_properties p
            SET property_key   = 'erased-key-' || ranked.n::text,
                property_value = '\"erased\"'::jsonb
           FROM ranked;
-        UPDATE kb_block_provenance bp SET source_id = v;
+        UPDATE kb_block_provenance bp SET source_id = (v ->> bp.id::text)::uuid;
         DELETE FROM kb_remote_sources r WHERE r.id = v;
     ";
     let handled = Disposition::Handled { step: "9".into() };
@@ -662,10 +733,29 @@ fn the_binding_reads_erasing_assignments_not_mentions() {
         assert!(binds(sql, key, &handled), "{key} is erased here");
     }
     for (key, why) in [
-        ("kb_chunks.header_path", "a comment and a WHERE comparison"),
-        ("kb_chunk_content.content", "a block comment"),
+        (
+            "kb_chunks.header_path",
+            "a WHERE comparison (the set/, rule)",
+        ),
+        ("kb_chunk_content.content", "a line comment"),
+        ("kb_block_content.content", "a block comment"),
         ("kb_edges.label", "a string literal"),
-        ("kb_resources.origin_uri", "an assignment of its own value"),
+        (
+            "kb_resources.origin_uri",
+            "a sentinel joined to the original value",
+        ),
+        (
+            "kb_ingestion_records.source_uri",
+            "an empty string joined to the original",
+        ),
+        (
+            "kb_workflow_jobs.payload",
+            "an empty object merged with the original",
+        ),
+        (
+            "kb_workflow_jobs.last_error",
+            "a sentinel literal that is not a constant",
+        ),
         (
             "kb_remote_sources.uri",
             "a DELETE is not a handled assignment",
@@ -673,17 +763,27 @@ fn the_binding_reads_erasing_assignments_not_mentions() {
     ] {
         assert!(!binds(sql, key, &handled), "{key}: {why} is not an erasure");
     }
+
     let repointed = Disposition::Repointed {
         step: "9".into(),
         via: "kb_block_provenance.source_id".into(),
     };
     assert!(binds(sql, "kb_remote_sources.uri", &repointed));
-    assert!(
-        !binds(
+    for (body, why) in [
+        (
             "DELETE FROM kb_remote_sources r WHERE r.id = v;",
-            "kb_remote_sources.uri",
-            &repointed
+            "a delete without the re-point leaves the citers on the original URL",
         ),
-        "a delete without the re-point leaves the citers on the original URL"
-    );
+        (
+            "UPDATE kb_block_provenance bp SET source_id = v;",
+            "a re-point without the delete leaves the original row",
+        ),
+        (
+            "UPDATE kb_block_provenance bp SET source_id = bp.source_id;
+             DELETE FROM kb_remote_sources r WHERE r.id = v;",
+            "a re-point to its own value leaves every citer in place, so the delete never fires",
+        ),
+    ] {
+        assert!(!binds(body, "kb_remote_sources.uri", &repointed), "{why}");
+    }
 }
