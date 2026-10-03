@@ -70,13 +70,11 @@ impl E2eTestApp {
         self.relay_parts_for(&self.token)
     }
 
-    /// Request parts for the DIRECT families' one resolution path: both extensions
-    /// the gate reads (`RawJwtClaims` + `BearerToken`, as the JWT middleware injects
-    /// them in production) naming this app's principal. A direct family resolves its
-    /// caller by passing these to `svc.ensure_profile_from_parts` and threading the
-    /// returned profile into the tool call — there is no service-side cache to seed.
-    /// (Contrast [`Self::relay_parts`]: those parts cross the network door and need
-    /// only the bearer, because the API adjudicates them from the wire.)
+    /// Request parts in the full production shape: both extensions the JWT middleware
+    /// injects (`RawJwtClaims` + `BearerToken`) naming this app's principal. Until the
+    /// network door's teardown an in-process gate read the claims; nothing does now —
+    /// every tool forwards the bearer alone — so the claims ride for fidelity. (Contrast
+    /// [`Self::relay_parts`]: the bearer only.)
     pub fn direct_parts(&self) -> axum::http::request::Parts {
         axum::http::Request::builder()
             .extension(temper_mcp::middleware::BearerToken(self.token.clone()))
@@ -126,12 +124,10 @@ impl E2eTestApp {
     }
 
     /// The MCP service every suite drives. The relay config is ON (this app's
-    /// listener, the harness credential, the shared pool) beside the direct
-    /// families over the same pool. The service carries NO auth state: a
-    /// direct family's caller is whatever profile the SUITE resolves through
-    /// the one gate (`svc.ensure_profile_from_parts(&parts)`) and threads
-    /// into the tool function — the same path production dispatch takes, so
-    /// each call acts as its own principal.
+    /// listener, the harness credential, the shared pool). The service carries NO
+    /// auth state: every tool forwards the bearer in the parts it is handed, so
+    /// each call acts as its own principal — the same path production dispatch
+    /// takes.
     pub async fn mcp_relay_service(&self, pool: PgPool) -> temper_mcp::service::TemperMcpService {
         let decoding_key =
             jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
@@ -1400,4 +1396,28 @@ pub async fn context_anchor_faces(app: &E2eTestApp) -> Vec<AnchorFace> {
             "context not found: context no-such-context not found or not readable",
         ),
     ]
+}
+
+/// One MCP act through the network door as the holder of `token`: `context_manage`'s
+/// `create`, a relayed write — so an admission is witnessed by the profile the API
+/// resolved for the bearer (the created context's `owner_ref`), and a refusal by the
+/// post-edge mapping of the API's own 401/403. The auth-seam suites' MCP leg since the
+/// network door's teardown removed the in-process gate they used to call.
+pub async fn mcp_act_as(
+    app: &E2eTestApp,
+    token: &str,
+) -> Result<serde_json::Value, rmcp::ErrorData> {
+    let svc = app.mcp_relay_service(app.pool.clone()).await;
+    let res = temper_mcp::tools::contexts::context_manage(
+        &svc,
+        &app.relay_parts_for(token),
+        serde_json::from_value(serde_json::json!({
+            "action": "create",
+            "name": format!("auth seam {}", uuid::Uuid::now_v7()),
+        }))
+        .expect("context_manage input deserializes"),
+    )
+    .await?;
+    let text = res.content[0].as_text().expect("a text part").text.clone();
+    Ok(serde_json::from_str(&text).expect("the created context row"))
 }

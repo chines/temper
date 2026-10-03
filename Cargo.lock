@@ -6277,7 +6277,6 @@ dependencies = [
  "temper-services",
  "temperkb-client",
  "temperkb-core",
- "temperkb-principal",
  "temperkb-telemetry",
  "temperkb-workflow",
  "tokio",

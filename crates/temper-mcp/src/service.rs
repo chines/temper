@@ -1,19 +1,19 @@
 //! MCP service — the central handler for all MCP tool calls.
 //!
-//! Each invocation creates a fresh `TemperMcpService`. The authenticated caller's
-//! profile is resolved on **every** request by handing the shared auth seam the
-//! `RawJwtClaims` + `BearerToken` the JWT middleware injected into the HTTP request
-//! extensions. This surface constructs no principal of its own: it presents a verified
-//! token and maps `AuthzError` to rmcp (see `map_authz_error`).
+//! Each invocation creates a fresh `TemperMcpService`. The service runs no auth seam
+//! of its own: the JWT edge (`require_mcp_auth`) validates the token before anything
+//! forwards, and every tool relays the caller's bearer across the network door, where
+//! Level 1 (resolve, deactivation) and Level 2 (system access) run at the API.
+//! Post-edge refusals come back as preserved 401/403 bodies and are mapped
+//! arm-for-arm (`AcrossAuth`, `map_post_edge_refusal`).
 //!
 //! The service carries NO auth state: the identity a request acts under exists only
 //! as a per-request value. Every tool handler extracts the HTTP `Parts` from rmcp's
-//! `Extension` and hands them to its tools module, which forwards the caller's bearer
-//! across the network door; Level 1 + 2 run at the API. `ensure_profile_from_parts`
-//! survives only for the in-process context-ref resolution (`context_anchor` in the
-//! cognitive_maps and reblock modules), which hands the profile it resolves straight
-//! back. A profile that crossed between requests is not a bug to guard — the compiler
-//! makes it unrepresentable.
+//! `Extension` and hands them to its tools module, which builds a per-request relay
+//! client from the bearer in them. The last in-process gate (`ensure_profile_from_parts`,
+//! kept for the context-ref resolution) left at teardown, when `context_anchor` began
+//! relaying to `GET /api/contexts/resolve`; the source gates at the foot of this file
+//! keep it from coming back.
 
 use rmcp::{
     handler::server::{common::Extension, wrapper::Parameters},
@@ -30,8 +30,6 @@ use std::sync::Arc;
 use temper_client::auth::MemoryTokenStore;
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
-use temper_core::types::Profile;
-use temper_services::auth::RawJwtClaims;
 use temper_services::state::AppState;
 use temper_workflow::operations::{Surface, RELAYED_SURFACE_HEADER, SERVICE_CREDENTIAL_HEADER};
 
@@ -69,10 +67,9 @@ pub fn shared_relay_pool() -> reqwest::Client {
 
 /// An [`McpConfig`] with the relay OFF — no base URL, no service credential.
 ///
-/// The e2e suites that drive the in-process auth seam itself (`ensure_profile_from_parts`,
-/// with no tool dispatch) build their service with this: those tests never forward, so
-/// a relay-less config is their honest shape, and an accidental forwarding attempt
-/// answers the typed refuse-to-forward error instead of half-working.
+/// For a service that must never forward — a test of the edge or the transport, with no
+/// tool dispatch: a relay-less config is its honest shape, and an accidental forwarding
+/// attempt answers the typed refuse-to-forward error instead of half-working.
 pub fn relay_off_config() -> McpConfig {
     McpConfig {
         mcp_base_url: "https://temper.invalid".to_string(),
@@ -239,60 +236,6 @@ impl TemperMcpService {
                 .with_non_idempotent_attempts(RELAY_NON_IDEMPOTENT_ATTEMPTS)
                 .with_connection_pool(self.shared_http.clone())
         })
-    }
-
-    /// Resolve the profile from HTTP request parts and return it.
-    ///
-    /// In stateless mode each request creates a fresh service instance, and
-    /// the service carries no auth state at all, so the profile is resolved
-    /// per-request from the JWT claims that the auth middleware injected
-    /// into the HTTP extensions. The caller threads the returned profile
-    /// into its own tool functions — identity is a per-request value, never
-    /// a shared slot. **Trust invariant:** `parts` must be middleware-produced —
-    /// the gate reads the injected claims at face value and does not re-verify
-    /// the JWT; verification happened at the edge that built the extensions.
-    pub async fn ensure_profile_from_parts(
-        &self,
-        parts: &http::request::Parts,
-    ) -> Result<temper_services::auth::AuthenticatedProfile, rmcp::ErrorData> {
-        let (claims, token) = authed_request(parts)?;
-
-        // Level 1: classify → human email ladder → resolve → deactivation gate, all in
-        // the shared seam. This surface used to build the human `AuthClaims` itself,
-        // with `email: ""` and no ladder — the drift that let an unnamable human
-        // auto-provision a junk profile here while temper-api refused the same token.
-        // It no longer constructs a principal at all; it hands over the verified token.
-        let authed = temper_services::auth::authenticate_token(&self.api_state, claims, &token.0)
-            .await
-            .map_err(map_authz_error)?;
-
-        // Fill the `mcp_request` root span's deferred `profile_id` (declared Empty in
-        // `build_router`). Recorded here rather than in `require_mcp_auth` because that middleware
-        // only validates the JWT — this is the first point at which a *profile* exists. Same
-        // deferred-field pattern as temper-api's auth middleware.
-        tracing::Span::current().record("profile_id", tracing::field::display(authed.profile().id));
-
-        // `profile_id` is the identifier to carry here — the raw OAuth `sub` is deliberately NOT
-        // emitted. At this point the profile has resolved, so `sub` adds nothing an operator can act
-        // on that `profile_id` does not, while a `google-oauth2|…` value joins our exported traces to
-        // the same person in unrelated systems (Auth0's social-connection `user_id` embeds the Google
-        // account id). A `profile_id` is inert outside temper. Decided 2026-08-01; see the task's §5.
-        tracing::debug!(profile_id = %authed.profile().id, "Profile resolved");
-
-        // Level 2: system-access gate (shared seam). The denial is mapped HERE, not
-        // through `map_authz_error`, because the resolved profile must be in scope to
-        // render the remediation-bearing details — the same `SystemAccessDetails`
-        // temper-api's 403 carries (`map_system_access_denied`).
-        temper_services::auth::require_system_access(&self.api_state.pool, &authed)
-            .await
-            .map_err(|e| match e {
-                temper_services::auth::AuthzError::SystemAccessDenied { refusal, .. } => {
-                    map_system_access_denied(authed.profile(), refusal)
-                }
-                other => map_authz_error(other),
-            })?;
-
-        Ok(authed)
     }
 
     // ── Tools (consolidated: 64 → 26) ─────────────────────────────────
@@ -849,34 +792,12 @@ impl TemperMcpService {
     }
 }
 
-/// The two things the JWT middleware injects for an authenticated request: the
-/// decoded claims and the raw token the seam's `/userinfo` rung may need.
-///
-/// Their absence is not an authentication failure but a wiring bug — the middleware
-/// injects both or rejects the request — so it maps to an internal error, as the
-/// missing-claims case always has.
-fn authed_request(
-    parts: &http::request::Parts,
-) -> Result<(&RawJwtClaims, &BearerToken), rmcp::ErrorData> {
-    let claims = parts.extensions.get::<RawJwtClaims>().ok_or_else(|| {
-        tracing::warn!("RawJwtClaims not found in HTTP request extensions");
-        rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
-    })?;
-    let token = parts.extensions.get::<BearerToken>().ok_or_else(|| {
-        tracing::warn!("BearerToken not found in HTTP request extensions");
-        rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
-    })?;
-    Ok((claims, token))
-}
-
-/// The terminal sentences both refusal mappings speak. Two mappings consume them —
-/// the direct binding's `map_authz_error` (typed `AuthzError`, computed in-process)
-/// and the relay's `map_post_edge_auth` (the API's preserved 401 body text) — and the
-/// split between the two MAPPINGS is principled (different input types; ruling 7
-/// deliberately chose wire-messages over a schema change). What must not split is the
-/// SENTENCE: hand-copied literals drifted between the bindings once already
-/// (`EmailResolution` was missed — the catch-all spoke the raw API body). The repo's
-/// `REQUEST_ACCESS_COMMAND` precedent exists for exactly this.
+/// The terminal sentences the relay's `map_post_edge_auth` speaks (from the API's
+/// preserved 401 body text). Until teardown a second mapping — the direct binding's
+/// `map_authz_error`, over the typed `AuthzError` computed in-process — consumed them
+/// too, and hand-copied literals had drifted between the two once (`EmailResolution`
+/// was missed — the catch-all spoke the raw API body); the sentences stay named
+/// constants, after the repo's `REQUEST_ACCESS_COMMAND` precedent.
 const TERMINAL_MACHINE_GATE_SENTENCE: &str =
     "This token is machine-shaped but does not declare a valid \
      client_credentials grant. This error is terminal and should not be retried.";
@@ -1074,121 +995,6 @@ pub(crate) fn map_post_edge_auth(refusal: &ClientError) -> Option<rmcp::ErrorDat
             "{cause} This error is terminal and should not be retried."
         )))
     }
-}
-
-/// Map the shared seam's refusal vocabulary onto rmcp transport errors.
-/// The deactivation and access-required strings are terminal ("do not retry")
-/// and byte-identical to the pre-seam inline messages.
-fn map_authz_error(e: temper_services::auth::AuthzError) -> rmcp::ErrorData {
-    use temper_services::auth::AuthzError;
-    match e {
-        // Terminal, like the machine-gate denial below: the token is structurally
-        // incoherent (machine-shaped, but not coherently a machine), so retrying it
-        // changes nothing. The seam has already logged the `sub` and the reason.
-        AuthzError::Refused(_) => rmcp::ErrorData::new(
-            rmcp::model::ErrorCode::INVALID_REQUEST,
-            TERMINAL_MACHINE_GATE_SENTENCE.to_string(),
-            None,
-        ),
-        // Also terminal: a human token we cannot put a name to. Before the seam owned
-        // the email ladder this surface skipped it entirely and auto-provisioned a
-        // profile with `email: ''`; that junk-row path is closed on purpose. The token
-        // carries no `email` claim and no earlier sign-in cached one, so re-sending it
-        // resolves nothing — the fix is a token with an email claim, not a retry.
-        AuthzError::EmailResolution(err) => {
-            tracing::warn!(%err, "rejected: could not resolve an email for a human token");
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                TERMINAL_EMAIL_RESOLUTION_SENTENCE.to_string(),
-                None,
-            )
-        }
-        AuthzError::Deactivated { profile_id } => {
-            tracing::warn!(%profile_id, "rejected: profile is deactivated");
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                TERMINAL_DEACTIVATION_SENTENCE.to_string(),
-                None,
-            )
-        }
-        // The advertised remedy is the shared constant, not a literal: this surface
-        // and temper-api's 403 must name the same command, and it must be one that
-        // parses. Both drifted onto `temper team join` — which accepts a team
-        // invitation and has no `--message`, so it does not request access at all.
-        //
-        // The refusal is typed and carried from the gate (one computation, both
-        // surfaces), so an agent here can branch on the same `kind` the API's 403
-        // carries in `details.refusal` — Denied from Requested from Revoked — and
-        // the `reason()` rides the message for a caller that reads only text.
-        //
-        // This arm is UNREACHABLE from every path into `map_authz_error` in this
-        // crate: both bare call sites (the `authenticate_token` mappings — Level 1,
-        // which never constructs the variant) and the forwarding `other =>` arm in
-        // `ensure_profile_from_parts` (the variant is intercepted above it, where the
-        // resolved profile is in scope — see `map_system_access_denied`). It exists
-        // for match exhaustiveness only, and refuses loudly: a silent degraded
-        // rendering here — identity dropped, remediation as prose only — is exactly
-        // the unfaithfulness this mapping exists to prevent.
-        AuthzError::SystemAccessDenied { .. } => rmcp::ErrorData::internal_error(
-            "system-access denial reached the bare authz mapping without a resolved \
-             profile; render it at the gate call site instead"
-                .to_string(),
-            None,
-        ),
-        // An `Unauthorized` here is a terminal authentication denial, not a transient
-        // failure — most often the machine-principal registration gate rejecting an
-        // unregistered or revoked `client_id` (G3 Phase A). It must surface as a terminal
-        // error the way `Deactivated` / `SystemAccessDenied` do, so a conformant client (or
-        // a Sidekiq worker, per the temper-rb contract) does not retry a permanent denial.
-        // The HTTP surface already returns a 401 for the same case; this keeps the two
-        // surfaces consistent. Any other `ProfileResolution` error is a genuine internal
-        // fault (a DB failure mid-resolution) and stays retryable.
-        AuthzError::ProfileResolution(temper_services::error::ApiError::Unauthorized(msg)) => {
-            tracing::warn!(%msg, "rejected: machine principal not admitted by the gate");
-            rmcp::ErrorData::new(
-                rmcp::model::ErrorCode::INVALID_REQUEST,
-                format!("{msg} This error is terminal and should not be retried."),
-                None,
-            )
-        }
-        AuthzError::ProfileResolution(err) => {
-            rmcp::ErrorData::internal_error(format!("Failed to resolve profile: {err}"), None)
-        }
-        AuthzError::AccessCheck(err) => {
-            rmcp::ErrorData::internal_error(format!("Failed to check system access: {err}"), None)
-        }
-    }
-}
-
-/// Render the Level-2 system-access denial faithfully to what the API's 403 carries.
-///
-/// The full [`temper_core::types::access_gate::SystemAccessDetails`] — email,
-/// display_name, refusal, request_url, cli_command — is built by the one shared
-/// constructor temper-core owns (the same construction temper-api's 403 middleware
-/// renders) and rides the structured `data`; the existing `data.refusal` key and its
-/// serialized shape are unchanged, so existing readers keep working. The message
-/// names the identity: an agent operating under a credential it does not read can
-/// tell the human WHICH account needs approving — the same remediation a browser
-/// caller receives, not a degraded prose-only copy of it.
-fn map_system_access_denied(
-    profile: &Profile,
-    refusal: temper_principal::Refusal,
-) -> rmcp::ErrorData {
-    let reason = refusal.reason();
-    let details =
-        temper_core::types::access_gate::SystemAccessDetails::for_profile(profile, refusal);
-    let who = details.email.as_deref().unwrap_or("your account");
-    rmcp::ErrorData::new(
-        rmcp::model::ErrorCode::INVALID_REQUEST,
-        format!(
-            "Access to this temper instance requires approval for {who} — {reason}. \
-             Visit {} or run `{}` in the CLI to request access. \
-             This error is terminal and should not be retried.",
-            temper_core::types::access_gate::REQUEST_ACCESS_URL,
-            temper_core::types::access_gate::REQUEST_ACCESS_COMMAND
-        ),
-        Some(serde_json::to_value(details).expect("SystemAccessDetails always serializes")),
-    )
 }
 
 /// The blob tools, spelled once — the `list_tools` advertisement filter and the router
@@ -1890,109 +1696,506 @@ mod tests {
         );
     }
 
-    /// **Every `#[tool]` method crosses the network door — and none gates in-process.**
-    ///
-    /// The MCP surface authenticates per-request. Every family now dispatches through its
-    /// tools module, handing it the request's `Parts`; the module calls
-    /// `svc.relay_client(parts)` and the API's own auth middleware performs Level 1 + 2 on
-    /// the caller's bearer, with the post-edge refusals mapped arm-for-arm from the
-    /// preserved bodies (`map_post_edge_auth`). The gate is the wire crossing itself; what
-    /// this test asserts is that the Parts reach the dispatch (no bearer ⇒ no forward).
-    ///
-    /// Until beat 5 (the steward pair) a second arm admitted DIRECT-binding methods that
-    /// called `ensure_profile_from_parts` before dispatching. With the last family across,
-    /// that arm could only admit a regression, so it is now the opposite: a method body
-    /// that calls `ensure_profile_from_parts` fails here — running the seam at the MCP
-    /// function as well as at the API is the duplicate resolution the door exists to remove
-    /// (the doubled-gate scar). The teardown beat tightens the remaining arm from this
-    /// shape heuristic to "relays, or sits on a named pure-compute allowlist".
-    ///
-    /// It parses this file's own source rather than reflecting on the router, because
-    /// the router's `Tool` entries carry only the description + schema + a function
-    /// pointer — there is no way to inspect the function body at runtime. Source parsing
-    /// is the cheapest faithful check.
-    ///
-    /// **What it covers:** every `#[tool]` method body in this file. The split is on
-    /// `#[tool(`, and each segment runs from the attribute to the next `#[tool(` or end
-    /// of file.
-    #[test]
-    fn every_tool_method_crosses_the_network_door() {
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/service.rs"),
-        )
-        .expect("read service.rs");
+    /// The tools that cross NO door: pure compute over compile-time data, holding no binding
+    /// to forward to. A NAMED list, not a pattern — an entry is a recorded decision (ruling (a),
+    /// 2026-10-02: `describe_schema` is static product vocabulary, never tenant data), and
+    /// [`every_tool_method_relays_or_is_allowlisted_pure`] holds each entry to "pure": its
+    /// reachable code builds no relay and touches neither `api_state` nor `temper_services`.
+    const PURE_COMPUTE_TOOLS: &[&str] = &["describe_schema"];
 
-        // Parse only the tool-router impl block — the #[tool] methods live between
-        // `#[tool_router]` and `#[tool_handler]` (or `#[cfg(test)]`, whichever comes first).
-        // The test module's doc comments mention `#[tool(` in backticks, which would split
-        // as false segments; scoping to the impl block avoids that.
-        let impl_start = source
+    /// Source reading for the gates below — a tripwire over the crate's own text, the cheapest
+    /// faithful check, because the router's `Tool` entries carry only a description, a schema
+    /// and a function pointer: there is no body to inspect at runtime. The tools modules are
+    /// the unit the extracted tool crate will inherit, so the gates read them, not the router.
+    mod source {
+        use std::collections::BTreeMap;
+
+        pub fn read(rel: &str) -> String {
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel))
+                .unwrap_or_else(|e| panic!("read {rel}: {e}"))
+        }
+
+        /// The code alone: comments removed and string/char literal CONTENTS blanked (the
+        /// delimiters stay), so a brace, a `;` or a name inside a sentence or a doc comment
+        /// is never read as code. Raw strings (`r"…"`, `r#"…"#`) are handled; a `'` that
+        /// does not close a one-character literal is a lifetime and passes through.
+        pub fn code_only(src: &str) -> String {
+            let c: Vec<char> = src.chars().collect();
+            let mut out = String::with_capacity(src.len());
+            let mut i = 0;
+            while i < c.len() {
+                let rest = |k: usize| c.get(i + k).copied();
+                if c[i] == '/' && rest(1) == Some('/') {
+                    while i < c.len() && c[i] != '\n' {
+                        i += 1;
+                    }
+                } else if c[i] == '/' && rest(1) == Some('*') {
+                    i += 2;
+                    while i + 1 < c.len() && !(c[i] == '*' && c[i + 1] == '/') {
+                        i += 1;
+                    }
+                    i += 2;
+                } else if c[i] == 'r'
+                    && (rest(1) == Some('"') || rest(1) == Some('#'))
+                    && (i == 0 || !(c[i - 1].is_alphanumeric() || c[i - 1] == '_'))
+                {
+                    let mut j = i + 1;
+                    let mut hashes = 0;
+                    while c.get(j) == Some(&'#') {
+                        hashes += 1;
+                        j += 1;
+                    }
+                    if c.get(j) != Some(&'"') {
+                        out.push(c[i]);
+                        i += 1;
+                        continue;
+                    }
+                    out.push('"');
+                    j += 1;
+                    loop {
+                        if j >= c.len() {
+                            break;
+                        }
+                        if c[j] == '"' && (0..hashes).all(|h| c.get(j + 1 + h) == Some(&'#')) {
+                            j += 1 + hashes;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    out.push('"');
+                    i = j;
+                } else if c[i] == '"' {
+                    out.push('"');
+                    i += 1;
+                    while i < c.len() && c[i] != '"' {
+                        if c[i] == '\\' {
+                            i += 1;
+                        }
+                        i += 1;
+                    }
+                    out.push('"');
+                    i += 1;
+                } else if c[i] == '\''
+                    && (rest(2) == Some('\'') || (rest(1) == Some('\\') && rest(3) == Some('\'')))
+                {
+                    let len = if rest(1) == Some('\\') { 4 } else { 3 };
+                    out.push_str("' '");
+                    i += len;
+                } else {
+                    out.push(c[i]);
+                    i += 1;
+                }
+            }
+            out
+        }
+
+        /// The index just past the bracket matching the one at `open`.
+        fn matching(code: &str, open: usize, (l, r): (u8, u8)) -> usize {
+            let bytes = code.as_bytes();
+            let mut depth = 0usize;
+            for (k, b) in bytes.iter().enumerate().skip(open) {
+                if *b == l {
+                    depth += 1;
+                } else if *b == r {
+                    depth -= 1;
+                    if depth == 0 {
+                        return k + 1;
+                    }
+                }
+            }
+            code.len()
+        }
+
+        /// `code` with every `#[cfg(test)]` item removed — a test module, a test-only `use` —
+        /// since test code is no tool's path.
+        pub fn without_tests(code: &str) -> String {
+            let mut code = code.to_string();
+            while let Some(at) = code.find("#[cfg(test)]") {
+                let after = at + "#[cfg(test)]".len();
+                let brace = code[after..].find('{').map(|k| after + k);
+                let semi = code[after..].find(';').map(|k| after + k);
+                let end = match (brace, semi) {
+                    (Some(b), Some(s)) if s < b => s + 1,
+                    (Some(b), _) => matching(&code, b, (b'{', b'}')),
+                    (None, Some(s)) => s + 1,
+                    (None, None) => code.len(),
+                };
+                code.replace_range(at..end, "");
+            }
+            code
+        }
+
+        fn ident_at_end(s: &str) -> &str {
+            let start = s
+                .rfind(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+                .map_or(0, |k| k + 1);
+            &s[start..]
+        }
+
+        /// Every `fn` with a body in `code`, by name → body (braces included).
+        pub fn fn_bodies(code: &str) -> Vec<(String, String)> {
+            let mut out = Vec::new();
+            let mut from = 0;
+            while let Some(k) = code[from..].find("fn ") {
+                let at = from + k;
+                from = at + 3;
+                if at > 0 {
+                    let prev = code.as_bytes()[at - 1] as char;
+                    if prev.is_alphanumeric() || prev == '_' {
+                        continue;
+                    }
+                }
+                let name: String = code[at + 3..]
+                    .chars()
+                    .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+                    .collect();
+                if name.is_empty() {
+                    continue;
+                }
+                let Some(paren) = code[at..].find('(').map(|p| at + p) else {
+                    continue;
+                };
+                let args_end = matching(code, paren, (b'(', b')'));
+                let brace = code[args_end..].find('{').map(|p| args_end + p);
+                let semi = code[args_end..].find(';').map(|p| args_end + p);
+                let Some(brace) = brace else { continue };
+                if semi.is_some_and(|s| s < brace) {
+                    continue; // a declaration without a body
+                }
+                let end = matching(code, brace, (b'{', b'}'));
+                out.push((name, code[brace..end].to_string()));
+            }
+            out
+        }
+
+        /// The functions `body` calls by name: `name(` or `path::name(`, never a method
+        /// (`.name(`) or a macro (`name!(`). Each comes back with the path segment before it,
+        /// when there is one.
+        pub fn callees(body: &str) -> Vec<(Option<String>, String)> {
+            let mut out = Vec::new();
+            for (k, _) in body.match_indices('(') {
+                let head = &body[..k];
+                let name = ident_at_end(head);
+                if name.is_empty() || name.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+                    continue;
+                }
+                let before = &head[..head.len() - name.len()];
+                if before.ends_with('.') || before.ends_with('!') {
+                    continue;
+                }
+                let qualifier = before
+                    .strip_suffix("::")
+                    .map(ident_at_end)
+                    .filter(|q| !q.is_empty())
+                    .map(str::to_string);
+                out.push((qualifier, name.to_string()));
+            }
+            out
+        }
+
+        /// Does `body` SEND a relay — not merely build one? A send is a `relay_client(…)` whose
+        /// statement reaches `.await` (the fluent `svc.relay_client(parts)?.x().y(..).await`),
+        /// or a `let <name> = …relay_client(…)…;` binding that a later statement uses in an
+        /// `.await`ed expression. A client built and dropped, or built and never awaited, is
+        /// not a forward.
+        pub fn sends_relay(body: &str) -> bool {
+            let statements: Vec<&str> = body.split(';').collect();
+            for (k, stmt) in statements.iter().enumerate() {
+                let Some(at) = stmt.find("relay_client(") else {
+                    continue;
+                };
+                if stmt[at..].contains(".await") {
+                    return true;
+                }
+                let binding = stmt
+                    .trim_start_matches(|ch: char| ch.is_whitespace() || ch == '{')
+                    .strip_prefix("let ")
+                    .map(|rest| rest.trim_start_matches("mut "))
+                    .map(|rest| {
+                        rest.chars()
+                            .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+                            .collect::<String>()
+                    })
+                    .filter(|b| !b.is_empty());
+                if let Some(binding) = binding {
+                    let used_awaited = statements[k + 1..].iter().any(|later| {
+                        later.match_indices(binding.as_str()).any(|(p, _)| {
+                            let pre = later[..p].chars().last();
+                            let post = later[p + binding.len()..].chars().next();
+                            let whole = !pre.is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+                                && !post.is_some_and(|ch| ch.is_alphanumeric() || ch == '_');
+                            whole && later[p..].contains(".await")
+                        })
+                    });
+                    if used_awaited {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+
+        /// The tools modules' functions: module → (name → body), test code removed.
+        pub fn tool_modules() -> BTreeMap<String, BTreeMap<String, String>> {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools");
+            let mut modules = BTreeMap::new();
+            for entry in std::fs::read_dir(&dir).expect("read src/tools") {
+                let path = entry.expect("dir entry").path();
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let module = path.file_stem().unwrap().to_string_lossy().to_string();
+                let code = without_tests(&code_only(
+                    &std::fs::read_to_string(&path).expect("read tools module"),
+                ));
+                let fns: BTreeMap<String, String> = fn_bodies(&code).into_iter().collect();
+                modules.insert(module, fns);
+            }
+            modules
+        }
+
+        /// Every function reachable from `module::name` within the tools modules: `name(` in
+        /// the same module first, then `m::name(` in module `m`, then any module that defines
+        /// it (an over-approximation, named: a name shared across modules is followed into
+        /// each). Returned as `(module, name, body)`.
+        pub fn reachable(
+            modules: &BTreeMap<String, BTreeMap<String, String>>,
+            module: &str,
+            name: &str,
+        ) -> Vec<(String, String, String)> {
+            let mut seen = std::collections::BTreeSet::new();
+            let mut stack = vec![(module.to_string(), name.to_string())];
+            let mut out = Vec::new();
+            while let Some((m, f)) = stack.pop() {
+                if !seen.insert((m.clone(), f.clone())) {
+                    continue;
+                }
+                let Some(body) = modules.get(&m).and_then(|fns| fns.get(&f)) else {
+                    continue;
+                };
+                for (qualifier, callee) in callees(body) {
+                    let targets: Vec<String> = match qualifier {
+                        Some(q) if modules.contains_key(&q) => vec![q],
+                        _ if modules[&m].contains_key(&callee) => vec![m.clone()],
+                        _ => modules
+                            .iter()
+                            .filter(|(_, fns)| fns.contains_key(&callee))
+                            .map(|(k, _)| k.clone())
+                            .collect(),
+                    };
+                    stack.extend(targets.into_iter().map(|t| (t, callee.clone())));
+                }
+                out.push((m, f, body.clone()));
+            }
+            out
+        }
+    }
+
+    /// The `#[tool]` methods in this file: `(method name, body)`, each scoped to the method
+    /// itself (a method's body closes at the impl's four-space indent).
+    fn tool_methods() -> Vec<(String, String)> {
+        let code = source::code_only(&source::read("src/service.rs"));
+        let impl_start = code
             .find("#[tool_router]")
-            .expect("#[tool_router] attribute not found");
-        let impl_end = source[impl_start..]
+            .expect("#[tool_router] not found");
+        let impl_end = code[impl_start..]
             .find("#[tool_handler]")
-            .or_else(|| source[impl_start..].find("#[cfg(test)]"))
-            .expect("end of tool-router impl not found");
-        let impl_block = &source[impl_start..impl_start + impl_end];
-
-        let tool_segments: Vec<&str> = impl_block.split("#[tool(").skip(1).collect();
-
-        assert!(
-            !tool_segments.is_empty(),
-            "no #[tool] attributes found in the tool-router impl — the split found nothing, \
-             so this test checks nothing"
-        );
-
-        let mut missing: Vec<String> = Vec::new();
-        for segment in &tool_segments {
-            // Scope each check to the method itself: the last `#[tool(` segment otherwise
-            // runs on through every non-tool helper to the end of the impl block, and a
-            // helper's comment naming the gate would read as the method calling it. A
-            // method's body closes at the impl's four-space indent.
-            let segment = segment.split("\n    }\n").next().unwrap_or(segment);
-            let gates_in_process = segment.contains("ensure_profile_from_parts");
-            // The families that have crossed the network door dispatch through their
-            // tools module HANDING IT THE PARTS — `tools::<family>::<name>(self,
-            // &parts, ...)`. A bare `tools::` match is satisfied by the input TYPE
-            // alone (`Parameters<tools::query::QueryInput>` names the family in the
-            // signature), which the bite probe exploited: a method with neither gate
-            // nor dispatch passed the old arm. The `(self, &parts` call shape is the
-            // discriminator — parts exist on the dispatch path to be forwarded.
-            //
-            // This is a source-scraping TRIPWIRE, not a control: the two substrings
-            // match independently, so a future method whose body hands `&parts` to a
-            // local helper (not a door dispatch) satisfies the arm while running
-            // unauthenticated at Level 2 (transport Level 1 still runs at the edge).
-            // Named so the next widening tightens the discriminator instead of
-            // compounding the heuristic.
-            let network_door = segment.contains("tools::") && segment.contains("(self, &parts");
-            if gates_in_process || !network_door {
-                let fn_name = segment
+            .expect("end of the tool-router impl not found");
+        let methods: Vec<(String, String)> = code[impl_start..impl_start + impl_end]
+            .split("#[tool(")
+            .skip(1)
+            .map(|segment| {
+                let segment = segment.split("\n    }\n").next().unwrap_or(segment);
+                let name = segment
                     .split("async fn ")
                     .nth(1)
                     .and_then(|s| s.split('(').next())
                     .unwrap_or("<unknown>")
-                    .trim();
-                missing.push(if gates_in_process {
-                    format!(
-                        "{fn_name} (calls `ensure_profile_from_parts` — an in-process gate \
-                         beside the API's; the door is the only gate)"
-                    )
-                } else {
-                    format!(
-                        "{fn_name} (no network-door dispatch — a `tools::<family>::` call \
-                         handing it `&parts`)"
-                    )
-                });
+                    .trim()
+                    .to_string();
+                (name, segment.to_string())
+            })
+            .collect();
+        assert!(
+            methods.len() >= 20,
+            "found only {} #[tool] methods — the split has probably broken, leaving the gate \
+             checking nothing",
+            methods.len()
+        );
+        methods
+    }
+
+    /// **Every `#[tool]` relays — or sits, by name, on the pure-compute allowlist.**
+    ///
+    /// The network door's teardown gate (ruling (a), 2026-10-02; it replaced the
+    /// `(self, &parts` shape heuristic beat 5 left). A `#[tool]` method passes only if:
+    ///
+    /// 1. its body dispatches `tools::<module>::<fn>(self, &parts, …)` — the parts exist on
+    ///    the dispatch path to be forwarded; and
+    /// 2. from that function, following calls through the tools modules, some reachable
+    ///    body SENDS a relay ([`source::sends_relay`]): a `relay_client(…)` that reaches an
+    ///    `.await`, directly or through a `let` binding. Building a client is not forwarding.
+    ///
+    /// — unless it is on [`PURE_COMPUTE_TOOLS`], and then it must be pure: nothing it reaches
+    /// names `relay_client`, `api_state` or `temper_services`.
+    ///
+    /// "Actually forwards" is detected per TOOL, not per path: a tool whose requirement arm
+    /// refuses pre-wire (`get requires \`id\``) still relays on its other arms, and the
+    /// parity suites pin the pre-wire arms byte-exact. What this rules out is a tool with no
+    /// forwarding path at all. Tripwire limits, named: reachability follows calls by name
+    /// (a name defined in several modules is followed into each, an over-approximation),
+    /// and a statement is split on `;`.
+    #[test]
+    fn every_tool_method_relays_or_is_allowlisted_pure() {
+        let modules = source::tool_modules();
+        let mut offenders: Vec<String> = Vec::new();
+
+        for (method, body) in tool_methods() {
+            let dispatch = body.split("tools::").skip(1).find_map(|after| {
+                let (module, rest) = after.split_once("::")?;
+                let (function, args) = rest.split_once('(')?;
+                let args = args.trim_start();
+                (args.starts_with("self,") && args[5..].trim_start().starts_with("&parts"))
+                    .then(|| (module.to_string(), function.trim().to_string()))
+            });
+            let Some((module, function)) = dispatch else {
+                offenders.push(format!(
+                    "{method} (no network-door dispatch — a `tools::<module>::<fn>(self, \
+                     &parts, …)` call)"
+                ));
+                continue;
+            };
+            if !modules
+                .get(&module)
+                .is_some_and(|fns| fns.contains_key(&function))
+            {
+                offenders.push(format!(
+                    "{method} (dispatches to `tools::{module}::{function}`, which the gate \
+                     cannot find in src/tools/{module}.rs)"
+                ));
+                continue;
+            }
+            let reached = source::reachable(&modules, &module, &function);
+
+            if PURE_COMPUTE_TOOLS.contains(&method.as_str()) {
+                for (m, f, b) in &reached {
+                    for forbidden in ["relay_client", "api_state", "temper_services"] {
+                        if b.contains(forbidden) {
+                            offenders.push(format!(
+                                "{method} (on the pure-compute allowlist, but `{m}::{f}` \
+                                 names `{forbidden}` — an allowlisted tool must not bind \
+                                 to anything)"
+                            ));
+                        }
+                    }
+                }
+            } else if !reached.iter().any(|(_, _, b)| source::sends_relay(b)) {
+                offenders.push(format!(
+                    "{method} (`tools::{module}::{function}` never sends a relay — no \
+                     `relay_client(…)` reaching an `.await` among the {} function(s) it \
+                     reaches; relay it, or put it on PURE_COMPUTE_TOOLS by a recorded \
+                     decision)",
+                    reached.len()
+                ));
             }
         }
 
         assert!(
-            missing.is_empty(),
-            "these #[tool] methods do not cross the network door cleanly — every tool must \
-             dispatch through its tools module with the request's parts (its gate runs at \
-             the API) and must not gate in-process as well:\n  {}",
-            missing.join("\n  ")
+            offenders.is_empty(),
+            "these #[tool] methods do not cross the network door — every tool must relay \
+             through `relay_client` (its gate runs at the API), or sit on the named \
+             pure-compute allowlist:\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
+    /// The gate's own detectors, each against the shape it must accept and the shape it
+    /// must refuse — so a refactor of the source reader cannot quietly turn the gate into
+    /// one that passes everything.
+    #[test]
+    fn the_relay_send_detector_tells_a_send_from_a_build() {
+        let fluent = "{ let x = svc\n .relay_client(parts)?\n .contexts()\n .shape(id, None)\n \
+                      .await\n .across_auth(f)?; Ok(x) }";
+        let bound = "{ let client = svc.relay_client(parts)?; let r = client.blobs().read(id) \
+                     .await; r }";
+        let built_only = "{ let client = svc.relay_client(parts)?; Ok(done()) }";
+        let built_unawaited = "{ let client = svc.relay_client(parts)?; let f = \
+                               client.blobs().read(id); Ok(f) }";
+        let awaited_elsewhere = "{ let _c = svc.relay_client(parts)?; other().await; Ok(()) }";
+        assert!(source::sends_relay(fluent), "the fluent chain is a send");
+        assert!(
+            source::sends_relay(bound),
+            "a bound client awaited later is a send"
+        );
+        assert!(
+            !source::sends_relay(built_only),
+            "a client built and dropped is no send"
+        );
+        assert!(
+            !source::sends_relay(built_unawaited),
+            "a request built and never awaited is no send"
+        );
+        assert!(
+            !source::sends_relay(awaited_elsewhere),
+            "an unrelated `.await` beside a built client is no send"
+        );
+
+        let code = source::code_only(
+            "// relay_client(parts).await\nfn a() { let s = \"relay_client(x).await }\"; \
+             let c = '{'; }\n#[cfg(test)]\nmod tests { fn b() { relay_client(p).await } }",
+        );
+        let code = source::without_tests(&code);
+        assert!(
+            !code.contains("relay_client"),
+            "comments, strings and tests are not code: {code}"
+        );
+        let fns = source::fn_bodies(&code);
+        assert_eq!(
+            fns.len(),
+            1,
+            "one fn with a body, braces in literals ignored: {fns:?}"
+        );
+        assert_eq!(fns[0].0, "a");
+    }
+
+    /// **`teardown-completes`, witnessed:** no tool module reads the database or calls a
+    /// service directly. Fails if any module under `src/tools/` names `temper_services`
+    /// or `api_state.pool` in its code (comments and test modules excluded — history and
+    /// fixtures are not execution paths). After teardown `temper_services` remains in this
+    /// crate only at the JWT edge (`middleware.rs`), the router/transport (`router.rs`),
+    /// config (`config.rs`) and boot (`AppState`, here).
+    #[test]
+    fn no_tool_module_binds_to_the_database_or_a_service() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tools");
+        let mut offenders = Vec::new();
+        let mut read = 0;
+        for entry in std::fs::read_dir(&dir).expect("read src/tools") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            read += 1;
+            let code = source::without_tests(&source::code_only(
+                &std::fs::read_to_string(&path).expect("read tools module"),
+            ));
+            for forbidden in ["temper_services", "api_state.pool"] {
+                if code.contains(forbidden) {
+                    offenders.push(format!(
+                        "{} names `{forbidden}`",
+                        path.file_name().unwrap().to_string_lossy()
+                    ));
+                }
+            }
+        }
+        assert!(
+            read >= 10,
+            "read only {read} tools modules — the walk has broken"
+        );
+        assert!(
+            offenders.is_empty(),
+            "a tool module binds past the network door — every tool relays to the API, \
+             which owns the database and the services:\n  {}",
+            offenders.join("\n  ")
         );
     }
 
