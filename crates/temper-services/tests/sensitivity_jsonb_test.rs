@@ -3,13 +3,21 @@
 //! (build order 3a, PR C2).
 //!
 //! Under goal *"Personal data that lands in the corpus by accident is found"*, sensitivity-sweep spec
-//! D2, D3 and rulings Q26, Q34 and Q37-Q39. Spec witnesses 9, 25 (the `blocked:cut-2` half; its
-//! `remediable` half needs erasure cut 2, Q39) and 26 (the erasure half; the block-scrub half needs
-//! erasure 2e). Also the path walk's guards: user-map keys are written `?`, a jsonb row is scanned
-//! whole, and the interim remediability table is held equal to the live erasure survey.
+//! D2, D3 and rulings Q26, Q34 and Q37-Q43. Spec witnesses:
+//!   * **9** — closure derives from emptied content and from a mutable place's later observation, and
+//!     not from a hash disappearing. The principal-erasure clause is the act's footprint planted by
+//!     hand (content emptied, hash kept), not the act. Its resource-erasure clause is witness 26's
+//!     sentinels: `erased_at` alone closes nothing (D2 as amended).
+//!   * **25** — the `blocked:cut-2` half, gated on the erasure trail scope (Q41). Its `remediable`
+//!     half needs erasure cut 2 (Q39).
+//!   * **26** — the erasure half, through the real write path and `resource_erasure_execute`. The
+//!     block-scrub half waits on erasure 2e.
 //!
-//! Ledger rows are planted with raw inserts: these witnesses are about what the scan reads. Witness
-//! 26 runs the real erasure act over a resource built through the real write path.
+//! Also the walk's guards: user-map keys are written `?`, including a resource's `anchored-at`; a row
+//! is scanned whole, or passed whole when oversize (Q40); jsonb units are never memoised (Q43); an
+//! event type off the tally's shape cannot stop the ledger; payment_card v2 ignores hex runs (Q42);
+//! `event_resource` agrees with the erasure trail scope; the interim remediability table is the live
+//! erasure survey. Ledger rows are planted with raw inserts: these are about what the scan reads.
 
 use sqlx::{PgPool, Row};
 use temper_core::types::ids::{EntityId, ProfileId};
@@ -272,15 +280,17 @@ async fn a_jsonb_row_is_scanned_whole_under_a_one_row_budget(pool: PgPool) {
     assert_eq!(findings_at(&pool, e).await.len(), 2);
 }
 
-// ── A payload's ids are scanned, and not remembered ───────────────────────────────────────────
+// ── Q43: a payload's ids and hashes are scanned, and never remembered ─────────────────────────
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
-async fn a_jsonb_unit_no_prefilter_nominates_leaves_no_memo_row(pool: PgPool) {
-    let prose = "plain words with nothing in them";
+async fn a_jsonb_unit_is_never_memoised(pool: PgPool) {
+    // Every detector finds nothing here, and payment_card's `[0-9]{4}` prefilter nominates both.
+    let hash = "4c1f9e0a2b7d3e5f8a6c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a";
+    let id = "01a10292-201d-7645-86c8-5d5fd98a09a2";
     event(
         &pool,
         "resource_created",
-        serde_json::json!({ "title": prose }),
+        serde_json::json!({ "resource_id": id, "blocks": [{ "chunks": [{ "content_hash": hash }] }] }),
         serde_json::json!({}),
     )
     .await;
@@ -288,16 +298,287 @@ async fn a_jsonb_unit_no_prefilter_nominates_leaves_no_memo_row(pool: PgPool) {
     tick(&pool, "kb_events.payload").await;
 
     let rows: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sensitivity.memo WHERE content_hash = sensitivity.keyed_hash($1, $2)",
+        "SELECT count(*) FROM sensitivity.memo \
+          WHERE content_hash IN (sensitivity.keyed_hash($1, $2), sensitivity.keyed_hash($1, $3))",
     )
     .bind(SALT)
-    .bind(prose)
+    .bind(hash)
+    .bind(id)
     .fetch_one(&pool)
     .await
     .unwrap();
+    assert_eq!(rows, 0, "a jsonb unit leaves no memo row (Q43)");
+}
+
+// ── Q40: a row is bounded by its size, and passed whole when it is too big ──────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_oversize_row_is_passed_whole_and_named_and_the_next_row_is_scanned(pool: PgPool) {
+    let mut body = serde_json::Map::new();
+    for i in 0..5_000 {
+        body.insert(format!("k{i}"), serde_json::json!(format!("v{i}")));
+    }
+    body.insert("x".into(), serde_json::json!(format!("ssn {SSN_A}")));
+    let big = event(
+        &pool,
+        "webhook_received",
+        serde_json::Value::Object(body),
+        serde_json::json!({}),
+    )
+    .await;
+    let small = event(
+        &pool,
+        "citation_audited",
+        serde_json::json!({ "reason": format!("ssn {SSN_B}") }),
+        serde_json::json!({}),
+    )
+    .await;
+    tick(&pool, "kb_events.payload").await;
+
+    assert!(
+        findings_at(&pool, big).await.is_empty(),
+        "a row of 10,002 units is not scanned in part"
+    );
+    let named: Option<String> = sqlx::query_scalar(
+        "SELECT reason FROM sensitivity.unscanned_places WHERE surface = 'kb_events.payload' AND target_id = $1",
+    )
+    .bind(big)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
     assert_eq!(
-        rows, 0,
-        "a jsonb unit no detector's prefilter matched is not memoised"
+        named.as_deref(),
+        Some("oversize_row"),
+        "and never reads as clean"
+    );
+    assert_eq!(
+        findings_at(&pool, small).await.len(),
+        1,
+        "the sweep moves past it"
+    );
+}
+
+// ── A registered name off the tally's shape cannot stop the ledger ──────────────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn an_event_type_off_the_tally_shape_is_counted_not_fatal(pool: PgPool) {
+    sqlx::query(
+        "INSERT INTO kb_event_types (name, payload_schema, schema_version, category) \
+         VALUES ('Oauth2.Linked', NULL, 1, 'domain')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    event(
+        &pool,
+        "Oauth2.Linked",
+        serde_json::json!({ "note": "x" }),
+        serde_json::json!({}),
+    )
+    .await;
+    let later = event(
+        &pool,
+        "citation_audited",
+        serde_json::json!({ "reason": format!("ssn {SSN_A}") }),
+        serde_json::json!({}),
+    )
+    .await;
+
+    let t = tick(&pool, "kb_events.payload").await;
+
+    assert!(!t.failed, "{t:?}");
+    assert_eq!(findings_at(&pool, later).await.len(), 1);
+    let tally: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT units_by_event_type -> 'unrecognised_kind' FROM sensitivity.runs \
+          WHERE surface = 'kb_events.payload' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tally, Some(serde_json::json!(1)));
+}
+
+// ── Q42: a card is never read out of a hash ───────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_hex_hash_v1_read_as_a_card_is_not_one(pool: PgPool) {
+    let hash: String = sqlx::query_scalar(
+        "SELECT x FROM (SELECT encode(sha256(g::text::bytea), 'hex') x FROM generate_series(1, 5000) g) h \
+          WHERE EXISTS (SELECT 1 FROM sensitivity.detector_matches('payment_card', 1, x)) LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("v1 matched some hash");
+    let e = event(
+        &pool,
+        "resource_created",
+        serde_json::json!({ "blocks": [{ "chunks": [{ "content_hash": hash }] }], "title": "card 4111 1111 1111 1111" }),
+        serde_json::json!({}),
+    )
+    .await;
+
+    tick(&pool, "kb_events.payload").await;
+
+    assert_eq!(
+        findings_at(&pool, e).await,
+        vec![("/title".to_string(), "payment_card".to_string())],
+        "the card in prose is found; the hash is not a card"
+    );
+}
+
+// ── Q26: only an edge's `anchored-at` is schema; a resource's is its author's document ─────────
+
+/// One raw property row; its event columns point at any ledger row.
+async fn property(
+    pool: &PgPool,
+    owner_table: &str,
+    owner: Uuid,
+    key: &str,
+    value: serde_json::Value,
+) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, \
+                                    asserted_by_event_id, last_event_id) \
+         SELECT $1, $2, $3, $4, e.id, e.id FROM (SELECT id FROM kb_events ORDER BY id LIMIT 1) e \
+         RETURNING id",
+    )
+    .bind(owner_table)
+    .bind(owner)
+    .bind(key)
+    .bind(value)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_resources_anchored_at_value_keeps_its_keys_hidden(pool: PgPool) {
+    let doc = serde_json::json!({ "jane_doe": { "spouse": format!("ssn {SSN_A}") } });
+    let on_resource = property(
+        &pool,
+        "kb_resources",
+        Uuid::now_v7(),
+        "anchored-at",
+        doc.clone(),
+    )
+    .await;
+    let on_edge = property(&pool, "kb_edges", Uuid::now_v7(), "anchored-at", doc).await;
+
+    tick(&pool, "kb_properties.property_value").await;
+
+    assert_eq!(
+        findings_at(&pool, on_resource).await,
+        vec![("/?/?".to_string(), "us_ssn_delimited".to_string())],
+        "open_meta lets anyone write `anchored-at` on a resource; its keys are theirs"
+    );
+    assert_eq!(
+        findings_at(&pool, on_edge).await,
+        vec![(
+            "/jane_doe/spouse".to_string(),
+            "us_ssn_delimited".to_string()
+        )],
+        "an edge's `anchored-at` is the validated shape, written as schema"
+    );
+}
+
+// ── Q41: the resource an event is attributed to is the one whose erasure trail holds it ─────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn event_resource_agrees_with_the_erasure_trail_scope(pool: PgPool) {
+    let r = bare_resource(&pool, "one").await;
+    let r2 = bare_resource(&pool, "two").await;
+    let rev = block(&pool, r, "prose").await;
+    let b: Uuid = sqlx::query_scalar("SELECT block_id FROM kb_block_revisions WHERE id = $1")
+        .bind(rev)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let edge: Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, \
+                               home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
+         SELECT 'kb_resources', $1, 'kb_resources', $2, 'leads_to', 'kb_contexts', gen_random_uuid(), e.id, e.id \
+           FROM (SELECT id FROM kb_events ORDER BY id LIMIT 1) e RETURNING id",
+    )
+    .bind(r)
+    .bind(r2)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let planted = [
+        ("resource_created", serde_json::json!({ "resource_id": r })),
+        (
+            "property_set",
+            serde_json::json!({ "owner": { "table": "kb_resources", "id": r } }),
+        ),
+        ("citation_audited", serde_json::json!({ "block_id": b })),
+        (
+            "relationship_asserted",
+            serde_json::json!({ "edge_id": edge }),
+        ),
+        (
+            "property_set",
+            serde_json::json!({ "owner": { "table": "kb_edges", "id": edge } }),
+        ),
+        (
+            "property_set",
+            serde_json::json!({ "owner": { "table": "kb_content_blocks", "id": b } }),
+        ),
+        ("context_renamed", serde_json::json!({ "to_name": "x" })),
+    ];
+    for (kind, payload) in planted {
+        let e = event(&pool, kind, payload.clone(), serde_json::json!({})).await;
+        let (attributed, in_trail, in_own_trail): (Option<Uuid>, bool, bool) = sqlx::query_as(
+            "SELECT s.resource_id, \
+                    EXISTS (SELECT 1 FROM unnest($2::uuid[]) r, _resource_erasure_trail_scope(r) t WHERE t.event_id = $1), \
+                    EXISTS (SELECT 1 FROM _resource_erasure_trail_scope(s.resource_id) t WHERE t.event_id = $1) \
+               FROM sensitivity.src_kb_events__payload s WHERE s.target_id = $1",
+        )
+        .bind(e)
+        .bind(vec![r, r2])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            attributed.is_some(),
+            in_trail,
+            "{kind} {payload}: attributed iff in some trail"
+        );
+        assert_eq!(
+            attributed.is_some(),
+            in_own_trail,
+            "{kind} {payload}: in the attributed resource's trail"
+        );
+    }
+}
+
+// ── The registry holds what the scan needs ──────────────────────────────────────────────────
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn every_enabled_surface_has_a_source(pool: PgPool) {
+    let missing: Vec<String> = sqlx::query_scalar(
+        "SELECT surface FROM sensitivity.surfaces \
+          WHERE enabled AND to_regclass(format('sensitivity.%I', 'src_' || replace(surface, '.', '__'))) IS NULL",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        missing.is_empty(),
+        "an enabled surface with no source idles silently: {missing:?}"
+    );
+}
+
+#[sqlx::test(migrator = "temper_services::MIGRATOR")]
+async fn a_jsonb_surface_cannot_take_a_mutable_cursor(pool: PgPool) {
+    let err = sqlx::query(
+        "UPDATE sensitivity.surfaces SET cursor_kind = 'mutable_timestamp' WHERE surface = 'kb_profiles.preferences'",
+    )
+    .execute(&pool)
+    .await
+    .expect_err("the jsonb scan keeps no per-place observation");
+    assert!(
+        err.to_string().contains("surfaces_jsonb_is_append_only"),
+        "{err}"
     );
 }
 
@@ -305,10 +586,11 @@ async fn a_jsonb_unit_no_prefilter_nominates_leaves_no_memo_row(pool: PgPool) {
 
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
+    let r = Uuid::now_v7().to_string();
     let created = event(
         &pool,
         "resource_created",
-        serde_json::json!({ "title": format!("Payroll for {SSN_A}"), "doc_type": format!("t {SSN_B}") }),
+        serde_json::json!({ "resource_id": r, "title": format!("Payroll for {SSN_A}"), "doc_type": format!("t {SSN_B}") }),
         serde_json::json!({ "reasoning": format!("saw {SSN_A}"), "persona": format!("p {SSN_B}") }),
     )
     .await;
@@ -322,7 +604,14 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
     let set = event(
         &pool,
         "property_set",
-        serde_json::json!({ "property_key": "notes", "value": { "k": SSN_B } }),
+        serde_json::json!({ "owner": { "table": "kb_resources", "id": r }, "property_key": "notes", "value": { "k": SSN_B } }),
+        serde_json::json!({}),
+    )
+    .await;
+    let on_block = event(
+        &pool,
+        "property_set",
+        serde_json::json!({ "owner": { "table": "kb_content_blocks", "id": Uuid::now_v7() }, "property_key": "notes", "value": SSN_A }),
         serde_json::json!({}),
     )
     .await;
@@ -344,13 +633,18 @@ async fn remediability_is_read_per_event_type_and_path(pool: PgPool) {
     );
     assert_eq!(
         remediability_at(&pool, renamed).await,
-        vec![("/to_name".to_string(), never)],
+        vec![("/to_name".to_string(), never.clone())],
         "a context's name is permanently outside the redaction (D3)"
     );
     assert_eq!(
         remediability_at(&pool, set).await,
         vec![("/value/?".to_string(), blocked)],
         "a listed path covers its whole subtree"
+    );
+    assert_eq!(
+        remediability_at(&pool, on_block).await,
+        vec![("/value".to_string(), never)],
+        "a listed path on an event in no resource's trail has no remedy either (Q41)"
     );
 }
 
@@ -546,9 +840,29 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
     .await
     .expect("create through the write path");
     let key = format!("ssn {SSN_B}");
-    writes::set_property(&pool, resource, &key, &serde_json::json!("v"), emitter)
-        .await
-        .unwrap();
+    writes::set_property(
+        &pool,
+        resource,
+        &key,
+        &serde_json::json!(format!("ssn {SSN_A}")),
+        emitter,
+    )
+    .await
+    .unwrap();
+    let block: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_content_blocks WHERE resource_id = $1 LIMIT 1")
+            .bind(resource.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let on_block = property(
+        &pool,
+        "kb_content_blocks",
+        block,
+        "block_note",
+        serde_json::json!(format!("ssn {SSN_A}")),
+    )
+    .await;
     let property: Uuid = sqlx::query_scalar(
         "SELECT id FROM kb_properties WHERE owner_id = $1 AND property_key = $2",
     )
@@ -560,6 +874,7 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
     for surface in [
         "kb_resources.title",
         "kb_properties.property_key",
+        "kb_properties.property_value",
         "kb_events.payload",
     ] {
         assert!(!tick(&pool, surface).await.failed, "{surface}");
@@ -588,8 +903,13 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
     );
     assert_eq!(
         closed_by(&pool, property).await,
-        vec![Some("sentinel".to_string())],
-        "the property key is a sentinel"
+        vec![Some("sentinel".to_string()), Some("sentinel".to_string())],
+        "the property's key and value are sentinels"
+    );
+    assert_eq!(
+        closed_by(&pool, on_block).await,
+        vec![None],
+        "a block-owned property the act never reaches stays open, though its resource is erased"
     );
     let ledger: Vec<Option<String>> = sqlx::query_scalar(
         "SELECT c.closed_by FROM sensitivity.findings f \
@@ -603,6 +923,6 @@ async fn a_resource_erasure_closes_its_title_and_property_findings_and_not_its_l
     assert_eq!(
         ledger,
         vec![None],
-        "cut 1 leaves the title in the trail, so its finding stays open (Q38)"
+        "cut 1 leaves the title in the trail, so its finding stays open (Q38, a guard on the view)"
     );
 }

@@ -3,14 +3,24 @@
 -- plans/2026-10-03-sensitivity-sweep-c2-payload-map.md and plans/2026-10-01-sensitivity-sweep-3a-core.md, PR C2.
 
 -- Units each event type contributed to a run, so a type that dominates the budget is visible (Q37).
--- Event type names are registered vocabulary, never content.
+-- Event type names are registered vocabulary, never content. kb_event_types.name has no shape of its
+-- own, so scan_lane counts a name off this one as `unrecognised_kind` rather than fail the tick.
 CREATE FUNCTION sensitivity.is_kind_tally(p jsonb) RETURNS boolean
 LANGUAGE sql IMMUTABLE STRICT AS $$
     SELECT jsonb_typeof(p) = 'object'
        AND NOT EXISTS (SELECT 1 FROM jsonb_each(p) e
-                        WHERE e.key !~ '^[a-z_]{1,63}$' OR jsonb_typeof(e.value) <> 'number'
+                        WHERE e.key !~ '^[a-z0-9_]{1,63}$' OR jsonb_typeof(e.value) <> 'number'
                            OR (e.value #>> '{}')::numeric NOT BETWEEN 0 AND 100000);
 $$;
+
+-- The jsonb scan keeps no per-place observation: a jsonb surface on a mutable cursor would need one,
+-- per path, and is refused until it is built.
+ALTER TABLE sensitivity.surfaces
+    ADD CONSTRAINT surfaces_jsonb_is_append_only
+        CHECK (shape <> 'jsonb' OR cursor_kind IS DISTINCT FROM 'mutable_timestamp');
+
+ALTER TABLE sensitivity.unscanned_places DROP CONSTRAINT unscanned_places_reason_check,
+    ADD CONSTRAINT unscanned_places_reason_check CHECK (reason IN ('oversize', 'oversize_row'));
 
 ALTER TABLE sensitivity.runs
     ADD COLUMN units_by_event_type jsonb NOT NULL DEFAULT '{}'
@@ -18,7 +28,10 @@ ALTER TABLE sensitivity.runs
 
 -- Where a document's keys stop being schema and become a user's (payload map §1). Below a root,
 -- every key is written `?`; '/' makes the whole document one. resource_reblocked's /dispositions
--- needs no root: its keys are block uuids, which Q26's shape already writes `?`.
+-- needs no root: its keys are block uuids, which Q26's shape already writes `?`. For a property
+-- value, p_kind is the key of an EDGE-owned row only: `anchored-at` has a validated shape there
+-- (db_backend validate_keyed_edge_write), while any open_meta key, `anchored-at` included, lands on
+-- a resource as a user's document.
 CREATE FUNCTION sensitivity.user_map_roots(p_surface text, p_kind text) RETURNS text[]
 LANGUAGE sql IMMUTABLE AS $$
     SELECT CASE
@@ -69,47 +82,62 @@ $$;
 
 -- The jsonb sources: (target_id, order_at, doc, resource_id, roots, kind). kind is the event type,
 -- tallied per run; a property key is authored text, so property_value rows carry none.
--- webhook_received holds a provider's document, whose own `resource_id` key is not ours.
-CREATE FUNCTION sensitivity.event_resource(p_type text, p_payload jsonb) RETURNS uuid
+
+CREATE FUNCTION sensitivity.as_uuid(p text) RETURNS uuid
 LANGUAGE sql IMMUTABLE AS $$
-    SELECT CASE
-        WHEN p_type = 'webhook_received' THEN NULL
-        WHEN p_payload ->> 'resource_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-            THEN (p_payload ->> 'resource_id')::uuid
-        WHEN p_payload #>> '{owner,table}' = 'kb_resources'
-         AND p_payload #>> '{owner,id}' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-            THEN (p_payload #>> '{owner,id}')::uuid
+    SELECT CASE WHEN p ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN p::uuid END;
+$$;
+
+-- The resource whose erasure trail holds this event: the five arms of _resource_erasure_trail_scope
+-- (20260929040730), read from the event's side, held equal to it by a test (Q41). An edge event with
+-- a resource at both ends is in both trails; it is attributed to the source, as C1's edge view is.
+-- webhook_received holds a provider's document, whose own `resource_id` key is not ours.
+CREATE FUNCTION sensitivity.event_resource(p_type text, p_category text, p_payload jsonb) RETURNS uuid
+LANGUAGE sql STABLE AS $$
+    SELECT CASE WHEN p_category <> 'domain' OR p_type = 'webhook_received' THEN NULL ELSE coalesce(
+        sensitivity.as_uuid(p_payload ->> 'resource_id'),
+        CASE WHEN p_payload #>> '{owner,table}' = 'kb_resources'
+             THEN sensitivity.as_uuid(p_payload #>> '{owner,id}') END,
+        (SELECT b.resource_id FROM kb_content_blocks b
+          WHERE b.id = sensitivity.as_uuid(p_payload ->> 'block_id')),
+        (SELECT CASE WHEN e.source_table = 'kb_resources' THEN e.source_id
+                     WHEN e.target_table = 'kb_resources' THEN e.target_id END
+           FROM kb_edges e
+          WHERE e.id = coalesce(sensitivity.as_uuid(p_payload ->> 'edge_id'),
+                                CASE WHEN p_payload #>> '{owner,table}' = 'kb_edges'
+                                     THEN sensitivity.as_uuid(p_payload #>> '{owner,id}') END)))
     END;
 $$;
 
 CREATE VIEW sensitivity.src_kb_events__payload AS
     SELECT e.id AS target_id, NULL::timestamptz AS order_at, e.payload AS doc,
-           sensitivity.event_resource(t.name, e.payload) AS resource_id,
+           sensitivity.event_resource(t.name, t.category, e.payload) AS resource_id,
            sensitivity.user_map_roots('kb_events.payload', t.name) AS roots, t.name AS kind
       FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id;
 
 CREATE VIEW sensitivity.src_kb_events__metadata AS
     SELECT e.id AS target_id, NULL::timestamptz AS order_at, e.metadata AS doc,
-           sensitivity.event_resource(t.name, e.payload) AS resource_id,
+           sensitivity.event_resource(t.name, t.category, e.payload) AS resource_id,
            sensitivity.user_map_roots('kb_events.metadata', t.name) AS roots, t.name AS kind
       FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id;
 
 CREATE VIEW sensitivity.src_kb_properties__property_value AS
     SELECT p.id AS target_id, NULL::timestamptz AS order_at, p.property_value AS doc,
            CASE p.owner_table WHEN 'kb_resources' THEN p.owner_id ELSE b.resource_id END AS resource_id,
-           sensitivity.user_map_roots('kb_properties.property_value', p.property_key) AS roots,
+           sensitivity.user_map_roots('kb_properties.property_value',
+                                    CASE WHEN p.owner_table = 'kb_edges' THEN p.property_key END) AS roots,
            NULL::text AS kind
       FROM kb_properties p
       LEFT JOIN kb_content_blocks b ON p.owner_table = 'kb_content_blocks' AND b.id = p.owner_id;
 
--- C1's body (20261002200000), with the place's path, and a memo that skips jsonb units no prefilter
--- nominated: a payload's ids and numbers are each unique, and a memo row per id and detector would
--- outgrow the ledger while saving no regex run.
+-- C1's body (20261002200000), with the place's path, and the memo only where p_memo (Q43): jsonb rows
+-- are append-only and read once per detector version, and their ids and hashes are each unique, so
+-- a memo row per unit would grow with the ledger and save almost nothing.
 DROP FUNCTION sensitivity.scan_unit(text, uuid, uuid, text, text, text, int, bytea);
 
 CREATE FUNCTION sensitivity.scan_unit(
     p_surface text, p_target uuid, p_path text, p_resource uuid, p_unit text, p_hash text,
-    p_detector text, p_version int, p_salt bytea, p_memo_unnominated boolean,
+    p_detector text, p_version int, p_salt bytea, p_memo boolean,
     OUT p_memo_hit boolean, OUT p_new_severity smallint
 ) LANGUAGE plpgsql AS $$
 DECLARE
@@ -119,7 +147,7 @@ DECLARE
     v_prints bytea[];
     v_id     uuid;
 BEGIN
-    p_memo_hit := EXISTS (SELECT 1 FROM sensitivity.memo m WHERE m.content_hash = p_hash
+    p_memo_hit := p_memo AND EXISTS (SELECT 1 FROM sensitivity.memo m WHERE m.content_hash = p_hash
                              AND m.detector_id = p_detector AND m.detector_version = p_version);
     IF p_memo_hit THEN
         RETURN;
@@ -133,7 +161,7 @@ BEGIN
       INTO v_count, v_prints
       FROM sensitivity.detector_matches(p_detector, p_version, p_unit) m;
     IF v_count = 0 THEN
-        IF p_memo_unnominated OR p_unit ~ v_dv.prefilter THEN
+        IF p_memo THEN
             INSERT INTO sensitivity.memo (content_hash, detector_id, detector_version)
             VALUES (p_hash, p_detector, p_version) ON CONFLICT DO NOTHING;
         END IF;
@@ -171,7 +199,10 @@ $$;
 
 -- C1's body (20261002200000), now reading jsonb rows as well. A jsonb row is walked whole inside
 -- the row loop: the deadline is checked between rows only, so no LIMIT or clock can leave a row
--- half-scanned beneath an advanced watermark.
+-- half-scanned beneath an advanced watermark. What bounds a row instead is its size (Q40): a row of
+-- more than 10,000 units, or whose text exceeds 4 MiB, is passed whole and named in unscanned_places
+-- as `oversize_row`, so one document can neither outlast the tick nor read as clean. The byte bound
+-- keeps the count itself cheap; 10,000 units is about 1.5 s of detector work at measured rates.
 CREATE OR REPLACE FUNCTION sensitivity.scan_lane(
     p_run uuid, p_surface sensitivity.surfaces, p_lane text, p_salt bytea,
     p_bound_at timestamptz, p_bound_id uuid, p_budget int, p_deadline timestamptz,
@@ -191,6 +222,7 @@ DECLARE
     v_prior text;
     v_hit boolean; v_sev smallint;
     v_units int;
+    v_kind text;
     v_scanned int := 0; v_hits int := 0; v_found int := 0; v_oversize int := 0;
     v_bysev jsonb := '{}';
     v_bykind jsonb := '{}';
@@ -244,6 +276,13 @@ BEGIN
              WHERE sensitivity.place_observations.content_hash <> EXCLUDED.content_hash;
         END IF;
         v_units := 0;
+        IF v_jsonb AND (octet_length(r.doc::text) > 4194304
+                        OR (SELECT count(*) FROM (SELECT 1 FROM sensitivity.jsonb_units(r.doc, r.roots) LIMIT 10001) n) > 10000) THEN
+            v_oversize := v_oversize + 1;
+            INSERT INTO sensitivity.unscanned_places (surface, target_id, reason)
+            VALUES (p_surface.surface, r.target_id, 'oversize_row') ON CONFLICT DO NOTHING;
+            CONTINUE;
+        END IF;
         FOR v_u IN SELECT NULL::text AS path, r.unit AS unit WHERE NOT v_jsonb
                  UNION ALL
                  SELECT j.path, j.unit FROM sensitivity.jsonb_units(r.doc, r.roots) j WHERE v_jsonb LOOP
@@ -274,8 +313,9 @@ BEGIN
             END LOOP;
         END LOOP;
         IF r.kind IS NOT NULL AND v_units > 0 THEN
-            v_bykind := jsonb_set(v_bykind, ARRAY[r.kind],
-                                  to_jsonb(least(coalesce((v_bykind ->> r.kind)::int, 0) + v_units, 100000)));
+            v_kind := CASE WHEN r.kind ~ '^[a-z0-9_]{1,63}$' THEN r.kind ELSE 'unrecognised_kind' END;
+            v_bykind := jsonb_set(v_bykind, ARRAY[v_kind],
+                                  to_jsonb(least(coalesce((v_bykind ->> v_kind)::int, 0) + v_units, 100000)));
         END IF;
     END LOOP;
 
@@ -440,6 +480,17 @@ BEGIN
 END;
 $$;
 
+-- Q42: payment_card v2. v1 passed Luhn on 0.43% of sha256 hex strings (431 of 100,000 measured),
+-- so every chunk content_hash in the ledger and every commit SHA in a webhook could raise a
+-- severity-4 finding. A run of digits with four hex characters beside it on either side is part of
+-- a hash, not a card; prose such as `card4111…` still matches, since `card` is not all hex. v1's
+-- findings close as superseded once v2's backfill passes their places (Q27, read in 3b).
+UPDATE sensitivity.detectors
+   SET version = version + 1,
+       pattern = '(?<![0-9])(?<![0-9A-Fa-f]{4})([0-9]{13,19}|[0-9]{4}( [0-9]{4}){3}|[0-9]{4}(-[0-9]{4}){3}|[0-9]{4} [0-9]{6} [0-9]{4,5}|[0-9]{4}-[0-9]{6}-[0-9]{4,5})(?![0-9])(?![0-9A-Fa-f]{4})',
+       note = 'contiguous, or in card groupings with one separator, behind Luhn; never inside a hex run'
+ WHERE id = 'payment_card';
+
 -- ── Remediability per (event_type, path) (D3, Witness 25) ────────────────────────────────────────
 -- The interim source until the payload half of scripts/resource-erasure-surface.txt exists (erasure
 -- D9): the arms of ledger_remainder in resource_erasure_survey_plan, verbatim, which a test holds
@@ -447,7 +498,8 @@ $$;
 --
 -- The switchover (Q39): erasure cut 2's migration replaces sensitivity.ledger_remediability, so a
 -- listed path reads `remediable`, and drops this table for the manifest's `redact` lines. Until
--- then a listed path reads `blocked:cut-2`, and everything else `unremediable`.
+-- then a listed path reads `blocked:cut-2`, and everything else `unremediable`. Either way a path
+-- counts only on an event inside some resource's erasure trail (Q41): the act redacts nothing else.
 CREATE TABLE sensitivity.ledger_redact_paths (
     event_type   text CHECK (event_type ~ '^[a-z_]{1,63}$'),
     erasure_path text NOT NULL CHECK (erasure_path ~ '^[a-z_.\[\]*]{1,200}$'),
@@ -486,10 +538,12 @@ INSERT INTO sensitivity.ledger_redact_paths (event_type, erasure_path) VALUES
     (NULL,                         'metadata.reasoning'),
     (NULL,                         'metadata.rationale');
 
--- A finding falls under a listed path by prefix: property_*'s /value is a whole subtree.
-CREATE FUNCTION sensitivity.ledger_remediability(p_surface text, p_event_type text, p_path text) RETURNS text
+-- A finding falls under a listed path by prefix: property_*'s /value is a whole subtree. p_resource
+-- is the resource whose trail holds the event (event_resource), NULL when no trail does.
+CREATE FUNCTION sensitivity.ledger_remediability(p_surface text, p_event_type text, p_path text, p_resource uuid)
+RETURNS text
 LANGUAGE sql STABLE AS $$
-    SELECT CASE WHEN EXISTS (
+    SELECT CASE WHEN p_resource IS NOT NULL AND EXISTS (
                SELECT 1 FROM sensitivity.ledger_redact_paths l
                 WHERE l.surface = p_surface
                   AND (l.event_type = p_event_type OR l.event_type IS NULL)
@@ -499,19 +553,20 @@ $$;
 
 CREATE VIEW sensitivity.ledger_finding_remediability AS
     SELECT f.id AS finding_id, t.name AS event_type,
-           sensitivity.ledger_remediability(f.surface, t.name, f.path) AS remediability
+           sensitivity.ledger_remediability(f.surface, t.name, f.path, f.resource_id) AS remediability
       FROM sensitivity.findings f
       JOIN kb_events e ON e.id = f.target_id
       JOIN kb_event_types t ON t.id = e.event_type_id
      WHERE f.surface IN ('kb_events.payload', 'kb_events.metadata');
 
 -- ── Closure derives (D2, Q34, Q38; Witnesses 9 and 26) ───────────────────────────────────────────
--- From what the place holds now: a missing row, emptied content, an erasure sentinel, or on a
--- mutable surface the sweep's own later observation. Never from a hash comparison against a source
--- table (Q34): kb_erased_content holds unkeyed hashes, and principal erasure empties the content it
--- records, which `content_empty` reads. A ledger place never closes here (Q38): cut 1 redacts no
--- payload, so only a disposition closes it until cut 2 adds its signal. A surface this function
--- does not know reads open, never closed.
+-- From what the place holds now, and nothing else: a missing row, emptied content, an erasure
+-- sentinel, or on a mutable surface the sweep's own later observation. Never from a hash comparison
+-- against a source table (Q34): kb_erased_content holds unkeyed hashes, and principal erasure empties
+-- the content it records, which `content_empty` reads. Never from `erased_at` alone: the act leaves
+-- some places untouched (block-owned properties, task 01a0fedb), and on every place it does reach a
+-- place signal already answers (D2 as amended). A ledger place never closes here (Q38): cut 1
+-- redacts no payload. A surface this function does not know reads open, never closed.
 CREATE FUNCTION sensitivity.place_closure(p_surface text, p_target uuid, p_hash text) RETURNS text
 LANGUAGE sql STABLE AS $$
     SELECT CASE
@@ -520,13 +575,13 @@ LANGUAGE sql STABLE AS $$
                                'kb_edges.label', 'kb_citation_audits.reason', 'kb_remote_sources.uri',
                                'kb_properties.property_value') THEN NULL
         WHEN x.present IS NULL THEN 'row_missing'
+        -- The resource erasure act's D4 sentinels (20260929040730, steps 9a, 9b, 9d).
         WHEN (p_surface = 'kb_resources.title'           AND x.unit = 'erased-' || p_target::text)
           OR (p_surface = 'kb_resources.origin_uri'      AND x.unit = 'erased:' || p_target::text)
           OR (p_surface = 'kb_properties.property_key'   AND x.unit ~ '^erased-key-[0-9]+$')
-          OR (p_surface = 'kb_properties.property_value' AND x.unit = '"erased"')
-          OR (p_surface = 'kb_remote_sources.uri'        AND x.unit ~ '^erased:[0-9a-f-]{36}:[0-9]+$')
-          OR (p_surface = 'kb_edges.label'               AND x.unit IS NULL) THEN 'sentinel'
-        WHEN coalesce(x.unit, '') IN ('', '{}') THEN 'content_empty'
+          OR (p_surface = 'kb_properties.property_value' AND x.unit = '"erased"') THEN 'sentinel'
+        WHEN coalesce(x.unit, '') = ''
+          OR (p_surface = 'kb_properties.property_value' AND x.unit IN ('{}', '[]', '""', 'null')) THEN 'content_empty'
         WHEN o.content_hash <> p_hash THEN 'changed'
     END
       FROM (SELECT 1) one
@@ -564,20 +619,15 @@ LANGUAGE sql STABLE AS $$
       LEFT JOIN sensitivity.place_observations o ON o.surface = p_surface AND o.target_id = p_target;
 $$;
 
--- A finding is closed when its place says so, or, off the ledger, when its resource is erased.
--- An open finding has no row here.
+-- A finding is closed when its place says so. An open finding has no row here.
 CREATE VIEW sensitivity.finding_closure AS
     SELECT c.finding_id, c.closed_by
-      FROM (SELECT f.id AS finding_id,
-                   coalesce(sensitivity.place_closure(f.surface, f.target_id, f.content_hash),
-                            CASE WHEN f.surface NOT IN ('kb_events.payload', 'kb_events.metadata')
-                                  AND r.erased_at IS NOT NULL THEN 'resource_erased' END) AS closed_by
-              FROM sensitivity.findings f
-              LEFT JOIN kb_resources r ON r.id = f.resource_id) c
+      FROM (SELECT f.id AS finding_id, sensitivity.place_closure(f.surface, f.target_id, f.content_hash) AS closed_by
+              FROM sensitivity.findings f) c
      WHERE c.closed_by IS NOT NULL;
 
 SELECT declare_migration(
     20261003150000,
     'additive',
-    'The sensitivity sweep over its jsonb surfaces (kb_events.payload and metadata, kb_properties.property_value): a path walker writing user-map keys as ?, readers for the three surfaces, scan_unit taking the place''s path (dropped and recreated with a new signature; only scan_lane calls it), and the claim and tick accepting jsonb surfaces. Adds runs.units_by_event_type, the interim ledger_redact_paths table with ledger_remediability and its view, and the derived finding_closure view. Additive: no deployed binary names the sensitivity schema (the grep gate holds it); everything else is new or a body change inside that schema and its two tick functions.'
+    'The sensitivity sweep over its jsonb surfaces (kb_events.payload and metadata, kb_properties.property_value): a path walker writing user-map keys as ?, readers for the three surfaces, a per-row size bound (oversize_row), scan_unit taking the place''s path (dropped and recreated with a new signature; only scan_lane calls it), and the claim and tick accepting jsonb surfaces. Adds runs.units_by_event_type, a CHECK holding jsonb surfaces to append-only cursors, payment_card v2, the interim ledger_redact_paths table with ledger_remediability and its view, and the derived finding_closure view. Additive: no deployed binary names the sensitivity schema (the grep gate holds it); everything else is new or a body change inside that schema and its two tick functions.'
 );
