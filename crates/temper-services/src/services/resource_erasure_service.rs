@@ -568,7 +568,8 @@ pub(super) fn between<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a 
 /// THE `act` RULE: the erasure records `p_act = NULL` and NULL blocks, so its refusal payloads
 /// carry neither key and stay the shape every earlier erasure refusal has (an absent `act` reads
 /// as [`ErasureAct::Erasure`]). The block history scrub records `p_act = 'block_history_scrub'`
-/// and the blocks the operator named. An empty `blocks` is passed as NULL; the SQL
+/// and the blocks the operator named, each a block of the resource: the scrub's doors check
+/// membership before they record a refusal. An empty `blocks` is passed as NULL; the SQL
 /// (`resource_erasure_refuse`, migration 20261003000210) accepts blocks only beside the scrub's
 /// act.
 pub(super) async fn refuse(

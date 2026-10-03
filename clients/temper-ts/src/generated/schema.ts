@@ -545,7 +545,7 @@ export interface paths {
         put?: never;
         /**
          * Scrub the history of resource blocks
-         * @description Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
+         * @description Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The list is checked against the resource's blocks first, whatever the resource's state, so a recorded refusal names only real blocks of the resource. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.
          */
         post: operations["admin_scrub_block_history"];
         delete?: never;
@@ -568,7 +568,7 @@ export interface paths {
         put?: never;
         /**
          * Survey a block history scrub
-         * @description Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.
+         * @description Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the list names only blocks of the resource. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.
          */
         post: operations["admin_survey_block_history_scrub"];
         delete?: never;
@@ -4525,7 +4525,8 @@ export interface components {
         } | {
             /**
              * @description The blocks the refused act named, in the operator's order — the recorded refusal's
-             *     `blocks`.
+             *     `blocks`. Each is a block of the resource: the list is checked before a refusal is
+             *     recorded.
              */
             blocks: string[];
             detail?: string | null;
@@ -12018,7 +12019,7 @@ export interface operations {
                     "application/json": components["schemas"]["BlockHistoryScrubExecuteResponse"];
                 };
             };
-            /** @description `blocks` is empty, names a block twice, or names an id that is not a block of the resource (nothing was scrubbed or recorded) */
+            /** @description `blocks` is empty, names a block twice, or names an id that is not a block of the resource, whatever the resource's state (checked before any refusal; nothing was scrubbed or recorded) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -12088,7 +12089,7 @@ export interface operations {
                     "application/json": components["schemas"]["BlockHistoryScrubSurvey"];
                 };
             };
-            /** @description `blocks` is empty, names a block twice, or names an id that is not a block of the resource */
+            /** @description `blocks` is empty, names a block twice, or names an id that is not a block of the resource, whatever the resource's state (checked before any refusal is reported) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -17875,6 +17876,15 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The ingest has ended (cancelled or abandoned; code INGEST_ENDED); not resumable — start a new upload */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             /** @description The resource was erased (code RESOURCE_ERASED); answered only to a caller who held standing on it, everyone else gets 403 */
             410: {
                 headers: {
@@ -18323,7 +18333,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The landed block count or the body hash does not match what the caller declared */
+            /** @description The landed block count or the body hash does not match what the caller declared (code CONFLICT; resumable — append the gap and finalize again); or the ingest has ended (cancelled or abandoned; code INGEST_ENDED), which is not resumable — start a new upload */
             409: {
                 headers: {
                     [name: string]: unknown;

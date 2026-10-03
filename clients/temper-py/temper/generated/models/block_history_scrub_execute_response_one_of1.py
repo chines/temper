@@ -29,7 +29,7 @@ class BlockHistoryScrubExecuteResponseOneOf1(BaseModel):
     """
     BlockHistoryScrubExecuteResponseOneOf1
     """ # noqa: E501
-    blocks: List[UUID] = Field(description="The blocks the refused act named, in the operator's order — the recorded refusal's `blocks`.")
+    blocks: List[UUID] = Field(description="The blocks the refused act named, in the operator's order — the recorded refusal's `blocks`. Each is a block of the resource: the list is checked before a refusal is recorded.")
     detail: Optional[StrictStr] = None
     event_id: UUID
     reason: ResourceErasureRefusalReason

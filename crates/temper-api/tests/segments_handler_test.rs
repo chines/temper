@@ -404,8 +404,10 @@ async fn finalize_block_count_mismatch_is_conflict_not_500(pool: PgPool) {
 
 // ─── Test: a cancelled ingest is a NOT-resumable 409 at both doors (TF004) ────────────────────
 
-/// Begin a segmented ingest over HTTP (one landed block), then set it `cancelled` directly — no
-/// act sets a terminal state through the API yet. Returns the token and the resource id.
+/// Begin a segmented ingest over HTTP (one landed block), then set it `cancelled` directly. The
+/// block history scrub sets `cancelled` (`_block_history_scrub_apply`); this sets the state
+/// directly to isolate the finalize and append guards from the act. Returns the token and the
+/// resource id.
 async fn begin_then_cancel(app: &common::TestApp, pool: &PgPool, tag: &str) -> (String, Uuid) {
     let (token, context_id) = auth(pool, tag).await;
     let begin_payload = IngestPayload {
@@ -462,8 +464,8 @@ async fn assert_still_cancelled(pool: &PgPool, resource_id: Uuid) {
 }
 
 /// A finalize of a cancelled ingest — counts and hash both right, so only the state refuses it —
-/// answers 409 with a NOT-resumable message (TF004 → `finalize_err`), never a resumable-looking
-/// 409 or an opaque 500.
+/// answers 409 under the `INGEST_ENDED` code with a NOT-resumable message (TF004 →
+/// `finalize_err`), never a resumable-looking `CONFLICT` or an opaque 500.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn finalize_of_a_cancelled_ingest_is_a_not_resumable_conflict(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
@@ -496,11 +498,17 @@ async fn finalize_of_a_cancelled_ingest_is_a_not_resumable_conflict(pool: PgPool
         body.contains("not resumable"),
         "the 409 says the ingest is not resumable; body: {body}"
     );
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("the 409 body is JSON");
+    assert_eq!(
+        parsed["error"]["code"],
+        temper_core::error::INGEST_ENDED_CODE,
+        "the 409 carries the not-resumable code a resuming client branches on; body: {body}"
+    );
     assert_still_cancelled(&pool, resource_id).await;
 }
 
-/// An append of a new seq to a cancelled ingest answers 409 with a NOT-resumable message
-/// (TF004 → `append_err`), and no block lands.
+/// An append of a new seq to a cancelled ingest answers 409 under the `INGEST_ENDED` code with a
+/// NOT-resumable message (TF004 → `append_err`), and no block lands.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn append_to_a_cancelled_ingest_is_a_not_resumable_conflict(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
@@ -529,6 +537,12 @@ async fn append_to_a_cancelled_ingest_is_a_not_resumable_conflict(pool: PgPool) 
     assert!(
         body.contains("not resumable"),
         "the 409 says the ingest is not resumable; body: {body}"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("the 409 body is JSON");
+    assert_eq!(
+        parsed["error"]["code"],
+        temper_core::error::INGEST_ENDED_CODE,
+        "the 409 carries the not-resumable code a resuming client branches on; body: {body}"
     );
     assert_still_cancelled(&pool, resource_id).await;
     let count: i64 = sqlx::query_scalar(

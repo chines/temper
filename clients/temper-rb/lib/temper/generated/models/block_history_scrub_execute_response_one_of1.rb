@@ -15,7 +15,7 @@ require 'time'
 
 module Temper::Generated
   class BlockHistoryScrubExecuteResponseOneOf1 < ApiModelBase
-    # The blocks the refused act named, in the operator's order — the recorded refusal's `blocks`.
+    # The blocks the refused act named, in the operator's order — the recorded refusal's `blocks`. Each is a block of the resource: the list is checked before a refusal is recorded.
     attr_accessor :blocks
 
     attr_accessor :detail

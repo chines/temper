@@ -3,9 +3,11 @@
 //!
 //! `cancelled` and `abandoned` are terminal: `block_append` and `resource_finalize` refuse them with
 //! SQLSTATE `TF004`, and the Rust guards over an incomplete body (`update_resource`'s whole-body
-//! arm, the re-block classification) treat every state that is not `complete` as incomplete. No act
-//! sets either state yet (the scrub that sets `cancelled` is a later task), so each test sets the
-//! state directly. The ingest itself is begun through the real segmented write path.
+//! arm, the re-block classification) treat every state that is not `complete` as incomplete. The
+//! block history scrub sets `cancelled` (`_block_history_scrub_apply`, migration 20261003000210);
+//! `abandoned` is reserved for an abandoned-ingest reaper, and nothing sets it yet. These tests set
+//! the state directly, to isolate the guards from the act that ends an ingest. The ingest itself is
+//! begun through the real segmented write path.
 //!
 //! Witnesses:
 //!   * for each terminal state: an append of a NEW seq, a re-append of an already-landed seq (the
@@ -112,7 +114,8 @@ async fn live_blocks(pool: &PgPool, resource: ResourceId) -> i64 {
     .unwrap()
 }
 
-/// Set the ingest state directly — nothing in the write path sets a terminal state yet.
+/// Set the ingest state directly, isolating the guard from the act that ends an ingest (the scrub
+/// sets `cancelled`; nothing sets `abandoned`).
 async fn end_ingest(pool: &PgPool, resource: ResourceId, state: &str) {
     sqlx::query("UPDATE kb_resources SET ingest_state = $2 WHERE id = $1")
         .bind(resource.uuid())
@@ -291,8 +294,9 @@ async fn an_abandoned_ingest_refuses_append_reappend_and_finalize(pool: sqlx::Pg
     assert_terminal_ingest_refuses(&pool, "abandoned").await;
 }
 
-/// The race: a transaction holding R's row `FOR UPDATE` while it sets `cancelled` (the scrub's
-/// shape; the scrub itself is a later task) makes an append wait — a 2-second timeout that EXPIRES
+/// The race: a transaction holding R's row `FOR UPDATE` while it sets `cancelled` (standing in for
+/// `block_history_scrub_execute`, which takes the same lock before `_block_history_scrub_apply`
+/// sets the state) makes an append wait — a 2-second timeout that EXPIRES
 /// is the signal — and once it commits the append refuses with `TF004`. The `blob_byte_window_test`
 /// choreography the act's witness 20 uses.
 ///

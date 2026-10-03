@@ -119,7 +119,7 @@ pub enum IngestEnded {
     /// An operator act ended the ingest: the block history scrub, when its `cancelled_ingest` is
     /// true.
     Cancelled,
-    /// A reaper judged the ingest will not resume.
+    /// Reserved for an abandoned-ingest reaper; nothing sets it yet.
     Abandoned,
 }
 

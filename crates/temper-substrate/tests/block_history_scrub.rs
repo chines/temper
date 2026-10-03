@@ -14,6 +14,9 @@
 //!   * **16c** — a folded block empties entirely, both a block folded by a `replaces_body` mutate
 //!     and a folded block whose chunks are still current; the embed drain's candidate set is the
 //!     same before and after.
+//!   * **16c, the drain** — the embed drain's write-backs re-check currency at write time: a
+//!     vector computed from prose read before a supersede and a scrub lands nowhere, and a current
+//!     chunk of a folded block takes none either.
 //!   * **16d** — custody: a sibling resource in another home with byte-identical old content keeps
 //!     every row, and `kb_erased_content` gains none.
 //!   * **16e** — one `block_history_scrubbed` event and nothing else; its payload is the typed
@@ -21,6 +24,8 @@
 //!   * **16f** — an in-flight ingest is cancelled, not refused (rulings 3 and 6): `cancelled`,
 //!     `cancelled_ingest = true`, the ingest target line verbatim, and a later append refuses with
 //!     TF004; a complete resource's payload carries neither.
+//!   * **16f, then the erasure** — an erasure after the scrub cancelled the ingest names no
+//!     ingest it ended; an erasure of an ingest still in flight does.
 //!   * **16g** — the refusals RAISE (ruling 5) and change nothing; the widened
 //!     `resource_erasure_refuse` records `act` and `blocks`, and its six-argument call still
 //!     appends a payload without `act`.
@@ -52,12 +57,19 @@ const SIDE: &str = "an unnamed block naming jane smith";
 /// The scrub's ingest target line, byte for byte (ruling 6 of 2e).
 const INGEST_LINE: &str = "ingest in_progress; cancelled by block history scrub";
 
-/// The embed drain's candidate predicate, verbatim from `embed.rs` (the same predicate
-/// `readout_invariants.rs` asserts on).
-const DRAIN_CANDIDATES: &str = "SELECT ch.id AS chunk_id, cc.content FROM kb_chunks ch \
-     JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
-     JOIN kb_content_blocks b ON b.id = ch.block_id \
-     WHERE ch.is_current AND NOT b.is_folded AND ch.embedding IS NULL";
+/// The embed drain's candidate read for one resource: `embed_resource_chunks`'s SELECT, built on
+/// the production `STALE_CHUNK_PREDICATE` ($1 the resource, $2 the model this build embeds with).
+fn drain_read_sql() -> String {
+    format!(
+        "SELECT ch.id AS chunk_id, cc.content \
+         FROM kb_chunks ch \
+         JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
+         JOIN kb_content_blocks b ON b.id = ch.block_id \
+         WHERE ch.resource_id = $1 AND {} \
+         ORDER BY ch.chunk_index",
+        temper_substrate::embed::STALE_CHUNK_PREDICATE
+    )
+}
 
 fn chunk_hash(prose: &str) -> String {
     format!("{:x}", sha2::Sha256::digest(prose.trim()))
@@ -414,12 +426,19 @@ async fn revision_bytes(pool: &PgPool, block: Uuid) -> Vec<String> {
     .unwrap()
 }
 
-/// The embed drain's candidates, sorted.
-async fn drain_candidates(pool: &PgPool) -> Vec<(Uuid, String)> {
-    let mut rows: Vec<(Uuid, String)> = sqlx::query_as(DRAIN_CANDIDATES)
-        .fetch_all(pool)
-        .await
-        .unwrap();
+/// The embed drain's candidates across `resources`, read as the drain reads them, sorted.
+async fn drain_candidates(pool: &PgPool, resources: &[ResourceId]) -> Vec<(Uuid, String)> {
+    let sql = drain_read_sql();
+    let mut rows: Vec<(Uuid, String)> = Vec::new();
+    for resource in resources {
+        let read: Vec<(Uuid, String)> = sqlx::query_as(&sql)
+            .bind(resource.uuid())
+            .bind(temper_ingest::embed::EXPECTED_MODEL_SHA256)
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        rows.extend(read);
+    }
     rows.sort();
     rows
 }
@@ -660,7 +679,11 @@ async fn a_folded_block_empties_entirely(pool: PgPool) {
     }
     let kept_before = block_snapshot(&pool, kept_live).await;
 
-    let drain_before = drain_candidates(&pool).await;
+    let drain_before = drain_candidates(&pool, &[resource, still_current]).await;
+    assert!(
+        !drain_before.is_empty(),
+        "setup: the live blocks' current chunks are drain candidates (declared with another model)"
+    );
 
     let first = scrub(&pool, resource, &[folded]).await;
     let second = scrub(&pool, still_current, &[folded_current]).await;
@@ -673,7 +696,7 @@ async fn a_folded_block_empties_entirely(pool: PgPool) {
         );
     }
     assert_eq!(
-        drain_candidates(&pool).await,
+        drain_candidates(&pool, &[resource, still_current]).await,
         drain_before,
         "the embed drain's candidates are the same before and after: nothing re-embeds"
     );
@@ -684,6 +707,184 @@ async fn a_folded_block_empties_entirely(pool: PgPool) {
     );
     assert_eq!(first["targets"][0], block_line(folded, true, 1, 1));
     assert_eq!(second["targets"][0], block_line(folded_current, true, 1, 1));
+}
+
+/// A 768-dim vector literal, as the drain formats one.
+fn vector_literal() -> String {
+    format!("[{}]", vec!["0.1"; 768].join(","))
+}
+
+/// Run the drain's vector write-back (`CHUNK_EMBEDDING_WRITE_BACK`) and its blank stamp
+/// (`stamp_blank_chunks`) for one chunk; returns the rows each affected.
+async fn drain_write_backs(pool: &PgPool, chunk: Uuid) -> (u64, u64) {
+    let model = temper_ingest::embed::EXPECTED_MODEL_SHA256;
+    let vector = sqlx::query(temper_substrate::embed::CHUNK_EMBEDDING_WRITE_BACK)
+        .bind(vector_literal())
+        .bind(model)
+        .bind(chunk)
+        .execute(pool)
+        .await
+        .unwrap()
+        .rows_affected();
+    let stamp = temper_substrate::embed::stamp_blank_chunks(pool, model, &[chunk])
+        .await
+        .unwrap();
+    (vector, stamp)
+}
+
+/// One chunk's (embedding IS NOT NULL, embedded_with).
+async fn chunk_vector(pool: &PgPool, chunk: Uuid) -> (bool, Option<String>) {
+    sqlx::query_as("SELECT embedding IS NOT NULL, embedded_with FROM kb_chunks WHERE id = $1")
+        .bind(chunk)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// The current chunks of `block`, with neither a vector nor provenance: the state a create whose
+/// embedding the drain has not reached yet leaves (both columns NULL together).
+async fn unembed_current_chunks(pool: &PgPool, block: Uuid) {
+    sqlx::query(
+        "UPDATE kb_chunks SET embedding = NULL, embedded_with = NULL \
+          WHERE block_id = $1 AND is_current",
+    )
+    .bind(block)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// The current chunk ids of `block`.
+async fn current_chunks(pool: &PgPool, block: Uuid) -> Vec<Uuid> {
+    sqlx::query_scalar("SELECT id FROM kb_chunks WHERE block_id = $1 AND is_current ORDER BY id")
+        .bind(block)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+/// (16c, the drain) A write-back that read its candidate before a supersede and a scrub writes
+/// nothing onto the emptied chunk.
+///
+/// The drain reads candidates under `STALE_CHUNK_PREDICATE`, runs inference, and only then writes.
+/// In between, the block is mutated (the chunk becomes history) and scrubbed (the chunk's prose,
+/// header path and vector are emptied). The drain's own statements then run for that chunk.
+///
+/// FAILS IF: `CHUNK_EMBEDDING_WRITE_BACK` or `stamp_blank_chunks` affects the
+/// scrubbed chunk, or its embedding or embedded_with is no longer NULL; or the same write-back does
+/// not write the block's new current chunk (the refusal is the currency guard's, not a statement
+/// that never writes).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_drain_write_back_after_a_supersede_and_a_scrub_writes_nothing(pool: PgPool) {
+    let (owner, emitter) = setup(&pool).await;
+    let home = make_home(&pool, owner, "scrub-drain").await;
+    let resource = create(&pool, owner, emitter, home, "scrub-drain", SECRET).await;
+    let block = first_live_block(&pool, resource).await;
+    unembed_current_chunks(&pool, block).await;
+    let read_chunks = current_chunks(&pool, block).await;
+    assert_eq!(read_chunks.len(), 1, "setup: one current chunk");
+    let read_chunk = read_chunks[0];
+
+    // The drain reads its candidate.
+    let candidates = drain_candidates(&pool, &[resource]).await;
+    assert_eq!(
+        candidates,
+        vec![(read_chunk, SECRET.to_string())],
+        "setup: the drain reads the unembedded current chunk and its prose"
+    );
+
+    // The block is mutated through the real write path: the read chunk becomes history.
+    let edited = prepare_block_from_chunks(0, None, vec![chunk(REV_THREE, "edited")]);
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::BlockMutate {
+            block: BlockId::from(block),
+            chunks: &edited.chunks,
+            raw: Some(REV_THREE),
+            incorporated: &[],
+            replaces_body: false,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let now_current = current_chunks(&pool, block).await;
+    assert!(
+        !now_current.is_empty() && !now_current.contains(&read_chunk),
+        "setup: the mutate superseded the read chunk"
+    );
+
+    // The scrub empties it.
+    scrub(&pool, resource, &[block]).await;
+    assert_eq!(
+        history_left(&pool, block).await,
+        (0, 0),
+        "setup: the scrub emptied the block's history"
+    );
+
+    // The drain's write-backs arrive.
+    assert_eq!(
+        drain_write_backs(&pool, read_chunk).await,
+        (0, 0),
+        "neither the vector write-back nor the blank stamp reaches a chunk that is no longer \
+         current"
+    );
+    assert_eq!(
+        chunk_vector(&pool, read_chunk).await,
+        (false, None),
+        "the scrubbed chunk keeps a NULL embedding and a NULL embedded_with"
+    );
+
+    // The same statement writes the block's present.
+    unembed_current_chunks(&pool, block).await;
+    let (vector, _) = drain_write_backs(&pool, now_current[0]).await;
+    assert_eq!(
+        vector, 1,
+        "the write-back writes a current chunk of a live block"
+    );
+}
+
+/// (16c, the drain, the fold conjunct) A write-back onto a current chunk of a folded block writes
+/// nothing. The chunk is still `is_current`, so only the block's fold refuses it; the state is
+/// seeded directly, as in `a_folded_block_empties_entirely`.
+///
+/// FAILS IF: `CHUNK_EMBEDDING_WRITE_BACK` or `stamp_blank_chunks` affects the
+/// folded block's current chunk, or its embedding or embedded_with is no longer NULL.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_drain_write_back_onto_a_folded_block_writes_nothing(pool: PgPool) {
+    let (owner, emitter) = setup(&pool).await;
+    let home = make_home(&pool, owner, "scrub-drain-fold").await;
+    let resource = create(&pool, owner, emitter, home, "scrub-drain-fold", SECRET).await;
+    let folded = append(&pool, resource, 1, SIDE, emitter).await;
+    unembed_current_chunks(&pool, folded).await;
+    let chunks = current_chunks(&pool, folded).await;
+    assert_eq!(chunks.len(), 1, "setup: one current chunk");
+    assert!(
+        drain_candidates(&pool, &[resource])
+            .await
+            .iter()
+            .any(|(id, _)| *id == chunks[0]),
+        "setup: the drain reads the chunk while its block is live"
+    );
+    sqlx::query("UPDATE kb_content_blocks SET is_folded = true WHERE id = $1")
+        .bind(folded)
+        .execute(&pool)
+        .await
+        .unwrap();
+    scrub(&pool, resource, &[folded]).await;
+
+    assert_eq!(
+        drain_write_backs(&pool, chunks[0]).await,
+        (0, 0),
+        "neither write-back reaches a current chunk of a folded block"
+    );
+    assert_eq!(
+        chunk_vector(&pool, chunks[0]).await,
+        (false, None),
+        "the folded block's chunk keeps a NULL embedding and a NULL embedded_with"
+    );
 }
 
 /// (16d) Custody is never decided by bytes: a sibling resource in another home carrying
@@ -888,6 +1089,96 @@ async fn an_in_flight_ingest_is_cancelled_by_the_scrub(pool: PgPool) {
         raw["targets"]
     );
     assert_eq!(ingest_state(&pool, complete).await, "complete");
+}
+
+/// A segmented create left in flight: block zero and one appended segment, never finalized.
+async fn in_flight_ingest(
+    pool: &PgPool,
+    owner: ProfileId,
+    emitter: EntityId,
+    slug: &str,
+) -> ResourceId {
+    let home = make_home(pool, owner, slug).await;
+    let origin = format!("test://{slug}");
+    let resource = writes::create_resource_with_mode(
+        pool,
+        CreateParams {
+            idempotency_key: None,
+            title: slug,
+            origin_uri: &origin,
+            body: "block zero",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: Some(vec![chunk("block zero", "")]),
+            sources: vec![],
+        },
+        EventContext::default(),
+        CreateMode {
+            defer: false,
+            segmented: true,
+        },
+    )
+    .await
+    .unwrap();
+    append(pool, resource, 1, "segment one", emitter).await;
+    assert_eq!(
+        ingest_state(pool, resource).await,
+        "in_progress",
+        "setup: an ingest actually in flight"
+    );
+    resource
+}
+
+/// The `kb_resources.ingest_state` target lines of one `resource_erased` event.
+async fn erasure_ingest_lines(pool: &PgPool, event: Uuid) -> Vec<serde_json::Value> {
+    payload_of(pool, event).await["targets"]
+        .as_array()
+        .expect("the resource_erased payload carries targets")
+        .iter()
+        .filter(|t| t["target"] == "kb_resources.ingest_state")
+        .cloned()
+        .collect()
+}
+
+/// (16f, then the erasure) An erasure after the scrub cancelled the ingest does not claim to have
+/// ended it: the scrub's event already records the cancel.
+///
+/// FAILS IF: the `resource_erased` event of a scrub-cancelled resource carries a
+/// `kb_resources.ingest_state` target line; or the erasure of an ingest still in flight does not
+/// carry its "ended by erasure" line (the line exists, so its absence above is the condition's).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn an_erasure_after_a_scrub_cancel_does_not_claim_the_ingest(pool: PgPool) {
+    let (owner, emitter) = setup(&pool).await;
+
+    let cancelled = in_flight_ingest(&pool, owner, emitter, "scrub-then-erase").await;
+    let block = first_live_block(&pool, cancelled).await;
+    scrub(&pool, cancelled, &[block]).await;
+    assert_eq!(
+        ingest_state(&pool, cancelled).await,
+        "cancelled",
+        "setup: the scrub cancelled the ingest"
+    );
+    let erased = erase(&pool, cancelled).await;
+    assert_eq!(
+        erasure_ingest_lines(&pool, erased).await,
+        Vec::<serde_json::Value>::new(),
+        "the erasure names no ingest it ended: the scrub ended it"
+    );
+
+    let in_flight = in_flight_ingest(&pool, owner, emitter, "erase-in-flight").await;
+    let erased = erase(&pool, in_flight).await;
+    assert_eq!(
+        erasure_ingest_lines(&pool, erased).await,
+        vec![serde_json::json!({
+            "target": "kb_resources.ingest_state",
+            "outcome": "ingest in_progress; ended by erasure; erased_at is authoritative",
+        })],
+        "an erasure of an ingest still in flight names the ingest it ended"
+    );
 }
 
 /// (16g) The refusals RAISE with the texts the service parses, and change nothing; the widened

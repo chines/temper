@@ -2,8 +2,8 @@
 --
 -- `ck_kb_resources_ingest_state` (20260714000001) admitted only `in_progress` and `complete`. It now
 -- also admits the two terminal states the `IngestState` type names: `cancelled` (an operator act —
--- the block history scrub — ended the ingest before it finalized) and `abandoned` (a reaper judged
--- the ingest will not resume). No existing row is in either state, so re-adding the CHECK validates
+-- the block history scrub — ended the ingest before it finalized) and `abandoned` (reserved for an
+-- abandoned-ingest reaper; nothing sets it yet). No existing row is in either state, so re-adding the CHECK validates
 -- every row as it stands. `idx_kb_resources_incomplete` stays `WHERE ingest_state = 'in_progress'`:
 -- it enumerates RESUMABLE uploads, and a terminal ingest is not one.
 --

@@ -4534,9 +4534,11 @@ impl Backend for DbBackend {
     /// the cursor rides the receipt. Complete-only enumeration is deliberate: the op refuses
     /// still-arriving rows, so enumerating them would burn the window on guaranteed declines.
     /// Because of it, one additional count per invocation reports the scope's still-arriving
-    /// (`in_progress`) population in the summary — the receipt names the population, it never
+    /// (`in_progress`) population in the summary — the receipt names that population, it never
     /// hides behind the gate; the addressed-resource arm needs no count, its own state refusal
-    /// reaching the receipt per row. `dry_run` routes every candidate to the read-only survey
+    /// reaching the receipt per row. An ended ingest (`cancelled` or `abandoned`) is neither a
+    /// candidate nor counted: a context or deployment walk skips it, and it appears only when
+    /// the resource is addressed directly, where it declines `byteless`. `dry_run` routes every candidate to the read-only survey
     /// (the same machinery the act runs, minus the write); the act is `reblock_resource_in_tx`
     /// under the invoking operator's emitter with a batch correlation id in the `EventContext`,
     /// in the candidate's own transaction behind the write floor (`reblock_candidate`).
@@ -5263,7 +5265,7 @@ fn conflict_if_unique_violation(e: anyhow::Error, conflict: &str) -> TemperError
 ///   - `TF003` (raw-bytes integrity) → 422 [`TemperError::ContentIntegrity`] — **NOT resumable**: the
 ///     committed bytes are wrong and `block_append` refuses to overwrite a seq, so the caller must
 ///     discard the resource and re-upload.
-///   - `TF004` (the ingest is `cancelled` or `abandoned`) → 409 `Conflict` via
+///   - `TF004` (the ingest is `cancelled` or `abandoned`) → 409 [`TemperError::IngestEnded`] via
 ///     [`ingest_ended_conflict`] — **NOT resumable**: the ingest is terminal.
 ///
 /// The RAISE messages are safe to surface (the caller's own state).
@@ -5300,9 +5302,10 @@ fn append_err(e: anyhow::Error) -> TemperError {
 /// The 409 for SQLSTATE `TF004`, raised by `resource_finalize` and `block_append` when the
 /// resource's ingest is terminal (`cancelled` or `abandoned`, migration 20261003000110). Unlike
 /// `TF001`/`TF002`'s 409 it is NOT resumable — no append or re-finalize can continue this ingest —
-/// and the message says so, so a resuming client stops instead of looping.
+/// so it travels under its own code (`INGEST_ENDED`), which a resuming client branches on to drop
+/// its resume record and start a new upload. The message says the same to a reader.
 fn ingest_ended_conflict(message: &str) -> TemperError {
-    TemperError::Conflict(format!(
+    TemperError::IngestEnded(format!(
         "{message} — the ingest has ended and is not resumable; start a new upload"
     ))
 }

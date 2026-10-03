@@ -5,7 +5,7 @@
 //!   and the recorded targets equal the survey's prediction; an erased resource and a charter are
 //!   recorded refusals whose payload names the scrub (`act`) and its blocks; an empty list, a
 //!   repeated block and a block of another resource are 400s that record nothing and empty
-//!   nothing; an unknown field is axum's 422; a scrub of an in-flight segmented ingest answers
+//!   nothing, on an erased or charter resource too (membership is checked before any refusal); an unknown field is axum's 422; a scrub of an in-flight segmented ingest answers
 //!   `cancelled_ingest: true`, read from the recorded payload.
 //! * the survey door (`POST /api/admin/resources/block-history-scrub/survey`) — per-block counts,
 //!   nothing recorded; the refusal the act would record for an erased or charter resource; the
@@ -620,6 +620,83 @@ async fn an_empty_repeated_or_foreign_block_list_is_400_and_records_nothing(pool
     assert!(nonempty_revisions(&app.pool, resource).await < bytes_before);
 }
 
+// ── WITNESS: membership is checked before any refusal is recorded ────────────────────────────
+
+/// FAILS IF a list naming a block of another resource, or an id that is no block at all, answers
+/// anything but 400 at either door when the named resource is erased or a charter, or records any
+/// event: the refusal ledger is never redacted, so a refusal must only ever name real blocks of
+/// the resource. The bite: the same operator naming only the resource's own blocks gets the
+/// recorded refusal, so each 400 was about membership, not the resource's state.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn a_foreign_block_on_an_erased_or_charter_resource_is_400_and_records_nothing(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+    let (token, _) =
+        provision_operator(&app, "bhs-refuse-list-op", "bhs-refuse-list-op@example.com").await;
+    let (erased, erased_blocks) = subject(&app).await;
+    erase(&app, &token, erased).await;
+    let (charter, charter_blocks) = subject(&app).await;
+    make_charter(&app.pool, charter).await;
+    let (_, other_blocks) = subject(&app).await;
+    let foreign = other_blocks[0];
+    let no_block = Uuid::now_v7();
+    let events_before = count_events(&app.pool, None).await;
+
+    for (label, resource, own) in [
+        ("erased", erased, &erased_blocks),
+        ("charter", charter, &charter_blocks),
+    ] {
+        for (kind, stray) in [
+            ("another resource's block", foreign),
+            ("no block", no_block),
+        ] {
+            let body = json!({ "resource": resource, "blocks": [own[0], stray] });
+            for door in [SURVEY, EXECUTE] {
+                let resp = post(&app, &token, door, &body).await;
+                assert_eq!(
+                    resp.status().as_u16(),
+                    400,
+                    "{kind} on the {label} resource at {door}"
+                );
+                let err: Value = resp.json().await.expect("the 400 body");
+                let message = err["error"]["message"].as_str().expect("message");
+                assert!(
+                    message.contains(&stray.to_string()),
+                    "the 400 names the operator's own stray id: {message}"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        count_events(&app.pool, None).await,
+        events_before,
+        "a list naming an id that is not a block of the resource records NOTHING, whatever the \
+         resource's state"
+    );
+
+    // THE BITE: the resource's own blocks reach the recorded refusal.
+    for (resource, own, reason) in [
+        (erased, &erased_blocks, "already_erased"),
+        (charter, &charter_blocks, "charter_resource"),
+    ] {
+        let resp = post(
+            &app,
+            &token,
+            EXECUTE,
+            &json!({ "resource": resource, "blocks": own }),
+        )
+        .await;
+        assert_eq!(resp.status().as_u16(), 200);
+        let answer: Value = resp.json().await.expect("the tagged outcome");
+        assert_eq!(answer["status"], "refused", "{answer}");
+        assert_eq!(answer["reason"], reason, "{answer}");
+    }
+    assert_eq!(
+        count_events(&app.pool, Some("resource_erasure_refused")).await,
+        2,
+        "the two well-formed refusals are recorded"
+    );
+}
+
 // ── WITNESS: an unknown field is refused at the door ─────────────────────────────────────────
 
 /// FAILS IF either door accepts a body carrying an unknown field (a caller-chosen
@@ -771,8 +848,8 @@ fn one_chunk_packed(text: &str) -> String {
 
 /// Begin a segmented ingest over HTTP (one landed block of a hinted two) and leave it
 /// `in_progress` — `segments_handler_test.rs`'s `begin_then_cancel`, without the cancel: the
-/// scrub does it.
-async fn begin_in_flight_ingest(app: &common::TestApp) -> Uuid {
+/// scrub does it. Returns the resource and its owner's token.
+async fn begin_in_flight_ingest(app: &common::TestApp) -> (Uuid, String) {
     let email = format!("scrub-ingest-{}@example.com", Uuid::new_v4());
     let (owner, context_id) =
         common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
@@ -810,7 +887,7 @@ async fn begin_in_flight_ingest(app: &common::TestApp) -> Uuid {
         .json()
         .await
         .expect("begin JSON");
-    begin.resource_id
+    (begin.resource_id, token)
 }
 
 async fn ingest_state(pool: &PgPool, resource: Uuid) -> String {
@@ -824,14 +901,16 @@ async fn ingest_state(pool: &PgPool, resource: Uuid) -> String {
 /// FAILS IF a scrub of a resource with an in-flight segmented ingest answers anything but 200
 /// `completed` with `cancelled_ingest: true`, leaves `ingest_state` anything but `cancelled`, or
 /// answers a value that disagrees with the recorded payload's `cancelled_ingest` (the field the
-/// door reads). The counterpart — a complete ingest answers `false` — is
+/// door reads); or if the owner's `show` of the resource does not read `ingest_state:
+/// in_progress` with `ingest_ended: cancelled` (the wire ruling: an ended ingest is not whole,
+/// and the new field names why). The counterpart — a complete ingest answers `false` — is
 /// `an_operator_scrub_completes_and_its_targets_equal_the_surveys_counts`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn a_scrub_of_an_in_flight_ingest_answers_cancelled_ingest_true(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (token, _) =
         provision_operator(&app, "bhs-inflight-op", "bhs-inflight-op@example.com").await;
-    let resource = begin_in_flight_ingest(&app).await;
+    let (resource, owner_token) = begin_in_flight_ingest(&app).await;
     assert_eq!(
         ingest_state(&app.pool, resource).await,
         "in_progress",
@@ -871,4 +950,16 @@ async fn a_scrub_of_an_in_flight_ingest_answers_cancelled_ingest_true(pool: PgPo
         "cancelled",
         "the scrub cancelled the ingest"
     );
+
+    let show = app
+        .client
+        .get(app.url(&format!("/api/resources/{resource}")))
+        .header("Authorization", format!("Bearer {owner_token}"))
+        .send()
+        .await
+        .expect("show request");
+    assert_eq!(show.status().as_u16(), 200, "the owner reads the resource");
+    let shown: Value = show.json().await.expect("the show body");
+    assert_eq!(shown["ingest_state"], "in_progress", "{shown}");
+    assert_eq!(shown["ingest_ended"], "cancelled", "{shown}");
 }

@@ -65,7 +65,8 @@ pub enum BlockHistoryScrubExecuteResponse {
         reason: ResourceErasureRefusalReason,
         detail: Option<String>,
         /// The blocks the refused act named, in the operator's order — the recorded refusal's
-        /// `blocks`.
+        /// `blocks`. Each is a block of the resource: the list is checked before a refusal is
+        /// recorded.
         blocks: Vec<Uuid>,
     },
 }
@@ -75,14 +76,14 @@ pub enum BlockHistoryScrubExecuteResponse {
     post,
     operation_id = "admin_scrub_block_history",
     summary = "Scrub the history of resource blocks",
-    description = "Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.",
+    description = "Empties the history of the named blocks of a resource that is not erased: every revision but the current one and every non-current chunk of a live block, and every revision and chunk of a folded block. An in-flight ingest is cancelled and recorded. The server mints the request reference. The answer is either a completion or a recorded refusal (`status`). The list is checked against the resource's blocks first, whatever the resource's state, so a recorded refusal names only real blocks of the resource. Requires a system admin. Any other caller gets 404, decided before any lookup, so a refusal reveals nothing about the resource.",
     path = "/api/admin/resources/block-history-scrub",
     tag = "Admin",
     request_body = BlockHistoryScrubRequestBody,
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "The act completed, or was refused and the refusal recorded (`status` says which)", body = BlockHistoryScrubExecuteResponse),
-        (status = 400, description = "`blocks` is empty, names a block twice, or names an id that is not a block of the resource (nothing was scrubbed or recorded)", body = ErrorBody),
+        (status = 400, description = "`blocks` is empty, names a block twice, or names an id that is not a block of the resource, whatever the resource's state (checked before any refusal; nothing was scrubbed or recorded)", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),
@@ -135,14 +136,14 @@ pub async fn execute(
     post,
     operation_id = "admin_survey_block_history_scrub",
     summary = "Survey a block history scrub",
-    description = "Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.",
+    description = "Reports what the block history scrub would do for the named blocks of a resource, without recording or changing anything: per block, whether it is folded and how many revisions and chunks it would empty, and whether an in-flight ingest would be cancelled. For a charter or an erased resource it reports the refusal the act would record (`refusal`, `detail`) and no plan, once the list names only blocks of the resource. The warning that a block's current revision still carries a sensitivity finding arrives with the sensitivity sweep (build order 3c); this survey reports counts only. Requires a system admin. Any other caller gets 404, decided before any lookup.",
     path = "/api/admin/resources/block-history-scrub/survey",
     tag = "Admin",
     request_body = BlockHistoryScrubRequestBody,
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "What the act would do (`plan`), or the refusal it would record (`refusal`); nothing is recorded or changed", body = BlockHistoryScrubSurvey),
-        (status = 400, description = "`blocks` is empty, names a block twice, or names an id that is not a block of the resource", body = ErrorBody),
+        (status = 400, description = "`blocks` is empty, names a block twice, or names an id that is not a block of the resource, whatever the resource's state (checked before any refusal is reported)", body = ErrorBody),
         (status = 401, description = "Authentication required", body = ErrorBody),
         (status = 403, description = "Caller lacks system access (`SYSTEM_ACCESS_REQUIRED`), answered by the access gate before the admin check", body = ErrorBody),
         (status = 404, description = "Caller is not a system admin, answered before any lookup; or, for an admin, the resource does not exist", body = ErrorBody),

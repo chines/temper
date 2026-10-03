@@ -28,25 +28,37 @@ the routing vocabulary (the #858 pre-policy row's present-tense law claim is gra
   that is not erased, behind two new operation ids (`admin_scrub_block_history`,
   `admin_survey_block_history_scrub`) under the `Admin` tag. No existing shape moves: the request,
   execute response and survey schemas are new, and a refused scrub is recorded on the existing
-  `resource_erasure_refused` event with its new optional `act` and `blocks`. Who observes: system
-  admins and SDK clients that call the new operations; a non-admin gets the erasure doors' 404.
-  User-visible: operators only. Release relevance: additive.
+  `resource_erasure_refused` event with its new optional `act` and `blocks`. A list naming an id
+  that is not a block of the resource is a 400 that records nothing, whatever the resource's
+  state, so a recorded refusal names only real blocks of it. The migration re-registers the
+  `block_history_scrubbed` and `resource_erasure_refused` payload schemas with optional
+  properties only, adds the scrub's DB functions, and re-creates `resource_erasure_execute` with
+  the same signature: its `kb_resources.ingest_state` target line is written only for an
+  in-progress ingest, so an erasure after a scrub cancelled the ingest does not claim to have
+  ended it. Who observes: system admins and SDK clients that call the new operations; a non-admin
+  gets the erasure doors' 404. User-visible: operators only. Release relevance: additive.
 pr: self
 classes: additive
-surfaces: http, clients
+surfaces: http, clients, schema
 status: signal-only
-- **`ResourceView` gains `ingest_ended` — a resource whose ingest ended before its body was whole (`cancelled` by the block history scrub, or `abandoned`)**
+- **`ResourceView` gains `ingest_ended` — a resource whose ingest ended before its body was whole (`cancelled` by the block history scrub; `abandoned` is reserved for an abandoned-ingest reaper, and nothing sets it yet)**
   `ingest_state` keeps its two wire values, and an ended ingest reads `in_progress` there (it is
   not whole, and it stays hidden from list and search as an in-progress one is), with the new
   optional `ingest_ended` (`cancelled` | `abandoned`, skipped when absent) naming the reason. The
   DB column gains the two terminal states (migration `20261003000110`); a finalize or an append on
-  an ended ingest answers 409 not-resumable (SQLSTATE TF004) where it previously would have
-  continued. Who observes: API/SDK/CLI readers of `show` on a resource whose ingest a scrub
-  cancelled; nothing sets either state before the scrub ships. User-visible: yes, on such
-  resources only. Release relevance: additive.
+  an ended ingest answers 409 not-resumable (SQLSTATE TF004) under a new error code,
+  `INGEST_ENDED` (additive: the other 409s keep `CONFLICT`), where it previously would have
+  continued. The CLI's segmented upload, meeting that code, removes its resume record and says
+  so, so the next run starts a fresh upload; its JSON error payload carries the same code. A
+  re-block of a resource addressed directly declines an ended ingest under the existing
+  `byteless` class, which now also covers an upload that ended before its body was whole; a
+  context or deployment walk skips ended ingests. Who observes: API/SDK/CLI/MCP readers of `show`
+  on a resource whose ingest a scrub cancelled, and a client resuming such an upload; only the
+  scrub sets a terminal state. User-visible: yes, on such resources only. Release relevance:
+  additive.
 pr: self
 classes: additive, behavioral
-surfaces: http, clients, schema
+surfaces: http, mcp, cli-stdout, clients, schema
 status: signal-only
 - **The CLI's context-ref reads resolve through `GET /api/contexts/resolve` — refusal sentences change**
   `resolve_context_id_for_read` (behind `temper context transfer|rename|delete|shape|

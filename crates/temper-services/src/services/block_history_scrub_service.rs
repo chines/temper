@@ -9,15 +9,17 @@
 //!
 //! SQL commits, it does not decide legality: the plan, the refusals and the one redaction body
 //! narrowed to a block set live in `block_history_scrub_plan` / `block_history_scrub_survey` /
-//! `block_history_scrub_execute` (migration 20261003000210). A refusal the act raises (a charter,
-//! an erased resource) is recorded through `resource_erasure_refuse` with the scrub's `act` and
-//! the operator's blocks; a malformed list (empty, repeated, or naming a block of another
-//! resource) is a 400 that records nothing and empties nothing.
+//! `block_history_scrub_execute` (migration 20261003000210). A malformed list (empty, repeated,
+//! or naming an id that is not a block of the resource) is a 400 that records nothing and empties
+//! nothing, whatever state the resource is in: membership is checked against `kb_content_blocks`
+//! before any refusal is recorded, so a refusal names only real blocks of the resource, never
+//! more than it has. A refusal the act raises (a charter, an erased resource) is then recorded
+//! through `resource_erasure_refuse` with the scrub's `act` and those blocks.
 //!
 //! The survey records nothing. The SQL survey has no refusal verdicts and silently skips an id
-//! that is not a block of the resource, so the survey checks both here: an erased or charter
-//! resource answers the refusal the act would record, and a foreign id is the same 400 the act
-//! answers. The HTTP doors call straight into [`execute_block_history_scrub`] /
+//! that is not a block of the resource, so the survey checks both here, in the execute door's
+//! order: a foreign id is the same 400 the act answers, and then an erased or charter resource
+//! answers the refusal the act would record. The HTTP doors call straight into [`execute_block_history_scrub`] /
 //! [`survey_block_history_scrub`]; this module carries no HTTP types.
 
 use sqlx::PgPool;
@@ -156,9 +158,11 @@ enum ScrubFailure {
 /// The [`SystemAdmin`] proof is the gate, and it ran where the proof was minted. The operator's
 /// emitter resolves first. An empty list, or one naming a block twice, is
 /// [`ApiError::BadRequest`] before the act runs; an unknown resource is [`ApiError::NotFound`].
-/// A charter or an already-erased resource is a recorded refusal naming the scrub and its
-/// blocks. A listed id that is not a block of the resource is [`ApiError::BadRequest`]; the act
-/// rolled back whole, so nothing was scrubbed and nothing was recorded.
+/// A listed id that is not a block of the resource is [`ApiError::BadRequest`], for every state
+/// of the resource, checked before the act runs and before any refusal is recorded: nothing was
+/// scrubbed and nothing was recorded. A charter or an already-erased resource is then a recorded
+/// refusal naming the scrub and its blocks, each a real block of the resource. The act checks
+/// membership again under its lock, as the backstop.
 pub async fn execute_block_history_scrub(
     pool: &PgPool,
     admin: &SystemAdmin,
@@ -180,6 +184,11 @@ pub async fn execute_block_history_scrub(
     reject_malformed_list(request.blocks)?;
     if erased_state(pool, request.resource).await?.is_none() {
         return Err(ApiError::NotFound(RESOURCE_NOT_FOUND.to_string()));
+    }
+    // Membership before the act, so a refusal (recorded in a ledger nothing redacts) only ever
+    // names real blocks of the resource.
+    if let Some(foreign) = first_foreign_block(pool, request.resource, request.blocks).await? {
+        return Err(foreign_block(Some(foreign), request.blocks));
     }
 
     let committed = match run_scrub(pool, &attempt, request.blocks).await? {
@@ -379,10 +388,10 @@ fn classify_scrub_raise(rest: &str) -> ScrubFailure {
 /// from the act's own plan (`block_history_scrub_plan`, D10).
 ///
 /// The [`SystemAdmin`] proof is the gate, as for the act; the survey records nothing (a survey
-/// attempt is not a scrub request). The list is checked exactly as the act checks it: empty or
-/// repeated is a 400, an unknown resource is `NotFound`, a charter or an erased resource answers
-/// the refusal the act would record (with no per-block rows), and an id that is not a block of
-/// the resource is a 400. The current-revision finding warning (D11) is not here: it reads the
+/// attempt is not a scrub request). The list is checked exactly as the act checks it, in the
+/// same order: empty or repeated is a 400, an unknown resource is `NotFound`, an id that is not a
+/// block of the resource is a 400 whatever the resource's state, and then a charter or an erased
+/// resource answers the refusal the act would record (with no per-block rows). The current-revision finding warning (D11) is not here: it reads the
 /// sensitivity sweep's stored findings, which arrive with build order 3c.
 pub async fn survey_block_history_scrub(
     pool: &PgPool,
@@ -394,6 +403,9 @@ pub async fn survey_block_history_scrub(
     let Some(state) = scrub_state(pool, resource).await? else {
         return Err(ApiError::NotFound(RESOURCE_NOT_FOUND.to_string()));
     };
+    if let Some(foreign) = first_foreign_block(pool, resource, blocks).await? {
+        return Err(foreign_block(Some(foreign), blocks));
+    }
 
     // The act's own order: a charter refuses before an erased resource does.
     let refused = |reason, detail: Option<ResourceErasureRefusalDetail>| BlockHistoryScrubSurvey {
@@ -410,10 +422,6 @@ pub async fn survey_block_history_scrub(
     }
     if state.erased {
         return Ok(refused(ResourceErasureRefusalReason::AlreadyErased, None));
-    }
-
-    if let Some(foreign) = first_foreign_block(pool, resource, blocks).await? {
-        return Err(foreign_block(Some(foreign), blocks));
     }
 
     let raw = sqlx::query_scalar!(
@@ -465,7 +473,8 @@ async fn scrub_state(pool: &PgPool, resource: ResourceId) -> ApiResult<Option<Sc
 }
 
 /// The first listed id, in the operator's order, that is not a block of `resource` — the act's
-/// own membership predicate, which the SQL survey does not apply (it skips such ids).
+/// own membership predicate. Both doors check it before anything else reads the resource's state:
+/// the SQL survey skips such ids, and the act raises them only after its refusals.
 async fn first_foreign_block(
     pool: &PgPool,
     resource: ResourceId,
