@@ -21,11 +21,11 @@
 //! test each there. What is owed *here* is one representative reader against every surface, which
 //! is a different claim and needs a different tier.
 //!
-//! ⚠️ **The CLI cases pass a bare UUID, deliberately.** `resolve_context_id_for_read` lists
-//! contexts client-side and matches locally, so a decorated `@owner/slug` naming a context the
-//! caller cannot see fails inside the CLI with *"not found among the contexts you can see"* and
-//! **never reaches the server** — testing the local resolver instead of the gate. `Uuid::parse_str`
-//! short-circuits that path, which is what puts the refusal on the wire.
+//! ⚠️ **The CLI cases pass a bare UUID, deliberately.** `resolve_context_id_for_read` resolves a
+//! decorated `@owner/slug` through `GET /api/contexts/resolve`, so a context the caller cannot
+//! see is refused there, at the resolver's read gate, and the rename route is never reached —
+//! testing the resolver instead of the rename gate. A bare UUID passes straight through to the
+//! rename route, which is what puts that route's refusal on the wire.
 //!
 //! No embedding work is inspected here, so this runs on plain `cargo make test-e2e`.
 

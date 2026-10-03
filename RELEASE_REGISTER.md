@@ -23,6 +23,28 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **The CLI's context-ref reads resolve through `GET /api/contexts/resolve` — refusal sentences change**
+  `resolve_context_id_for_read` (behind `temper context transfer|rename|delete|shape|
+  region-metrics|analytics|materialize|materialize-delta`, `graph … --in`, the data-artifact
+  shape commands' `--context` and the admin commands' context filters) stops listing every
+  visible context and filtering client-side; it parses the ref with the shared `parse_context_ref`
+  and lets the server resolve it, the same resolver every ref-accepting route uses. The warmup
+  staleness pre-flight resolves the same way, which makes its `@me` match exact (it previously
+  matched any `@`-owned context by slug, to avoid a profile round trip). A bare UUID still passes
+  straight through. What a CLI reader sees changes; the error kind does not, with one exception
+  named below. A context the caller cannot
+  read, or that does not exist, now reads `context not found or not readable (ref "<ref>")` (the
+  `@me/<slug>` form names the slug) where it read `context '<ref>' not found among the contexts
+  you can see` — still `api`; a malformed ref is refused with the parser's own sentence — still
+  `bad_request`, and the exception: a sigil-less `name/slug`, which was reported missing (`api`),
+  is now refused there (`bad_request`);
+  and a `+<team>/<slug>` from a non-member now reads `context ref "<ref>": you are not a member of
+  that team` where it read "not found". Who observes: CLI users and agents reading CLI errors.
+  User-visible: yes, in refusal wording only. Release relevance: signal-only.
+pr: self
+classes: behavioral
+surfaces: cli-stdout
+status: signal-only
 - **`GET /api/contexts/resolve` — a context ref resolved to its id, for the caller (the route-first half of the network door's teardown)**
   A new route, nothing changed beside it: `GET /api/contexts/resolve?context_ref=<ref>` answers
   `{ "context_id": <uuid> }` (`ContextResolution`) for `@me/<slug>`, `@<handle>/<slug>`,
