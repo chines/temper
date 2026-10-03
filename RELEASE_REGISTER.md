@@ -45,6 +45,26 @@ pr: self
 classes: behavioral
 surfaces: cli-stdout
 status: signal-only
+- **`desktop_client_id` on `AuthProvider` — the deployment names the desktop's own OAuth client; `login()` resolves the device id from the store it is handed**
+  The provider entry grows an optional `desktop_client_id` (`serde(default)`, skipped when
+  absent): where the deployment registers the desktop's own public client — an Auth0
+  application for the hosted instance, an `AS_CLIENTS` entry for self-hosted. The CLI never
+  reads it and there is no fallback to `client_id`: absence stays observable so a desktop
+  sign-in can refuse rather than present the CLI's client registration to a redirect that
+  was never registered for it. Alongside, `login()`'s device-id resolution moves off the
+  free no-arg disk read (`load_auth()`: env, then the global CLI auth file) onto the
+  `TokenStore` it is already handed — an empty `MemoryTokenStore` mints a fresh UUIDv7 and
+  persists it through that store, a populated one keeps its id, and a caller holding a
+  non-disk store never consults the global auth path. The CLI is unchanged: the no-arg
+  helper now delegates to the default `DiskTokenStore`, whose load carries the same
+  env-then-disk precedence. Who observes: nobody at runtime today — the field has no CLI
+  reader and the CLI's custody is the disk either way; the desktop consumer
+  (temper-contrib) reads the field and inherits clean device-id custody when it lands.
+  `docs/reference/config` re-renders with the field.
+pr: self
+classes: additive
+surfaces: schema, clients
+status: signal-only
 - **`GET /api/contexts/resolve` — a context ref resolved to its id, for the caller (the route-first half of the network door's teardown)**
   A new route, nothing changed beside it: `GET /api/contexts/resolve?context_ref=<ref>` answers
   `{ "context_id": <uuid> }` (`ContextResolution`) for `@me/<slug>`, `@<handle>/<slug>`,
