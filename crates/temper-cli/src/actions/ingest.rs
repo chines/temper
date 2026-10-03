@@ -1123,6 +1123,7 @@ mod tests {
             updated: chrono::Utc::now(),
             body_hash: None,
             ingest_state: Some(temper_core::types::resource::IngestState::Complete),
+            ingest_ended: None,
             body_storage: Some(temper_core::types::resource::BodyStorage::Derived),
             managed_meta: temper_core::types::managed_meta::ManagedMeta::default(),
             open_meta: None,

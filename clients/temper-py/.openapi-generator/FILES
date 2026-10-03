@@ -219,6 +219,7 @@ temper/generated/models/idp_revocation.py
 temper/generated/models/illegal_transition.py
 temper/generated/models/ingest_create_response.py
 temper/generated/models/ingest_delta.py
+temper/generated/models/ingest_ended.py
 temper/generated/models/ingest_payload.py
 temper/generated/models/ingest_state.py
 temper/generated/models/inherited_read_grant.py

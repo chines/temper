@@ -14,12 +14,12 @@ require 'date'
 require 'time'
 
 module Temper::Generated
-  class IngestState
-    IN_PROGRESS = "in_progress".freeze
-    COMPLETE = "complete".freeze
+  class IngestEnded
+    CANCELLED = "cancelled".freeze
+    ABANDONED = "abandoned".freeze
 
     def self.all_vars
-      @all_vars ||= [IN_PROGRESS, COMPLETE].freeze
+      @all_vars ||= [CANCELLED, ABANDONED].freeze
     end
 
     # Builds the enum from string
@@ -33,8 +33,8 @@ module Temper::Generated
     # @param [String] The enum value in the form of the string
     # @return [String] The enum value
     def build_from_hash(value)
-      return value if IngestState.all_vars.include?(value)
-      raise "Invalid ENUM value #{value} for class #IngestState"
+      return value if IngestEnded.all_vars.include?(value)
+      raise "Invalid ENUM value #{value} for class #IngestEnded"
     end
   end
 end

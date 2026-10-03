@@ -53,10 +53,9 @@ impl BodyStorage {
 /// The ledger is the state machine; this is its materialized current-state view, kept as a column so
 /// list/search can filter it with a cheap read instead of scanning events.
 ///
-/// Four values. `InProgress` is the only live non-final state; `Complete`, `Cancelled` and
-/// `Abandoned` are terminal. `Cancelled` and `Abandoned` are two distinct terminal states:
-/// `Cancelled` is set by an operator act (the block history scrub's `cancelled_ingest`), while
-/// `Abandoned` is a reaper's judgement that an ingest will not resume.
+/// Two wire values. `InProgress` is "the body is not whole": it covers an ingest still arriving and
+/// an ingest that ended before it finalized; [`IngestEnded`] says which, and names the reason.
+/// `Complete` is the whole body.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,40 +63,105 @@ impl BodyStorage {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum IngestState {
-    /// A segmented ingest has begun but not been finalized — the body is incomplete. Hidden from
-    /// list/search, still resumable and readable via `show`.
+    /// The body is not whole: a segmented ingest has begun and not been finalized, or the ingest
+    /// ended before it finalized (see [`IngestEnded`]). Hidden from list/search, still readable via
+    /// `show`.
     InProgress,
     /// The whole body is present: every atomic create, and every finalized segmented ingest.
     Complete,
-    /// Terminal: an operator act ended the ingest before it finalized. Set by the block history
-    /// scrub when `cancelled_ingest` is true; replay reads that field to reproduce this state.
-    Cancelled,
-    /// Terminal: a reaper judged the ingest will not resume. Distinct from `Cancelled`, which an
-    /// operator act sets.
-    Abandoned,
 }
 
 impl IngestState {
-    /// The canonical wire/DB string (matches the `ck_kb_resources_ingest_state` CHECK values).
+    /// The canonical wire string.
     pub fn as_str(self) -> &'static str {
         match self {
             IngestState::InProgress => "in_progress",
             IngestState::Complete => "complete",
-            IngestState::Cancelled => "cancelled",
-            IngestState::Abandoned => "abandoned",
         }
     }
 
-    /// Parse the DB/wire string. The `ck_kb_resources_ingest_state` CHECK constrains the column to
-    /// the four values above, so an unrecognized string is a schema/version violation, not ordinary input —
-    /// returned as `None` for the caller to handle rather than silently coerced.
+    /// Parse a wire string. This type parses the two wire values; the `ck_kb_resources_ingest_state`
+    /// column admits four (see [`IngestState::from_db`] for the projection of all of them). An
+    /// unrecognized string is a schema/version violation, not ordinary input — returned as `None`
+    /// for the caller to handle rather than silently coerced.
     pub fn from_wire(s: &str) -> Option<Self> {
         match s {
             "in_progress" => Some(IngestState::InProgress),
             "complete" => Some(IngestState::Complete),
-            "cancelled" => Some(IngestState::Cancelled),
-            "abandoned" => Some(IngestState::Abandoned),
             _ => None,
         }
+    }
+
+    /// Project a `kb_resources.ingest_state` column value onto the wire pair: the state, and the
+    /// reason when the ingest ended before its body was whole. `cancelled` and `abandoned` are
+    /// terminal DB states that read `in_progress` on the wire, with the reason in [`IngestEnded`].
+    /// `None` for a string the column does not admit.
+    pub fn from_db(s: &str) -> Option<(Self, Option<IngestEnded>)> {
+        match s {
+            "in_progress" => Some((IngestState::InProgress, None)),
+            "complete" => Some((IngestState::Complete, None)),
+            "cancelled" => Some((IngestState::InProgress, Some(IngestEnded::Cancelled))),
+            "abandoned" => Some((IngestState::InProgress, Some(IngestEnded::Abandoned))),
+            _ => None,
+        }
+    }
+}
+
+/// The terminal reason an ingest stopped before its body was whole. Present on a resource view only
+/// beside `ingest_state = in_progress`; the body is incomplete and nothing more will arrive.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum IngestEnded {
+    /// An operator act ended the ingest: the block history scrub, when its `cancelled_ingest` is
+    /// true.
+    Cancelled,
+    /// A reaper judged the ingest will not resume.
+    Abandoned,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_db_in_progress_is_in_progress_with_no_reason() {
+        assert_eq!(
+            IngestState::from_db("in_progress"),
+            Some((IngestState::InProgress, None))
+        );
+    }
+
+    #[test]
+    fn from_db_complete_is_complete_with_no_reason() {
+        assert_eq!(
+            IngestState::from_db("complete"),
+            Some((IngestState::Complete, None))
+        );
+    }
+
+    #[test]
+    fn from_db_cancelled_reads_in_progress_with_cancelled_reason() {
+        assert_eq!(
+            IngestState::from_db("cancelled"),
+            Some((IngestState::InProgress, Some(IngestEnded::Cancelled)))
+        );
+    }
+
+    #[test]
+    fn from_db_abandoned_reads_in_progress_with_abandoned_reason() {
+        assert_eq!(
+            IngestState::from_db("abandoned"),
+            Some((IngestState::InProgress, Some(IngestEnded::Abandoned)))
+        );
+    }
+
+    #[test]
+    fn from_db_rejects_a_string_the_column_does_not_admit() {
+        assert_eq!(IngestState::from_db("finished"), None);
+        assert_eq!(IngestState::from_db(""), None);
     }
 }

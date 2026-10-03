@@ -241,6 +241,7 @@ __all__ = [
     "IllegalTransition",
     "IngestCreateResponse",
     "IngestDelta",
+    "IngestEnded",
     "IngestPayload",
     "IngestState",
     "InheritedReadGrant",
@@ -697,6 +698,7 @@ from temper.generated.models.idp_revocation import IdpRevocation as IdpRevocatio
 from temper.generated.models.illegal_transition import IllegalTransition as IllegalTransition
 from temper.generated.models.ingest_create_response import IngestCreateResponse as IngestCreateResponse
 from temper.generated.models.ingest_delta import IngestDelta as IngestDelta
+from temper.generated.models.ingest_ended import IngestEnded as IngestEnded
 from temper.generated.models.ingest_payload import IngestPayload as IngestPayload
 from temper.generated.models.ingest_state import IngestState as IngestState
 from temper.generated.models.inherited_read_grant import InheritedReadGrant as InheritedReadGrant

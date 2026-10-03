@@ -20,7 +20,7 @@ from typing_extensions import Self
 
 class IngestState(str, Enum):
     """
-    A resource's ingest state — a **projection** of the append-only `kb_events` ledger (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag. The ledger is the state machine; this is its materialized current-state view, kept as a column so list/search can filter it with a cheap read instead of scanning events.  Four values. `InProgress` is the only live non-final state; `Complete`, `Cancelled` and `Abandoned` are terminal. `Cancelled` and `Abandoned` are two distinct terminal states: `Cancelled` is set by an operator act (the block history scrub's `cancelled_ingest`), while `Abandoned` is a reaper's judgement that an ingest will not resume.
+    A resource's ingest state — a **projection** of the append-only `kb_events` ledger (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag. The ledger is the state machine; this is its materialized current-state view, kept as a column so list/search can filter it with a cheap read instead of scanning events.  Two wire values. `InProgress` is \"the body is not whole\": it covers an ingest still arriving and an ingest that ended before it finalized; [`IngestEnded`] says which, and names the reason. `Complete` is the whole body.
     """
 
     """
@@ -28,8 +28,6 @@ class IngestState(str, Enum):
     """
     IN_PROGRESS = 'in_progress'
     COMPLETE = 'complete'
-    CANCELLED = 'cancelled'
-    ABANDONED = 'abandoned'
 
     @classmethod
     def from_json(cls, json_str: str) -> Self:

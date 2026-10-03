@@ -6450,6 +6450,12 @@ export interface components {
             watermark?: string | null;
         };
         /**
+         * @description The terminal reason an ingest stopped before its body was whole. Present on a resource view only
+         *     beside `ingest_state = in_progress`; the body is incomplete and nothing more will arrive.
+         * @enum {string}
+         */
+        IngestEnded: "cancelled" | "abandoned";
+        /**
          * @description Wire payload for POST /api/ingest — resource + pre-processed chunks.
          *
          *     The CLI performs extract → chunk → embed locally and sends everything
@@ -6516,13 +6522,12 @@ export interface components {
          *     The ledger is the state machine; this is its materialized current-state view, kept as a column so
          *     list/search can filter it with a cheap read instead of scanning events.
          *
-         *     Four values. `InProgress` is the only live non-final state; `Complete`, `Cancelled` and
-         *     `Abandoned` are terminal. `Cancelled` and `Abandoned` are two distinct terminal states:
-         *     `Cancelled` is set by an operator act (the block history scrub's `cancelled_ingest`), while
-         *     `Abandoned` is a reaper's judgement that an ingest will not resume.
+         *     Two wire values. `InProgress` is "the body is not whole": it covers an ingest still arriving and
+         *     an ingest that ended before it finalized; [`IngestEnded`] says which, and names the reason.
+         *     `Complete` is the whole body.
          * @enum {string}
          */
-        IngestState: "in_progress" | "complete" | "cancelled" | "abandoned";
+        IngestState: "in_progress" | "complete";
         /** @description An explicit context read-grant that survives the ownership flip — inherited residual reach. */
         InheritedReadGrant: {
             /** Format: uuid */
@@ -9096,6 +9101,7 @@ export interface components {
             doc_type_name: string;
             embedding_status?: null | components["schemas"]["EmbeddingStatus"];
             id: components["schemas"]["ResourceId"];
+            ingest_ended?: null | components["schemas"]["IngestEnded"];
             ingest_state?: null | components["schemas"]["IngestState"];
             is_active: boolean;
             kb_context_id?: null | components["schemas"]["ContextId"];

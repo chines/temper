@@ -19235,6 +19235,14 @@
           }
         }
       },
+      "IngestEnded": {
+        "type": "string",
+        "description": "The terminal reason an ingest stopped before its body was whole. Present on a resource view only\nbeside `ingest_state = in_progress`; the body is incomplete and nothing more will arrive.",
+        "enum": [
+          "cancelled",
+          "abandoned"
+        ]
+      },
       "IngestPayload": {
         "allOf": [
           {
@@ -19338,12 +19346,10 @@
       },
       "IngestState": {
         "type": "string",
-        "description": "A resource's ingest state — a **projection** of the append-only `kb_events` ledger\n(`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.\nThe ledger is the state machine; this is its materialized current-state view, kept as a column so\nlist/search can filter it with a cheap read instead of scanning events.\n\nFour values. `InProgress` is the only live non-final state; `Complete`, `Cancelled` and\n`Abandoned` are terminal. `Cancelled` and `Abandoned` are two distinct terminal states:\n`Cancelled` is set by an operator act (the block history scrub's `cancelled_ingest`), while\n`Abandoned` is a reaper's judgement that an ingest will not resume.",
+        "description": "A resource's ingest state — a **projection** of the append-only `kb_events` ledger\n(`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.\nThe ledger is the state machine; this is its materialized current-state view, kept as a column so\nlist/search can filter it with a cheap read instead of scanning events.\n\nTwo wire values. `InProgress` is \"the body is not whole\": it covers an ingest still arriving and\nan ingest that ended before it finalized; [`IngestEnded`] says which, and names the reason.\n`Complete` is the whole body.",
         "enum": [
           "in_progress",
-          "complete",
-          "cancelled",
-          "abandoned"
+          "complete"
         ]
       },
       "InheritedReadGrant": {
@@ -23719,6 +23725,17 @@
           },
           "id": {
             "$ref": "#/components/schemas/ResourceId"
+          },
+          "ingest_ended": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IngestEnded",
+                "description": "Why the ingest stopped. Present only when the ingest ended before its body was whole\n(`ingest_state` then reads `in_progress`); absent otherwise."
+              }
+            ]
           },
           "ingest_state": {
             "oneOf": [

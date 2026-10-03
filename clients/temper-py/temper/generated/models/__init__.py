@@ -197,6 +197,7 @@ from temper.generated.models.idp_revocation import IdpRevocation
 from temper.generated.models.illegal_transition import IllegalTransition
 from temper.generated.models.ingest_create_response import IngestCreateResponse
 from temper.generated.models.ingest_delta import IngestDelta
+from temper.generated.models.ingest_ended import IngestEnded
 from temper.generated.models.ingest_payload import IngestPayload
 from temper.generated.models.ingest_state import IngestState
 from temper.generated.models.inherited_read_grant import InheritedReadGrant

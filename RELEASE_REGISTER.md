@@ -23,6 +23,19 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **`ResourceView` gains `ingest_ended` — a resource whose ingest ended before its body was whole (`cancelled` by the block history scrub, or `abandoned`)**
+  `ingest_state` keeps its two wire values, and an ended ingest reads `in_progress` there (it is
+  not whole, and it stays hidden from list and search as an in-progress one is), with the new
+  optional `ingest_ended` (`cancelled` | `abandoned`, skipped when absent) naming the reason. The
+  DB column gains the two terminal states (migration `20261003000110`); a finalize or an append on
+  an ended ingest answers 409 not-resumable (SQLSTATE TF004) where it previously would have
+  continued. Who observes: API/SDK/CLI readers of `show` on a resource whose ingest a scrub
+  cancelled; nothing sets either state before the scrub ships. User-visible: yes, on such
+  resources only. Release relevance: additive.
+pr: self
+classes: additive, behavioral
+surfaces: http, clients, schema
+status: signal-only
 - **The CLI's context-ref reads resolve through `GET /api/contexts/resolve` — refusal sentences change**
   `resolve_context_id_for_read` (behind `temper context transfer|rename|delete|shape|
   region-metrics|analytics|materialize|materialize-delta`, `graph … --in`, the data-artifact
