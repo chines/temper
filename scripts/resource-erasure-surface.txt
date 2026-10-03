@@ -45,7 +45,9 @@
 #   * Rows. A line is checked at column grain: the D2 function has a statement that writes the column
 #     with an erasure value (a constant, or an 'erased…' literal joined to an id). Which rows that
 #     statement reaches is the act's own witnesses' job. Where a handled column keeps rows tied to R
-#     that the act leaves, the line's note says so.
+#     that the act leaves, the line's note says so. The check reads statements, not control flow:
+#     an UPDATE under a branch never taken, after a RETURN, or with a WHERE that matches nothing
+#     still binds.
 #   * Derivation without reference. A vector computed from R's content is tied to R by no key: a
 #     region's centroid (a mean over its members) and a context's telos_centroid (a mean over its
 #     goals). The walk reaches both tables by other paths, so both have lines, but nothing structural

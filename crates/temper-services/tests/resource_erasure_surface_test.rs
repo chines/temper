@@ -95,7 +95,7 @@ SELECT c.table_name || '.' || c.column_name
       CROSS JOIN LATERAL regexp_matches(def.shape, '''([a-z_][a-z0-9_]*)''', 'g') m
       WHERE k.contype = 'c' AND k.conrelid = (quote_ident(c.table_name::text))::regclass
         AND def.shape ~ ('^CHECK' || c.column_name
-                         || '=(ANYARRAY\[(''[a-z_][a-z0-9_]*'',?)+\]|''[a-z_][a-z0-9_]*'')$')
+                         || '=(ANYARRAY\[(''[a-z_][a-z0-9_]*'',)*''[a-z_][a-z0-9_]*''\]|''[a-z_][a-z0-9_]*'')$')
         AND m[1] IN (SELECT relname FROM pg_class
                       WHERE relnamespace = 'public'::regnamespace AND relkind IN ('r', 'p')))
  ORDER BY 1
@@ -251,8 +251,8 @@ async fn redaction_body(pool: &PgPool) -> String {
 
 /// Lowercased tokens of `sql`. `--` and `/* */` comments are dropped; a single-quoted literal
 /// (with `''` escapes) is ONE token, kept verbatim, so text inside a RAISE message can never read
-/// as a statement. `,` `=` `(` `)` `;` are tokens of their own, so `SET a = 1, b = 2;` reads as
-/// `set a = 1 , b = 2 ;`.
+/// as a statement. `,` `=` `(` `)` `;` `::` `||` are tokens of their own, so `SET a = 1, b = 2;`
+/// reads as `set a = 1 , b = 2 ;` and `'{}'::jsonb||x` as `'{}' :: jsonb || x`, spaced or not.
 fn tokens(sql: &str) -> Vec<String> {
     let chars: Vec<char> = sql.chars().collect();
     let mut out = Vec::new();
@@ -296,6 +296,10 @@ fn tokens(sql: &str) -> Vec<String> {
             lit.push('\'');
             out.push(lit);
             i += 1;
+        } else if (ch == ':' && next == Some(':')) || (ch == '|' && next == Some('|')) {
+            flush(&mut cur, &mut out);
+            out.push(format!("{ch}{ch}"));
+            i += 2;
         } else if ch.is_whitespace() || ",=();".contains(ch) {
             flush(&mut cur, &mut out);
             if !ch.is_whitespace() {
@@ -314,28 +318,42 @@ fn tokens(sql: &str) -> Vec<String> {
 /// The constant erasure values: NULL, an empty string or object, and the property sentinel.
 const ERASURE_CONSTANTS: &[&str] = &["null", "''", "'{}'", "'\"erased\"'"];
 
+fn is_ident(s: &str) -> bool {
+    s.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
 /// Whether `token` names the row's own identity or the act's resource: `p_resource`, `<alias>.id`
-/// or a key number `<alias>.n`, optionally cast to text. These are what a sentinel may carry.
+/// or a key number `<alias>.n`. These are what a sentinel may carry.
 fn is_identity(token: &str) -> bool {
-    let bare = token.strip_suffix("::text").unwrap_or(token);
-    bare == "p_resource"
-        || bare
+    token == "p_resource"
+        || token
             .split_once('.')
-            .is_some_and(|(alias, col)| !alias.is_empty() && matches!(col, "id" | "n"))
+            .is_some_and(|(alias, col)| is_ident(alias) && matches!(col, "id" | "n"))
 }
 
 /// Whether a whole SET value expression erases. Two shapes only:
 ///
 /// - a constant from [`ERASURE_CONSTANTS`], optionally cast (`'{}'::jsonb`);
-/// - an `'erased…'` literal joined by `||` to an identity (`'erased-' || r.id::text`).
+/// - an `'erased…'` literal joined by `||` to an identity, optionally cast to text
+///   (`'erased-' || r.id::text`).
 ///
 /// Anything else is not an erasure, however it starts: `'erased-' || r.title` keeps the title,
 /// `'' || content` keeps the content, and `'{}'::jsonb || payload` keeps the payload.
 fn is_erasure_value(expr: &[String]) -> bool {
+    let constant = |v: &String| ERASURE_CONSTANTS.contains(&v.as_str());
+    let sentinel = |v: &String, op: &String, id: &String| {
+        v.starts_with("'erased") && op == "||" && is_identity(id)
+    };
+    // A three-token value is EITHER a cast constant or an uncast sentinel. Both shapes are tried:
+    // two `[a, b, c]` match arms would make the second unreachable.
     match expr {
-        [v] => ERASURE_CONSTANTS.contains(&v.as_str()),
-        [v, cast] => ERASURE_CONSTANTS.contains(&v.as_str()) && cast.starts_with("::"),
-        [v, op, id] => v.starts_with("'erased") && op == "||" && is_identity(id),
+        [v] => constant(v),
+        [a, b, c] => (constant(a) && b == "::" && is_ident(c)) || sentinel(a, b, c),
+        [v, op, id, cast, ty] => sentinel(v, op, id) && cast == "::" && ty == "text",
         _ => false,
     }
 }
@@ -359,8 +377,8 @@ fn value_expr(t: &[String], start: usize) -> &[String] {
 }
 
 /// Every value expression `body` assigns to `table.column` in an UPDATE of `table`. An assignment
-/// target is a token right after `set` or `,`, right before `=`, within the statement (up to its
-/// `;`).
+/// target is a token at paren depth 0, inside the SET list (after `set`, before the `from` /
+/// `where` / `returning` / `;` that ends it), right after `set` or `,` and right before `=`.
 fn assignments<'a>(t: &'a [String], key: &str) -> Vec<&'a [String]> {
     let Some((table, column)) = key.split_once('.') else {
         return Vec::new();
@@ -371,11 +389,16 @@ fn assignments<'a>(t: &'a [String], key: &str) -> Vec<&'a [String]> {
             continue;
         }
         let mut seen_set = false;
+        let mut depth = 0usize;
         for j in i + 2..t.len() {
             match t[j].as_str() {
                 ";" => break,
-                "set" => seen_set = true,
+                "(" => depth += 1,
+                ")" => depth = depth.saturating_sub(1),
+                "set" if depth == 0 => seen_set = true,
+                "from" | "where" | "returning" if depth == 0 && seen_set => break,
                 tok if seen_set
+                    && depth == 0
                     && tok == column
                     && matches!(t[j - 1].as_str(), "set" | ",")
                     && t.get(j + 1).is_some_and(|x| x == "=") =>
@@ -391,12 +414,8 @@ fn assignments<'a>(t: &'a [String], key: &str) -> Vec<&'a [String]> {
 
 /// Whether `expr` reads `column`, bare or qualified: an assignment of the column's own value.
 fn reads_column(expr: &[String], column: &str) -> bool {
-    expr.iter().any(|tok| {
-        tok == column
-            || tok
-                .rsplit_once('.')
-                .is_some_and(|(_, col)| col.split("::").next() == Some(column))
-    })
+    expr.iter()
+        .any(|tok| tok == column || tok.rsplit_once('.').is_some_and(|(_, col)| col == column))
 }
 
 fn deletes_from(t: &[String], table: &str) -> bool {
@@ -405,16 +424,26 @@ fn deletes_from(t: &[String], table: &str) -> bool {
 }
 
 /// Whether `body` does what `disposition` claims for `key`.
+///
+/// A `handled` column must be assigned at least once and EVERY assignment must erase, so a later
+/// UPDATE that writes the original back unbinds it. A `repointed` column needs a placing
+/// assignment to its via column: one that neither reads the column (a no-op) nor is a bare
+/// identity (the act's park pass, `source_id = bp.id`, which parks a row on its own id before the
+/// place pass) — and the DELETE.
 fn binds(body: &str, key: &str, disposition: &Disposition) -> bool {
     let t = tokens(body);
     match disposition {
-        Disposition::Handled { .. } => assignments(&t, key).into_iter().any(is_erasure_value),
+        Disposition::Handled { .. } => {
+            let values = assignments(&t, key);
+            !values.is_empty() && values.into_iter().all(is_erasure_value)
+        }
         Disposition::Repointed { via, .. } => {
             let via_column = via.split_once('.').map_or(via.as_str(), |(_, c)| c);
-            assignments(&t, via)
-                .into_iter()
-                .any(|expr| !expr.is_empty() && !reads_column(expr, via_column))
-                && deletes_from(&t, table_of(key))
+            assignments(&t, via).into_iter().any(|expr| {
+                !expr.is_empty()
+                    && !reads_column(expr, via_column)
+                    && !matches!(expr, [only] if is_identity(only))
+            }) && deletes_from(&t, table_of(key))
         }
         Disposition::OutOfScope => true,
     }
@@ -659,8 +688,10 @@ async fn reverting_the_joint_read_fixes_fails_the_fence(pool: PgPool) {
 /// One probe per way a CHECK can fail. The guard has two conjuncts, the enumeration shape and "at
 /// least one literal names a public table", and each probe is excluded by exactly one: no CHECK at
 /// all; a CHECK with a second column in it; a pattern; a negation; `IS DISTINCT FROM` (each of
-/// these names a real table, so only the shape excludes it); and a well-shaped enumeration of a
-/// name that is no table (only the public-table conjunct excludes it).
+/// these names a real table, so only the shape excludes it); a list whose first value has an
+/// embedded quote, `'kb_resources''x'`, which a looser list pattern reads as two items, one of them
+/// a table; and a well-shaped
+/// enumeration of a name that is no table (only the public-table conjunct excludes it).
 #[sqlx::test(migrator = "temper_services::MIGRATOR")]
 async fn an_unenumerated_discriminator_fails_the_guard(pool: PgPool) {
     assert!(
@@ -678,6 +709,8 @@ async fn an_unenumerated_discriminator_fails_the_guard(pool: PgPool) {
              owner_table text CHECK (owner_table <> 'kb_resources'), owner_id uuid)",
         "CREATE TABLE erasure_fence_probe_distinct (
              owner_table text CHECK (owner_table IS DISTINCT FROM 'kb_resources'), owner_id uuid)",
+        "CREATE TABLE erasure_fence_probe_quoted (
+             owner_table text CHECK (owner_table IN ('kb_resources''x', 'kb_no_such_table')), owner_id uuid)",
         "CREATE TABLE erasure_fence_probe_nontable (
              owner_table text CHECK (owner_table IN ('kb_no_such_table')), owner_id uuid)",
     ] {
@@ -695,6 +728,7 @@ async fn an_unenumerated_discriminator_fails_the_guard(pool: PgPool) {
             "erasure_fence_probe_nontable.owner_table".to_string(),
             "erasure_fence_probe_paired.owner_table".to_string(),
             "erasure_fence_probe_pattern.owner_table".to_string(),
+            "erasure_fence_probe_quoted.owner_table".to_string(),
         ]
     );
 }
@@ -786,4 +820,90 @@ fn the_binding_reads_erasing_assignments_not_mentions() {
     ] {
         assert!(!binds(body, "kb_remote_sources.uri", &repointed), "{why}");
     }
+}
+
+/// The binding's remaining rules, each case excluded by exactly the one named beside it.
+#[test]
+fn the_binding_is_not_fooled_by_spacing_restoring_or_parking() {
+    let handled = Disposition::Handled { step: "9".into() };
+    let bound = |sql: &str, key: &str| binds(sql, key, &handled);
+
+    assert!(
+        bound(
+            "UPDATE kb_resources r SET title = 'erased-'||r.id::text;",
+            "kb_resources.title"
+        ),
+        "an erasing sentinel binds however it is spaced"
+    );
+    assert!(
+        bound(
+            "UPDATE kb_ingestion_records SET source_uri = 'erased:' || p_resource;",
+            "kb_ingestion_records.source_uri"
+        ),
+        "an uncast sentinel binds: a three-token value is tried as both a cast and a sentinel"
+    );
+    for (sql, key, why) in [
+        (
+            "UPDATE kb_data_artifact_content SET content = '{}'::jsonb||content;",
+            "kb_data_artifact_content.content",
+            "a merge glued to its cast (operator tokens)",
+        ),
+        (
+            "UPDATE kb_resources r SET title = 'erased-' || title||r.id;",
+            "kb_resources.title",
+            "the original glued in front of an id (operator tokens)",
+        ),
+        (
+            "UPDATE kb_resources r SET title = 'erased-' || title->>k.id;",
+            "kb_resources.title",
+            "an id read out of the original value (the alias must be an identifier)",
+        ),
+        (
+            "UPDATE kb_resources r SET title = 'x-' || r.id;",
+            "kb_resources.title",
+            "a literal that is not an 'erased' sentinel",
+        ),
+        (
+            "UPDATE kb_resources r SET title = 'erased-' + r.id;",
+            "kb_resources.title",
+            "a join that is not ||",
+        ),
+        (
+            "UPDATE kb_resources r SET title = 'erased-' || r.id::varchar;",
+            "kb_resources.title",
+            "a sentinel cast to something other than text",
+        ),
+        (
+            "UPDATE kb_resources r SET title = 'erased-' || r.id::text;
+             UPDATE kb_resources r SET title = h.title FROM h;",
+            "kb_resources.title",
+            "a later UPDATE writing the original back (every assignment must erase)",
+        ),
+        (
+            "UPDATE kb_chunk_content SET content_hash = content_hash RETURNING id, content = '';",
+            "kb_chunk_content.content",
+            "a comparison after RETURNING (targets end with the SET list)",
+        ),
+        (
+            "UPDATE kb_chunk_content SET content_hash = coalesce(x, content = '');",
+            "kb_chunk_content.content",
+            "a comparison inside parentheses (targets are at depth 0)",
+        ),
+    ] {
+        assert!(!bound(sql, key), "{key}: {why} is not an erasure");
+    }
+
+    let repointed = Disposition::Repointed {
+        step: "9".into(),
+        via: "kb_block_provenance.source_id".into(),
+    };
+    assert!(
+        !binds(
+            "UPDATE kb_block_provenance bp SET source_id = bp.id;
+             DELETE FROM kb_remote_sources r WHERE r.id = v;",
+            "kb_remote_sources.uri",
+            &repointed
+        ),
+        "the park pass alone (a bare identity) leaves provenance on its own ids: no place pass"
+    );
 }
