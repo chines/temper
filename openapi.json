@@ -5616,6 +5616,80 @@
         "x-apidog-folder": "Reference/API Reference/Contexts"
       }
     },
+    "/api/contexts/resolve": {
+      "parameters": [
+        {
+          "name": "X-Temper-Surface",
+          "in": "header",
+          "description": "The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects.",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "sdk"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "Contexts"
+        ],
+        "summary": "Resolve a context ref to its id",
+        "description": "The caller's own visibility bounds the answer: a context the caller cannot read answers\nexactly as one that does not exist (uniform 404, no existence oracle). The resolution is\n[`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so\neach ref form keeps the refusal it has everywhere else.",
+        "operationId": "resolve_context",
+        "parameters": [
+          {
+            "name": "context_ref",
+            "in": "query",
+            "description": "The context ref to resolve: `@me/<slug>`, `@<handle>/<slug>`, `+<team>/<slug>`, or a bare\nUUID. One grammar — `temper_core::context_ref::parse_context_ref`, the parser the CLI and\nthe MCP tools use.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ref resolved to a context the caller can read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextResolution"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed context ref (the parser's sentence)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Context not found or not readable (uniform — no existence oracle)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ],
+        "x-apidog-folder": "Reference/API Reference/Contexts"
+      }
+    },
     "/api/contexts/{id}": {
       "parameters": [
         {
@@ -17356,6 +17430,18 @@
           },
           "residual": {
             "$ref": "#/components/schemas/ResidualGroups"
+          }
+        }
+      },
+      "ContextResolution": {
+        "type": "object",
+        "description": "Response of `GET /api/contexts/resolve` — a context ref resolved to its id, for the caller.\n\nDeliberately just the id: a caller that holds a ref (`@me/<slug>`, `@<handle>/<slug>`,\n`+<team>/<slug>`, or a bare UUID) and needs to address one of the id-keyed\n`/api/contexts/{id}/…` routes resolves once here, then calls the route it wanted. Anything\nmore about the context is `GET /api/contexts/{id}`'s to answer.",
+        "required": [
+          "context_id"
+        ],
+        "properties": {
+          "context_id": {
+            "$ref": "#/components/schemas/ContextId"
           }
         }
       },
