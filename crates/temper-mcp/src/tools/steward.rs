@@ -1,20 +1,40 @@
 //! Team-self-cognition steward tools — read the ingest delta, advance the watermark (T4a).
 //!
-//! `steward_ingest_delta` is a service-direct read (its access gate is
-//! `anchor_readable_by_profile` inside the service); `steward_advance_watermark` is a write that
-//! dispatches through `DbBackend` — the same path the HTTP handler uses. The cogmap is a decorated
-//! ref (a UUID or the `slug-<uuid>` form) resolved via `parse_ref`.
+//! Execution crosses the DEPLOYED API over the wire (beat 5 — the last family off the
+//! direct binding): `steward_ingest_delta` forwards to `GET /api/steward/{cogmap}/delta`
+//! and `steward_advance_watermark` to `POST /api/steward/{cogmap}/watermark`
+//! (`temper-api/src/handlers/steward.rs`), as per-request temper-client relays built from
+//! the request's `Parts`. The routes make the identical service/backend calls the direct
+//! binding made — `steward_service::ingest_delta` (its `anchor_readable_by_profile` gate
+//! inside) and `DbBackend::advance_steward_watermark` (auth-before-write inside) — so the
+//! gates are unchanged; they simply run at the API, behind its Level 1 + 2.
+//!
+//! The cogmap is a decorated ref (a UUID or the `slug-<uuid>` form) parsed MCP-locally to
+//! its trailing UUID via `parse_ref` — a pure parse, no read, so not a retained resolver.
+//! The advance's `origin` is no longer this tool's to stamp: the route takes it from the
+//! request's resolved surface, which the relay's trusted carrier makes `@mcp`.
+//!
+//! # Declared parity delta (per the register's G3c delta format)
+//!
+//! - **NotFound prefix drops**: the direct map prefixed `{action}: ` on both tools' NotFound
+//!   arms (the delta's unreadable/absent cogmap; the advance's cogmap exit and its
+//!   ingest-window exit); the door's `ClientError::NotFound` carries the server's own
+//!   sentence, and the door does not re-apply a prefix the direct tool applied. Kind
+//!   (`invalid_params`) and gate identical; the advance's two NotFound exits stay
+//!   distinguishable by their sentences.
+//!
+//! NOT a delta: the advance's disclosing 403 (`ForbiddenDetail`) keeps the direct face
+//! byte-for-byte — `{action}: ` prefix, the backend's sentence, INVALID_REQUEST — per the
+//! reblock family's precedent. The terse `Forbidden` arm is kept for arm-completeness; this
+//! backend only refuses with the detailed variant.
 
 use rmcp::model::CallToolResult;
 
-use temper_core::error::TemperError;
-use temper_core::types::ids::{CogmapId, ProfileId};
+use temper_client::error::ClientError;
 use temper_core::types::steward::{StewardAdvanceWatermarkInput, StewardDeltaInput};
-use temper_services::backend::DbBackend;
-use temper_services::services::steward_service;
-use temper_workflow::operations::{AdvanceStewardWatermark, Backend, Surface};
+use uuid::Uuid;
 
-use crate::service::TemperMcpService;
+use crate::service::{api_error_cause, AcrossAuth, TemperMcpService};
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -22,25 +42,23 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
+/// Client errors into rmcp errors, in the G3c/G3d/G4 mapping idiom (see the module header
+/// for the declared delta). The deployment's refusal kinds ride `AcrossAuth` before this.
+fn map_err(e: ClientError, action: &str) -> rmcp::ErrorData {
     match e {
-        // Preserve the NotFound payload — the message already names *which* thing was not found
-        // ("cognitive map {id} not found" vs "event {id} is not in cognitive map {id}'s ingest
-        // window"). Collapsing both to a fixed "cognitive map not found" masked a real event failure
-        // as a cogmap failure (advance_steward_watermark has two distinct NotFound exits: the cogmap
-        // gate and the ingest-window check on the target event).
-        TemperError::NotFound(msg) => {
-            rmcp::ErrorData::invalid_params(format!("{action}: {msg}"), None)
-        }
-        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
-        // A refusal that named the capability it withheld — carry the gate's own sentence. The
-        // terse arm below stays exactly as it was, for the caller who may not even read the subject.
-        TemperError::ForbiddenDetail(msg) => rmcp::ErrorData::new(
+        ClientError::NotFound { message } => rmcp::ErrorData::invalid_params(message, None),
+        ClientError::Server {
+            status: 400,
+            message,
+        } => rmcp::ErrorData::invalid_params(api_error_cause(&message).to_string(), None),
+        // A refusal that named the capability it withheld — carry the gate's own sentence,
+        // under the direct binding's prefix and kind.
+        ClientError::ForbiddenDetail { message } => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
-            format!("{action}: {msg}"),
+            format!("{action}: {message}"),
             None,
         ),
-        TemperError::Forbidden => rmcp::ErrorData::new(
+        ClientError::Forbidden => rmcp::ErrorData::new(
             rmcp::model::ErrorCode::INVALID_REQUEST,
             format!("{action}: cannot author this cognitive map"),
             None,
@@ -49,30 +67,27 @@ fn map_err(e: TemperError, action: &str) -> rmcp::ErrorData {
     }
 }
 
-fn parse_cogmap(s: &str) -> Result<CogmapId, rmcp::ErrorData> {
-    let uuid = temper_workflow::operations::parse_ref(s)
+fn parse_cogmap(s: &str) -> Result<Uuid, rmcp::ErrorData> {
+    Ok(temper_workflow::operations::parse_ref(s)
         .map_err(|e| rmcp::ErrorData::invalid_params(format!("bad cogmap ref: {e}"), None))?
-        .0;
-    Ok(CogmapId::from(uuid))
+        .0)
 }
 
 // ── Tool handlers ──────────────────────────────────────────────────────────────
 
 pub async fn steward_ingest_delta(
     svc: &TemperMcpService,
-    authed: temper_services::auth::AuthenticatedProfile,
+    parts: &axum::http::request::Parts,
     input: StewardDeltaInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap = parse_cogmap(&input.cogmap)?;
 
-    let delta = steward_service::ingest_delta(
-        &svc.api_state.pool,
-        ProfileId::from(authed.profile().id),
-        cogmap,
-        input.threshold,
-    )
-    .await
-    .map_err(|e| map_err(TemperError::from(e), "steward_ingest_delta"))?;
+    let delta = svc
+        .relay_client(parts)?
+        .steward()
+        .delta(cogmap, input.threshold)
+        .await
+        .across_auth(|e| map_err(e, "steward_ingest_delta"))?;
 
     Ok(CallToolResult::success(vec![
         rmcp::model::ContentBlock::text(to_text(&delta)),
@@ -81,27 +96,22 @@ pub async fn steward_ingest_delta(
 
 pub async fn steward_advance_watermark(
     svc: &TemperMcpService,
-    authed: temper_services::auth::AuthenticatedProfile,
+    parts: &axum::http::request::Parts,
     input: StewardAdvanceWatermarkInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let cogmap = parse_cogmap(&input.cogmap)?;
 
-    let cmd = AdvanceStewardWatermark {
-        cogmap,
-        event_id: input.event_id,
-        boundary_fingerprint: input.boundary_fingerprint,
-        origin: Surface::Mcp,
-    };
-
-    let backend = DbBackend::with_proof(svc.api_state.pool.clone(), &authed);
-    let out = backend
-        .advance_steward_watermark(cmd)
-        .await
-        .map_err(|e| map_err(e, "steward_advance_watermark"))?;
-
     // Render the cursors AS STORED. The agent needs to see which of its two optional inputs the
-    // server filled in for it — re-assembling the ack from `input` would hide exactly that.
+    // server filled in for it — the route's ack is built from what the UPDATE stored, and
+    // re-assembling it from `input` here would hide exactly that.
+    let ack = svc
+        .relay_client(parts)?
+        .steward()
+        .advance_watermark(cogmap, input.event_id, input.boundary_fingerprint)
+        .await
+        .across_auth(|e| map_err(e, "steward_advance_watermark"))?;
+
     Ok(CallToolResult::success(vec![
-        rmcp::model::ContentBlock::text(to_text(&out.value)),
+        rmcp::model::ContentBlock::text(to_text(&ack)),
     ]))
 }
