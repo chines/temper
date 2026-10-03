@@ -23,6 +23,33 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **Beat 5: the steward pair crosses the network door — `steward_ingest_delta` and `steward_advance_watermark` forward to `/api/steward`; no MCP tool executes on the direct binding**
+  The last two direct handlers stop executing in-process and forward to
+  `GET /api/steward/{cogmap}/delta` and `POST /api/steward/{cogmap}/watermark` as
+  temper-client relays (`StewardClient`) — caller's bearer re-issued, service credential +
+  `mcp` carrier as default headers, refusals mapped through the one `AcrossAuth` idiom. The
+  routes make the identical calls the direct binding made, so the read gate and the
+  auth-before-write gate are unchanged and now run behind the API's Level 1 + 2. Tool names,
+  schemas, descriptions byte-identical (the declaration witness holds; the steward skill recipe
+  test untouched). The cogmap ref parse stays MCP-local and pure (no read). ONE DECLARED PARITY
+  DELTA (the G3c format; pinned green against the direct binding first, flipped in the swap
+  commit, named in the tool module's and the parity suite's headers): the NotFound prefix
+  (`steward_ingest_delta: ` / `steward_advance_watermark: `) drops for the server's bare
+  sentence on three faces — the delta's unreadable/absent cogmap, the advance's cogmap exit,
+  and its ingest-window exit; kind and gate identical, the two advance exits still
+  distinguishable, unreadable still indistinguishable from absent. NOT a delta, pinned
+  unchanged: the disclosing 403 keeps its prefix, sentence and kind. Attribution: neither act
+  writes a ledger row (the advance moves two cursor columns and completes the workflow job;
+  its command's `origin` is unread), so the family's witness pins the trusted path (both acts'
+  carriers honored — bite-proven by refusing the carrier in `relay_trust`) and that an advance
+  emits no `kb_events` row. A dead relay base URL reddens every wire-reaching face — the door
+  is the only path. Who observes: an MCP-calling agent, chiefly the deployed steward runtime —
+  three not-found messages lose their tool-name prefix; nothing else changes. User-visible:
+  no. Release relevance: signal-only.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
 - **Auth0-fronted instances advertise themselves as the RFC 8414 `issuer`**
   `GET /.well-known/oauth-authorization-server` on an instance without `AS_ISSUER` answers
   `issuer: "<MCP_BASE_URL>/"` where it answered the Auth0 tenant domain. The document's shape and

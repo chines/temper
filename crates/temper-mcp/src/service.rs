@@ -7,11 +7,13 @@
 //! token and maps `AuthzError` to rmcp (see `map_authz_error`).
 //!
 //! The service carries NO auth state: the identity a request acts under exists only
-//! as the value the gate returns. `ensure_profile_from_parts` resolves the profile
-//! and hands it back; each direct tool handler extracts the HTTP `Parts` from rmcp's
-//! `Extension`, resolves the profile at the top of the method, and passes it down as
-//! a parameter. A profile that crossed between requests is not a bug to guard — the
-//! compiler makes it unrepresentable.
+//! as a per-request value. Every tool handler extracts the HTTP `Parts` from rmcp's
+//! `Extension` and hands them to its tools module, which forwards the caller's bearer
+//! across the network door; Level 1 + 2 run at the API. `ensure_profile_from_parts`
+//! survives only for the in-process context-ref resolution (`context_anchor` in the
+//! cognitive_maps and reblock modules), which hands the profile it resolves straight
+//! back. A profile that crossed between requests is not a bug to guard — the compiler
+//! makes it unrepresentable.
 
 use rmcp::{
     handler::server::{common::Extension, wrapper::Parameters},
@@ -67,9 +69,9 @@ pub fn shared_relay_pool() -> reqwest::Client {
 
 /// An [`McpConfig`] with the relay OFF — no base URL, no service credential.
 ///
-/// The e2e suites that exercise the DIRECT-binding families (everything not yet
-/// through the door) build their service with this: those tests never forward, so a
-/// relay-less config is their honest shape, and an accidental forwarding attempt
+/// The e2e suites that drive the in-process auth seam itself (`ensure_profile_from_parts`,
+/// with no tool dispatch) build their service with this: those tests never forward, so
+/// a relay-less config is their honest shape, and an accidental forwarding attempt
 /// answers the typed refuse-to-forward error instead of half-working.
 pub fn relay_off_config() -> McpConfig {
     McpConfig {
@@ -740,7 +742,7 @@ impl TemperMcpService {
         tools::ingest::segmented_ingest(self, &parts, input).await
     }
 
-    // ── Steward (unchanged, scoped descriptions) ───────────────────────
+    // ── Steward (scoped descriptions; crosses the network door — beat 5) ──
 
     #[tool(
         description = "This tool is for the team-self-cognition steward agent. If you are not running a steward cycle, you do not need this tool. Read a team-self-cognition cogmap's ingest delta: how many new resources + events have landed in the team's contexts since the steward's watermark, and whether that clears the threshold (i.e. the steward should run)."
@@ -750,8 +752,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardDeltaInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let authed = self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_ingest_delta(self, authed, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::steward::steward_ingest_delta(self, &parts, input).await
     }
 
     #[tool(
@@ -762,8 +765,9 @@ impl TemperMcpService {
         Parameters(input): Parameters<temper_core::types::steward::StewardAdvanceWatermarkInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let authed = self.ensure_profile_from_parts(&parts).await?;
-        tools::steward::steward_advance_watermark(self, authed, input).await
+        // The network door: Level 1 + 2 execute at the API on the caller's bearer;
+        // post-edge refusals are mapped arm-for-arm from the preserved bodies.
+        tools::steward::steward_advance_watermark(self, &parts, input).await
     }
 
     #[tool(
@@ -1886,23 +1890,22 @@ mod tests {
         );
     }
 
-    /// **Every `#[tool]` method must authenticate before dispatching — one gate per binding.**
+    /// **Every `#[tool]` method crosses the network door — and none gates in-process.**
     ///
-    /// The MCP surface authenticates per-request. Under the network door there are TWO
-    /// disciplines, per binding, and this gate holds each tool to its own:
+    /// The MCP surface authenticates per-request. Every family now dispatches through its
+    /// tools module, handing it the request's `Parts`; the module calls
+    /// `svc.relay_client(parts)` and the API's own auth middleware performs Level 1 + 2 on
+    /// the caller's bearer, with the post-edge refusals mapped arm-for-arm from the
+    /// preserved bodies (`map_post_edge_auth`). The gate is the wire crossing itself; what
+    /// this test asserts is that the Parts reach the dispatch (no bearer ⇒ no forward).
     ///
-    /// - **Direct-binding families** (still calling shared services through `api_state`)
-    ///   call `ensure_profile_from_parts` before dispatching — Level 1 + 2 run HERE, in
-    ///   the MCP function. A method that skips it compiles fine and is advertised by the
-    ///   router; it just runs unauthenticated, silently.
-    /// - **Network-door families** (resources, search + query so far; every family on
-    ///   the register's migration order eventually) call
-    ///   `svc.relay_client(parts)` and the API's own auth middleware performs Level 1 + 2
-    ///   on the caller's bearer — running the seam at the MCP function too would be the
-    ///   duplicate-resolution the door exists to remove, and the post-edge refusals are
-    ///   mapped arm-for-arm from the preserved bodies (`map_post_edge_auth`). Their gate
-    ///   is the wire crossing itself; what the gate asserts is that the Parts reached the
-    ///   relay client (no bearer ⇒ no forward).
+    /// Until beat 5 (the steward pair) a second arm admitted DIRECT-binding methods that
+    /// called `ensure_profile_from_parts` before dispatching. With the last family across,
+    /// that arm could only admit a regression, so it is now the opposite: a method body
+    /// that calls `ensure_profile_from_parts` fails here — running the seam at the MCP
+    /// function as well as at the API is the duplicate resolution the door exists to remove
+    /// (the doubled-gate scar). The teardown beat tightens the remaining arm from this
+    /// shape heuristic to "relays, or sits on a named pure-compute allowlist".
     ///
     /// It parses this file's own source rather than reflecting on the router, because
     /// the router's `Tool` entries carry only the description + schema + a function
@@ -1911,11 +1914,9 @@ mod tests {
     ///
     /// **What it covers:** every `#[tool]` method body in this file. The split is on
     /// `#[tool(`, and each segment runs from the attribute to the next `#[tool(` or end
-    /// of file. A family migrating to the door moves BETWEEN arms in the same commit as
-    /// its handler change — a tool satisfying neither arm fails here, which is the
-    /// half-migrated state this gate exists to refuse.
+    /// of file.
     #[test]
-    fn every_tool_method_calls_ensure_profile_from_parts() {
+    fn every_tool_method_crosses_the_network_door() {
         let source = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/service.rs"),
         )
@@ -1944,7 +1945,12 @@ mod tests {
 
         let mut missing: Vec<String> = Vec::new();
         for segment in &tool_segments {
-            let direct_gate = segment.contains("ensure_profile_from_parts");
+            // Scope each check to the method itself: the last `#[tool(` segment otherwise
+            // runs on through every non-tool helper to the end of the impl block, and a
+            // helper's comment naming the gate would read as the method calling it. A
+            // method's body closes at the impl's four-space indent.
+            let segment = segment.split("\n    }\n").next().unwrap_or(segment);
+            let gates_in_process = segment.contains("ensure_profile_from_parts");
             // The families that have crossed the network door dispatch through their
             // tools module HANDING IT THE PARTS — `tools::<family>::<name>(self,
             // &parts, ...)`. A bare `tools::` match is satisfied by the input TYPE
@@ -1960,26 +1966,32 @@ mod tests {
             // Named so the next widening tightens the discriminator instead of
             // compounding the heuristic.
             let network_door = segment.contains("tools::") && segment.contains("(self, &parts");
-            if !direct_gate && !network_door {
+            if gates_in_process || !network_door {
                 let fn_name = segment
                     .split("async fn ")
                     .nth(1)
                     .and_then(|s| s.split('(').next())
                     .unwrap_or("<unknown>")
                     .trim();
-                missing.push(format!(
-                    "{fn_name} (neither `ensure_profile_from_parts` nor a network-door \
-                     dispatch — a `tools::<family>::` call handing it `&parts`)"
-                ));
+                missing.push(if gates_in_process {
+                    format!(
+                        "{fn_name} (calls `ensure_profile_from_parts` — an in-process gate \
+                         beside the API's; the door is the only gate)"
+                    )
+                } else {
+                    format!(
+                        "{fn_name} (no network-door dispatch — a `tools::<family>::` call \
+                         handing it `&parts`)"
+                    )
+                });
             }
         }
 
         assert!(
             missing.is_empty(),
-            "these #[tool] methods authenticate under neither binding — every tool must \
-             either gate directly (ensure_profile_from_parts) or cross the network door \
-             (a `tools::<family>::` dispatch whose gate runs at the API):\n  {}\n\
-             A tool satisfying neither arm runs unauthenticated or half-migrated.",
+            "these #[tool] methods do not cross the network door cleanly — every tool must \
+             dispatch through its tools module with the request's parts (its gate runs at \
+             the API) and must not gate in-process as well:\n  {}",
             missing.join("\n  ")
         );
     }
