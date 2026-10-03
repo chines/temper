@@ -290,7 +290,7 @@ fn read_ceiling(svc: &TemperMcpService) -> i64 {
 /// no blob store configured → the MCP blob calls refuse with that, not with a relay
 /// to an app that has one (the deployment's blob posture is one config, but a
 /// test deployment can point them apart). Takes the refusal by its `Display`, not as
-/// `temper_services`' `ApiError`: no tool module names a services type (teardown's witness).
+/// the services crate's `ApiError`: no tool module names a services type (teardown's witness).
 fn map_local_blob_refusal(err: impl std::fmt::Display) -> rmcp::ErrorData {
     rmcp::ErrorData::internal_error(format!("blob: {err}"), None)
 }
