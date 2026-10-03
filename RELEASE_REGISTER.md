@@ -23,6 +23,53 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **`GET /api/contexts/resolve` — a context ref resolved to its id, for the caller (the route-first half of the network door's teardown)**
+  A new route, nothing changed beside it: `GET /api/contexts/resolve?context_ref=<ref>` answers
+  `{ "context_id": <uuid> }` (`ContextResolution`) for `@me/<slug>`, `@<handle>/<slug>`,
+  `+<team>/<slug>` or a bare UUID. It is `context_service::resolve_context_ref` behind a route —
+  the resolver every ref-accepting route already uses — so each ref form keeps exactly the answer
+  it has elsewhere: a context the caller cannot read answers as one that does not exist (uniform
+  404 on the UUID and `@<handle>` arms, an unknown handle included), a malformed ref answers 400
+  with the shared parser's sentence, and the `+<team>` arm keeps its existing non-member 403. The
+  ref grammar is the one `parse_context_ref`; no server-side dialect. Typed client method
+  `ContextClient::resolve` (temperkb-client), with the ref in the query string, not the logged
+  path. `openapi.json` gains the path and the schema (86 lines added, none removed); the three
+  SDKs and the ts-rs `context.ts` regenerate with the addition only. Why: the MCP
+  `context_anchor` resolver (`cognitive_maps.rs`, `reblock.rs`) is the last database read in a
+  tool module; this route is what it relays to in teardown, one call per anchored tool. Who
+  observes: API and SDK callers, who gain a route and a client method; no existing request or
+  response shape changes. User-visible: no. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: http,clients
+status: signal-only
+- **Beat 5: the steward pair crosses the network door — `steward_ingest_delta` and `steward_advance_watermark` forward to `/api/steward`; no MCP tool executes on the direct binding**
+  The last two direct handlers stop executing in-process and forward to
+  `GET /api/steward/{cogmap}/delta` and `POST /api/steward/{cogmap}/watermark` as
+  temper-client relays (`StewardClient`) — caller's bearer re-issued, service credential +
+  `mcp` carrier as default headers, refusals mapped through the one `AcrossAuth` idiom. The
+  routes make the identical calls the direct binding made, so the read gate and the
+  auth-before-write gate are unchanged and now run behind the API's Level 1 + 2. Tool names,
+  schemas, descriptions byte-identical (the declaration witness holds; the steward skill recipe
+  test untouched). The cogmap ref parse stays MCP-local and pure (no read). ONE DECLARED PARITY
+  DELTA (the G3c format; pinned green against the direct binding first, flipped in the swap
+  commit, named in the tool module's and the parity suite's headers): the NotFound prefix
+  (`steward_ingest_delta: ` / `steward_advance_watermark: `) drops for the server's bare
+  sentence on three faces — the delta's unreadable/absent cogmap, the advance's cogmap exit,
+  and its ingest-window exit; kind and gate identical, the two advance exits still
+  distinguishable, unreadable still indistinguishable from absent. NOT a delta, pinned
+  unchanged: the disclosing 403 keeps its prefix, sentence and kind. Attribution: neither act
+  writes a ledger row (the advance moves two cursor columns and completes the workflow job;
+  its command's `origin` is unread), so the family's witness pins the trusted path (both acts'
+  carriers honored — bite-proven by refusing the carrier in `relay_trust`) and that an advance
+  emits no `kb_events` row. A dead relay base URL reddens every wire-reaching face — the door
+  is the only path. Who observes: an MCP-calling agent, chiefly the deployed steward runtime —
+  three not-found messages lose their tool-name prefix; nothing else changes. User-visible:
+  no. Release relevance: signal-only.
+pr: self
+classes: behavioral
+surfaces: mcp
+status: signal-only
 - **Auth0-fronted instances advertise themselves as the RFC 8414 `issuer`**
   `GET /.well-known/oauth-authorization-server` on an instance without `AS_ISSUER` answers
   `issuer: "<MCP_BASE_URL>/"` where it answered the Auth0 tenant domain. The document's shape and

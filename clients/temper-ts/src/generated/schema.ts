@@ -1363,6 +1363,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/contexts/resolve": {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve a context ref to its id
+         * @description The caller's own visibility bounds the answer: a context the caller cannot read answers
+         *     exactly as one that does not exist (uniform 404, no existence oracle). The resolution is
+         *     [`context_service::resolve_context_ref`] — the same one every ref-accepting route uses — so
+         *     each ref form keeps the refusal it has everywhere else.
+         */
+        get: operations["resolve_context"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/contexts/{id}": {
         parameters: {
             query?: never;
@@ -5203,6 +5229,17 @@ export interface components {
             containers: components["schemas"]["Territory"][];
             group_keys: components["schemas"]["GroupKeyMeta"][];
             residual: components["schemas"]["ResidualGroups"];
+        };
+        /**
+         * @description Response of `GET /api/contexts/resolve` — a context ref resolved to its id, for the caller.
+         *
+         *     Deliberately just the id: a caller that holds a ref (`@me/<slug>`, `@<handle>/<slug>`,
+         *     `+<team>/<slug>`, or a bare UUID) and needs to address one of the id-keyed
+         *     `/api/contexts/{id}/…` routes resolves once here, then calls the route it wanted. Anything
+         *     more about the context is `GET /api/contexts/{id}`'s to answer.
+         */
+        ContextResolution: {
+            context_id: components["schemas"]["ContextId"];
         };
         /** @description Response row for context endpoints. */
         ContextRow: {
@@ -14071,6 +14108,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    resolve_context: {
+        parameters: {
+            query: {
+                /**
+                 * @description The context ref to resolve: `@me/<slug>`, `@<handle>/<slug>`, `+<team>/<slug>`, or a bare
+                 *     UUID. One grammar — `temper_core::context_ref::parse_context_ref`, the parser the CLI and
+                 *     the MCP tools use.
+                 */
+                context_ref: string;
+            };
+            header?: {
+                /** @description The calling surface, for event-ledger attribution. Accepted values are `cli` and `sdk`; an absent or unrecognized value attributes the write to `web`. This is provenance, never authorization — an unrecognized value degrades, it never rejects. */
+                "X-Temper-Surface"?: "cli" | "sdk";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ref resolved to a context the caller can read */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContextResolution"];
+                };
+            };
+            /** @description Malformed context ref (the parser's sentence) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description A `+<team>` ref whose team exists but does not count the caller as a member (the shared resolver's membership gate) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Context not found or not readable (uniform — no existence oracle) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
             };
         };
     };
