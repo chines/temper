@@ -166,8 +166,11 @@ mod predicate_pins {
 ///   nulls its prose, header path and vector, and a write-back keyed only on the chunk id would
 ///   put a vector computed from the scrubbed prose back onto the emptied row. `is_current` is a
 ///   column of the target row, so a concurrent supersede is re-read on the newest row version.
-///   The block's fold is re-read under `FOR KEY SHARE`, which takes the newest committed version
-///   of the block row rather than the statement's snapshot.
+///   The block's fold is read from the statement's snapshot: a fold is a non-key update, so
+///   `FOR KEY SHARE` does not wait on it. A concurrent fold on a resource the scrub can reach is
+///   still caught: a `replaces_body` mutate and a re-block retire or reparent the folded block's
+///   current chunks in the same transaction, and the `is_current` re-check sees that change to
+///   the target row. A charter's fold leaves its chunks current, and the scrub refuses charters.
 /// - **Erasure** (spec 2026-09-28 D13). The `EXISTS … FOR KEY SHARE` re-reads the resource row
 ///   under a lock that conflicts only with the resource-erasure act's `FOR UPDATE`: a write-back
 ///   that races the act waits for it, then writes nothing.

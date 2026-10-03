@@ -3445,7 +3445,13 @@ async fn an_embed_write_back_after_the_act_writes_nothing(pool: sqlx::PgPool) {
     execute_act(&pool, leak.resource.uuid()).await;
 
     let vector = format!("[{}]", vec!["0.1"; 768].join(","));
-    let first_chunk_sql = "SELECT id FROM kb_chunks WHERE resource_id = $1 ORDER BY id LIMIT 1";
+    // A current chunk of a live block: the write-back also refuses a superseded chunk or a folded
+    // block's (the drain's write-time currency check), so only such a chunk isolates the erasure
+    // guard as the thing that refuses the husk.
+    let first_chunk_sql = "SELECT c.id FROM kb_chunks c \
+                           JOIN kb_content_blocks b ON b.id = c.block_id \
+                           WHERE c.resource_id = $1 AND c.is_current AND NOT b.is_folded \
+                           ORDER BY c.id LIMIT 1";
     let husk_chunk: Uuid = sqlx::query_scalar(first_chunk_sql)
         .bind(leak.resource.uuid())
         .fetch_one(&pool)
