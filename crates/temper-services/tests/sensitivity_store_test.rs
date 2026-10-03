@@ -65,7 +65,7 @@ async fn validator(pool: &PgPool, function: &str, text: &str) -> bool {
 
 // ── Witness 1, the column-set half: the store cannot hold content ─────────────────────────────
 
-/// Spec D1, verbatim, plus Q26's `path`. A later PR adding `sample_text`, an offset or a window fails here, not in
+/// Spec D1, plus Q26's `path`, with Q28 and Q33's `fingerprint_state` where `fingerprint` was. A later PR adding `sample_text`, an offset or a window fails here, not in
 /// review.
 const FINDINGS_COLUMNS: &[(&str, &str)] = &[
     ("id", "uuid"),
@@ -80,7 +80,7 @@ const FINDINGS_COLUMNS: &[(&str, &str)] = &[
     ("category", "text"),
     ("severity", "smallint"),
     ("match_count", "integer"),
-    ("fingerprint", "bytea"),
+    ("fingerprint_state", "text"),
     ("first_seen", "timestamp with time zone"),
     ("last_seen", "timestamp with time zone"),
 ];
