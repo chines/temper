@@ -2108,9 +2108,9 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 }
                 // Resource erasure's admin vocabulary (resource erasure spec D1/D5/D11).
                 // `resource_erasure_execute` emits `resource_erased` and `resource_erasure_refuse`
-                // emits `resource_erasure_refused` (migration 20260929040730), so per the rule
-                // below they get arms. `block_history_scrubbed` has no emitter until the block
-                // history scrub (build order 2e); its arm checks the first really-emitted payload.
+                // emits `resource_erasure_refused` (migration 20260929040730), and
+                // `block_history_scrub_execute` emits `block_history_scrubbed` (migration
+                // 20261003000210), so per the rule below they get arms.
                 "resource_erased" => {
                     serde_json::from_value::<ResourceErased>(r.payload.clone())?;
                 }
