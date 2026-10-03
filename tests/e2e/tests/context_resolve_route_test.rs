@@ -116,6 +116,13 @@ async fn a_team_ref_resolves_for_a_member_and_refuses_a_non_member(pool: sqlx::P
         StatusCode::FORBIDDEN,
         "a non-member is refused at the membership gate"
     );
+    // The 403 is the existing-team arm only: a team that does not exist answers 404.
+    let (status, _) = resolve_as(&app, &member_token, "+no-such-team/no-such-context").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "an absent team is not found, not forbidden"
+    );
 
     app.client
         .teams()

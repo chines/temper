@@ -112,6 +112,8 @@ pub struct ResolveContextQuery {
     responses(
         (status = 200, description = "The ref resolved to a context the caller can read", body = ContextResolution),
         (status = 400, description = "Malformed context ref (the parser's sentence)", body = ErrorBody),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "A `+<team>` ref whose team exists but does not count the caller as a member (the shared resolver's membership gate)", body = ErrorBody),
         (status = 404, description = "Context not found or not readable (uniform — no existence oracle)", body = ErrorBody),
     )
 )]
