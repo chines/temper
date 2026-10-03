@@ -40,6 +40,7 @@ use temper_substrate::payloads::{
     self, AnchorRef, AnchorTable, BlockHistoryScrubbed, ErasureAct, ResourceErasureRefusalReason,
     ResourceErasureRefused,
 };
+use temper_substrate::replay;
 use temper_substrate::writes::{self, AppendParams, CreateMode, CreateParams, UpdateParams};
 use uuid::Uuid;
 
@@ -1166,5 +1167,188 @@ async fn the_survey_reports_the_counts_the_act_names(pool: PgPool) {
         measured_after,
         [(0, 0), (0, 0)],
         "and the act empties exactly those"
+    );
+}
+
+/// Snapshot, reset, replay, and diff every projection table.
+async fn assert_replay_byte_identical(pool: &PgPool, after_what: &str) {
+    let before = replay::dump_projections(pool).await.unwrap();
+    let snap = replay::snapshot(pool).await.unwrap();
+    common::reset_schema(pool).await;
+    replay::replay(pool, &snap).await.unwrap();
+    let after = replay::dump_projections(pool).await.unwrap();
+    for ((ta, a), (tb, b)) in before.iter().zip(after.iter()) {
+        assert_eq!(ta, tb);
+        assert_eq!(
+            a, b,
+            "projection table {ta} diverged under replay {after_what}"
+        );
+    }
+}
+
+/// The erasure act, as the system operator under a fresh request reference; returns the
+/// `resource_erased` event id.
+async fn erase(pool: &PgPool, resource: ResourceId) -> Uuid {
+    let (_, operator_entity) = system_actor(pool).await;
+    let raw: String =
+        sqlx::query_scalar("SELECT (resource_erasure_execute($1,$2,$3,$4)->>'event_id')::text")
+            .bind(resource.uuid())
+            .bind(operator_entity)
+            .bind(operator_entity)
+            .bind(Uuid::now_v7())
+            .fetch_one(pool)
+            .await
+            .expect("the erasure completes");
+    Uuid::parse_str(&raw).expect("the event id parses")
+}
+
+/// (replay) The scrub replays at its position through the one apply function: a live block, a
+/// folded block and an in-flight ingest, scrubbed, then replayed from the ledger.
+///
+/// FAILS IF: any projection table differs after replay (the arm is a no-op, or re-implements a
+/// step differently); or `ingest_state` does not read `cancelled` after the replay
+/// (`cancelled_ingest` was not honoured).
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_of_a_block_history_scrub_is_byte_identical(pool: PgPool) {
+    let (owner, emitter) = setup(&pool).await;
+
+    // A live block with history, and a sibling folded by a `replaces_body` mutate of it.
+    let h = seed_history(&pool, owner, emitter, "scrub-replay").await;
+    const WHOLE: &str = "the whole body, replaced";
+    let replacement = prepare_block_from_chunks(0, None, vec![chunk(WHOLE, "")]);
+    let mut tx = pool.begin().await.unwrap();
+    fire(
+        &mut tx,
+        SeedAction::BlockMutate {
+            block: BlockId::from(h.block),
+            chunks: &replacement.chunks,
+            raw: Some(WHOLE),
+            incorporated: &[],
+            replaces_body: true,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let folded: bool = sqlx::query_scalar("SELECT is_folded FROM kb_content_blocks WHERE id = $1")
+        .bind(h.unnamed)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(folded, "setup: the replaces_body mutate folded the sibling");
+    scrub(&pool, h.resource, &[h.block, h.unnamed]).await;
+
+    // An in-flight ingest.
+    let home = make_home(&pool, owner, "scrub-replay-ingest").await;
+    let in_flight = writes::create_resource_with_mode(
+        &pool,
+        CreateParams {
+            idempotency_key: None,
+            title: "mid-ingest",
+            origin_uri: "test://scrub-replay-mid-ingest",
+            body: "block zero",
+            doc_type: "research",
+            home: AnchorRef::context(home),
+            owner,
+            originator: owner,
+            emitter,
+            properties: &[],
+            chunks: Some(vec![chunk("block zero", "")]),
+            sources: vec![],
+        },
+        EventContext::default(),
+        CreateMode {
+            defer: false,
+            segmented: true,
+        },
+    )
+    .await
+    .unwrap();
+    append(&pool, in_flight, 1, "segment one", emitter).await;
+    assert_eq!(ingest_state(&pool, in_flight).await, "in_progress");
+    let ingest_block = first_live_block(&pool, in_flight).await;
+    scrub(&pool, in_flight, &[ingest_block]).await;
+    assert_eq!(ingest_state(&pool, in_flight).await, "cancelled");
+
+    assert_replay_byte_identical(
+        &pool,
+        "of a scrub over a live block, a folded block and an ingest",
+    )
+    .await;
+    assert_eq!(
+        ingest_state(&pool, in_flight).await,
+        "cancelled",
+        "the cancelled ingest survives replay"
+    );
+}
+
+/// (replay, review focus 5) Scrub, scrub the same blocks again, then erase: replay is
+/// byte-identical after each of the three. The second scrub is a completed act: its `targets`
+/// name zero revisions and zero chunks emptied, and the ledger holds two scrub events.
+///
+/// FAILS IF: replay diverges after any step; the second scrub raises or names a nonzero count;
+/// or the ledger does not hold exactly two `block_history_scrubbed` events.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn a_scrub_scrubbed_again_and_then_erased_replays_byte_identical_at_each_step(pool: PgPool) {
+    let (owner, emitter) = setup(&pool).await;
+    let h = seed_history(&pool, owner, emitter, "scrub-twice-erase").await;
+    let blocks = [h.block, h.unnamed];
+
+    scrub(&pool, h.resource, &blocks).await;
+    assert_replay_byte_identical(&pool, "of the first scrub").await;
+
+    let second = scrub(&pool, h.resource, &blocks).await;
+    assert_eq!(
+        second["targets"],
+        serde_json::json!([
+            block_line(h.block, false, 0, 0),
+            block_line(h.unnamed, false, 0, 0),
+        ]),
+        "the second scrub names zero revisions and zero chunks emptied"
+    );
+    let scrubs: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events e JOIN kb_event_types t ON t.id = e.event_type_id \
+          WHERE t.name = 'block_history_scrubbed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(scrubs, 2, "two block_history_scrubbed events");
+    assert_replay_byte_identical(&pool, "of the second scrub").await;
+
+    erase(&pool, h.resource).await;
+    assert_replay_byte_identical(&pool, "of an erasure after two scrubs").await;
+}
+
+/// The replay arm refuses a `block_history_scrubbed` event whose payload names another table,
+/// planted by a raw ledger append (the act would never write it).
+///
+/// FAILS IF: replay succeeds, or the refusal does not name the offending table.
+#[sqlx::test(migrator = "temper_substrate::MIGRATOR")]
+async fn replay_refuses_a_block_history_scrubbed_naming_another_table(pool: PgPool) {
+    let (_, emitter) = setup(&pool).await;
+    sqlx::query(
+        "SELECT _event_append('block_history_scrubbed', $1, NULL, NULL, \
+                jsonb_build_object('subject_table', 'kb_resources', \
+                                   'subject_ids', jsonb_build_array($2::uuid)), \
+                p_correlation => $3)",
+    )
+    .bind(emitter)
+    .bind(Uuid::now_v7())
+    .bind(Uuid::now_v7())
+    .execute(&pool)
+    .await
+    .expect("the raw append lands");
+
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_schema(&pool).await;
+    let err = replay::replay(&pool, &snap)
+        .await
+        .expect_err("replay must refuse a block_history_scrubbed naming another table");
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("names subject_table \"kb_resources\", not kb_content_blocks"),
+        "{chain}"
     );
 }
