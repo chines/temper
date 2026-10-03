@@ -48,10 +48,15 @@ impl BodyStorage {
     }
 }
 
-/// A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
+/// A resource's ingest state — a **projection** of the append-only `kb_events` ledger
 /// (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.
 /// The ledger is the state machine; this is its materialized current-state view, kept as a column so
 /// list/search can filter it with a cheap read instead of scanning events.
+///
+/// Four values. `InProgress` is the only live non-final state; `Complete`, `Cancelled` and
+/// `Abandoned` are terminal. `Cancelled` and `Abandoned` are two distinct terminal states:
+/// `Cancelled` is set by an operator act (the block history scrub's `cancelled_ingest`), while
+/// `Abandoned` is a reaper's judgement that an ingest will not resume.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +69,12 @@ pub enum IngestState {
     InProgress,
     /// The whole body is present: every atomic create, and every finalized segmented ingest.
     Complete,
+    /// Terminal: an operator act ended the ingest before it finalized. Set by the block history
+    /// scrub when `cancelled_ingest` is true; replay reads that field to reproduce this state.
+    Cancelled,
+    /// Terminal: a reaper judged the ingest will not resume. Distinct from `Cancelled`, which an
+    /// operator act sets.
+    Abandoned,
 }
 
 impl IngestState {
@@ -72,16 +83,20 @@ impl IngestState {
         match self {
             IngestState::InProgress => "in_progress",
             IngestState::Complete => "complete",
+            IngestState::Cancelled => "cancelled",
+            IngestState::Abandoned => "abandoned",
         }
     }
 
     /// Parse the DB/wire string. The `ck_kb_resources_ingest_state` CHECK constrains the column to
-    /// these two values, so an unrecognized string is a schema/version violation, not ordinary input —
+    /// the four values above, so an unrecognized string is a schema/version violation, not ordinary input —
     /// returned as `None` for the caller to handle rather than silently coerced.
     pub fn from_wire(s: &str) -> Option<Self> {
         match s {
             "in_progress" => Some(IngestState::InProgress),
             "complete" => Some(IngestState::Complete),
+            "cancelled" => Some(IngestState::Cancelled),
+            "abandoned" => Some(IngestState::Abandoned),
             _ => None,
         }
     }

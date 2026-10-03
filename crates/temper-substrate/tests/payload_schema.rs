@@ -116,13 +116,13 @@ fn the_migration_literal_matches_the_committed_fixture() {
             &[
                 SUPERSEDED, // resource_erased: 20261002000020
                 SUPERSEDED, // resource_erasure_refused: 20260930000050
-                "block_history_scrubbed.v1.schema.json",
+                SUPERSEDED, // re-registered by 2e's scrub migration (Task 3)
             ],
         ),
         (
             "20260930000050_erasure_present_truth_wording.sql",
             &[
-                "resource_erasure_refused.v1.schema.json",
+                SUPERSEDED, // re-registered by 2e's scrub migration (Task 3)
                 "principal_erasure_refused.v1.schema.json",
             ],
         ),
