@@ -17,9 +17,11 @@ module Temper::Generated
   class IngestState
     IN_PROGRESS = "in_progress".freeze
     COMPLETE = "complete".freeze
+    CANCELLED = "cancelled".freeze
+    ABANDONED = "abandoned".freeze
 
     def self.all_vars
-      @all_vars ||= [IN_PROGRESS, COMPLETE].freeze
+      @all_vars ||= [IN_PROGRESS, COMPLETE, CANCELLED, ABANDONED].freeze
     end
 
     # Builds the enum from string

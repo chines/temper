@@ -33,12 +33,17 @@ managed_meta: ManagedMeta | null,
 open_meta: JsonValue | null, };
 
 /**
- * A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
+ * A resource's ingest state — a **projection** of the append-only `kb_events` ledger
  * (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.
  * The ledger is the state machine; this is its materialized current-state view, kept as a column so
  * list/search can filter it with a cheap read instead of scanning events.
+ *
+ * Four values. `InProgress` is the only live non-final state; `Complete`, `Cancelled` and
+ * `Abandoned` are terminal. `Cancelled` and `Abandoned` are two distinct terminal states:
+ * `Cancelled` is set by an operator act (the block history scrub's `cancelled_ingest`), while
+ * `Abandoned` is a reaper's judgement that an ingest will not resume.
  */
-export type IngestState = "in_progress" | "complete";
+export type IngestState = "in_progress" | "complete" | "cancelled" | "abandoned";
 
 /**
  * Request body for annotating a resource's block with provenance sources (issue #355) —

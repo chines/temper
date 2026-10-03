@@ -6511,13 +6511,18 @@ export interface components {
             title: string;
         };
         /**
-         * @description A resource's ingest-completion state — a **projection** of the append-only `kb_events` ledger
+         * @description A resource's ingest state — a **projection** of the append-only `kb_events` ledger
          *     (`resource_created` → `block_created`… → `resource_finalized`), not an independently-mutated flag.
          *     The ledger is the state machine; this is its materialized current-state view, kept as a column so
          *     list/search can filter it with a cheap read instead of scanning events.
+         *
+         *     Four values. `InProgress` is the only live non-final state; `Complete`, `Cancelled` and
+         *     `Abandoned` are terminal. `Cancelled` and `Abandoned` are two distinct terminal states:
+         *     `Cancelled` is set by an operator act (the block history scrub's `cancelled_ingest`), while
+         *     `Abandoned` is a reaper's judgement that an ingest will not resume.
          * @enum {string}
          */
-        IngestState: "in_progress" | "complete";
+        IngestState: "in_progress" | "complete" | "cancelled" | "abandoned";
         /** @description An explicit context read-grant that survives the ownership flip — inherited residual reach. */
         InheritedReadGrant: {
             /** Format: uuid */
@@ -7775,8 +7780,10 @@ export interface components {
             };
         } | {
             /**
-             * @description The candidate has no stored verbatim bytes to compose a body from — no live blocks, or a
-             *     block in a derived shape whose bytes were never stored.
+             * @description The candidate has no whole stored body to re-block: no stored verbatim bytes to compose
+             *     one from (no live blocks, or a block in a derived shape whose bytes were never stored), or
+             *     an ingest that ended (`cancelled`/`abandoned`) before its body was whole. The row's
+             *     `detail` names which.
              */
             byteless: {
                 /** @description What happened and what to do about it. */
