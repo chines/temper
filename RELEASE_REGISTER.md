@@ -23,6 +23,18 @@ era release the record names. Historical and pre-policy rows read as history: on
 the routing vocabulary (the #858 pre-policy row's present-tense law claim is grandfathered).
 
 ## Since v0.5.4 — unreleased
+- **Two new admin doors: `POST /api/admin/resources/block-history-scrub` and its read-only `/survey`**
+  The block history scrub (resource erasure D11) empties the history of named blocks of a resource
+  that is not erased, behind two new operation ids (`admin_scrub_block_history`,
+  `admin_survey_block_history_scrub`) under the `Admin` tag. No existing shape moves: the request,
+  execute response and survey schemas are new, and a refused scrub is recorded on the existing
+  `resource_erasure_refused` event with its new optional `act` and `blocks`. Who observes: system
+  admins and SDK clients that call the new operations; a non-admin gets the erasure doors' 404.
+  User-visible: operators only. Release relevance: additive.
+pr: self
+classes: additive
+surfaces: http, clients
+status: signal-only
 - **`ResourceView` gains `ingest_ended` — a resource whose ingest ended before its body was whole (`cancelled` by the block history scrub, or `abandoned`)**
   `ingest_state` keeps its two wire values, and an ended ingest reads `in_progress` there (it is
   not whole, and it stays hidden from list and search as an in-progress one is), with the new
