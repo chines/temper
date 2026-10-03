@@ -51,7 +51,7 @@ verdict`. Entry points to enumerate:
   `require_auth` + `require_system_access` run on the forwarded bearer — or sit on the named
   `PURE_COMPUTE_TOOLS` allowlist, today only `describe_schema`). Enforced by the source gates
   `every_tool_method_relays_or_is_allowlisted_pure` and
-  `no_tool_module_binds_to_the_database_or_a_service` in `service.rs`; confirm both are still
+  `no_tool_module_binds_to_the_database_or_a_service` in `src/source_gates.rs`; confirm both are still
   present and still bite. Discovery / `/oauth/register` / health are by-design
   unauth and must touch no user data.
 - **TypeScript** — `api/oauth/*`, `api/auth/*`, `packages/temper-cloud/src`. OAuth AS + SAML SP

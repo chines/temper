@@ -128,16 +128,7 @@ async fn active_approved_allowed_on_both_surfaces(pool: sqlx::PgPool) {
     let created = common::mcp_act_as(&app, &app.token)
         .await
         .expect("MCP must admit an active, approved profile");
-    let context_id: uuid::Uuid = created["id"]
-        .as_str()
-        .expect("created context id")
-        .parse()
-        .expect("context id parse");
-    let owner_id: uuid::Uuid = sqlx::query_scalar("SELECT owner_id FROM kb_contexts WHERE id = $1")
-        .bind(context_id)
-        .fetch_one(&pool)
-        .await
-        .expect("the created context's owner");
+    let owner_id = common::created_context_owner(&pool, &created).await;
     assert_eq!(
         owner_id, api_profile_id,
         "both surfaces must resolve the SAME profile for the same identity"

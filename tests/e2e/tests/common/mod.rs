@@ -1421,3 +1421,18 @@ pub async fn mcp_act_as(
     let text = res.content[0].as_text().expect("a text part").text.clone();
     Ok(serde_json::from_str(&text).expect("the created context row"))
 }
+
+/// The profile that owns the context `mcp_act_as` created — the identity the API resolved for
+/// the act's bearer, read back from the row itself rather than from a rendered handle.
+pub async fn created_context_owner(pool: &PgPool, created: &serde_json::Value) -> uuid::Uuid {
+    let context_id: uuid::Uuid = created["id"]
+        .as_str()
+        .expect("created context id")
+        .parse()
+        .expect("context id parse");
+    sqlx::query_scalar("SELECT owner_id FROM kb_contexts WHERE id = $1")
+        .bind(context_id)
+        .fetch_one(pool)
+        .await
+        .expect("the created context's owner")
+}

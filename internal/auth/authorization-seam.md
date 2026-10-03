@@ -213,7 +213,7 @@ tool relays the caller's bearer to temper-api through `relay_client`, where `req
 and `require_system_access` run exactly as for any HTTP caller. The API's 401/403 bodies come
 back preserved and are mapped arm-for-arm onto rmcp errors (`map_post_edge_refusal`). Until
 teardown, `ensure_profile_from_parts` called `authenticate_token` + `require_system_access`
-in-process; it is deleted, and the source gates in `service.rs` keep any tool from gating
+in-process; it is deleted, and the source gates in `crates/temper-mcp/src/source_gates.rs` keep any tool from gating
 in-process again.
 
 **temper-api's internal SAML reconcile handler** is the third caller, on the federated path:

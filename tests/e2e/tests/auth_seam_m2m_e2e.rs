@@ -72,8 +72,8 @@ async fn registered_machine_token_is_admitted_by_the_mcp_gate(pool: sqlx::PgPool
     // Read the act's owner back: a registered machine resolves to ITS OWN
     // pre-created agent profile, not to some ambient identity.
     assert_eq!(
-        created["owner_ref"],
-        serde_json::json!("@agent-steward"),
+        common::created_context_owner(&pool, &created).await,
+        profile_id,
         "the act lands under the machine's own registered profile: {created}"
     );
 }
@@ -110,8 +110,8 @@ async fn temper_issued_machine_resolves_on_mcp(pool: sqlx::PgPool) {
         .await
         .expect("a temper-issued machine resolves on the MCP surface too (D4)");
     assert_eq!(
-        created["owner_ref"],
-        serde_json::json!("@agent-tmpr-mcp"),
+        common::created_context_owner(&pool, &created).await,
+        profile_id,
         "it resolves to its own profile: {created}"
     );
 }

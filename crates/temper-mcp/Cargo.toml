@@ -67,3 +67,8 @@ temper-services = { path = "../temper-services", features = ["test-harness"] }
 tower = { version = "0.5", features = ["util"] }
 # Builds the gzip body that witnesses the request-decompression layer.
 flate2 = "1"
+# The source gates (`src/source_gates.rs`) parse the crate's own tool modules: real function
+# bodies, real `#[cfg(test)]` attributes and real call/await chains instead of a hand lexer.
+syn = { version = "2", features = ["full", "visit"] }
+# The exhaustive `AuthzError` witness constructs a typed `Refusal` for the system-access arm.
+temperkb-principal.workspace = true

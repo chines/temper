@@ -708,7 +708,10 @@ fn map_anchor_err(e: ClientError) -> rmcp::ErrorData {
         ClientError::NotFound { message } => {
             rmcp::ErrorData::invalid_params(format!("context not found: {message}"), None)
         }
-        ClientError::Forbidden => {
+        // A detailed 403 renders the same face as the bare one, its detail dropped: the resolver
+        // never sends one today, and if a future arm did, its sentence must not reach the caller
+        // as an internal fault carrying the raw body (fail closed, security review of #995).
+        ClientError::Forbidden | ClientError::ForbiddenDetail { .. } => {
             rmcp::ErrorData::invalid_params("context not found: Forbidden".to_string(), None)
         }
         ClientError::Server {
@@ -957,6 +960,19 @@ pub async fn cogmap_read(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A detailed 403 on the anchor fails closed: the same face as the bare 403, never an
+    /// internal fault carrying the server's sentence.
+    #[test]
+    fn a_detailed_403_on_the_anchor_renders_the_bare_forbidden_face() {
+        let bare = map_anchor_err(ClientError::Forbidden);
+        let detailed = map_anchor_err(ClientError::ForbiddenDetail {
+            message: "a sentence naming something private".to_string(),
+        });
+        assert_eq!(detailed.code, bare.code);
+        assert_eq!(detailed.message, bare.message);
+        assert_eq!(detailed.message, "context not found: Forbidden");
+    }
 
     #[test]
     fn cogmap_grant_input_deserializes() {
