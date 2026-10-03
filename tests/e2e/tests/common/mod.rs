@@ -1232,3 +1232,172 @@ pub fn chunked(text: &str, fill: f32) -> Vec<temper_core::types::ingest::PackedC
         })
         .collect()
 }
+
+/// One refusal face of the MCP `context_anchor` resolver (`@me/<slug>`, `@<handle>/<slug>`,
+/// `+<team>/<slug>`, or a UUID → the context id), as a caller of a context-addressed tool meets
+/// it: the ref, the identity that sends it, and the byte-exact `invalid_params` sentence it
+/// answers.
+pub struct AnchorFace {
+    pub label: &'static str,
+    pub context_ref: String,
+    pub parts: axum::http::request::Parts,
+    pub expected: String,
+}
+
+/// Every refusal face of `context_anchor`, constructed against this app, for the two tools that
+/// address a context by ref (the context orientation family in `cognitive_maps.rs` and
+/// `resource_reblock`'s `scope=context`). Both suites pin the SAME table through their own tool,
+/// so the two anchors cannot drift apart.
+///
+/// Built once, pinned green against the in-process resolver, then carried through the relay to
+/// `GET /api/contexts/resolve` (the network door's teardown). The faces, per resolver arm:
+///
+/// - a malformed ref refuses at the local parse, with the shared grammar's sentence;
+/// - the `@me` arm's miss names the caller's own slug;
+/// - **no existence oracle** on the UUID and `@<handle>` arms: a stranger's view of the owner's
+///   private context, an id naming nothing, the owner's real ref, an absent slug and an unknown
+///   handle all answer one sentence;
+/// - the `+<team>` arm: an absent team names the team; an existing team the caller is not in
+///   answers the resolver's existing `Forbidden` (which discloses the team exists — documented at
+///   the resolver, kept, not introduced here); a member's miss names the slug.
+///
+/// Every parts value carries the claims extension beside the bearer, as the JWT middleware
+/// injects them, so the same table drives the in-process resolver (which reads the claims) and
+/// the relay (which forwards the bearer).
+pub async fn context_anchor_faces(app: &E2eTestApp) -> Vec<AnchorFace> {
+    use temper_core::context_ref::ContextOwnerRef;
+    use temper_core::types::team::TeamCreateRequest;
+
+    fn parts_for(token: &str, sub: &str, email: Option<&str>) -> axum::http::request::Parts {
+        axum::http::Request::builder()
+            .extension(temper_mcp::middleware::BearerToken(token.to_string()))
+            .extension(temper_services::auth::RawJwtClaims {
+                sub: sub.to_string(),
+                email: email.map(str::to_string),
+                email_verified: None,
+                azp: None,
+                gty: None,
+                exp: (Utc::now() + Duration::hours(1)).timestamp(),
+                iat: 0,
+            })
+            .body(())
+            .expect("anchor-face parts build")
+            .into_parts()
+            .0
+    }
+
+    app.client.profile().get().await.expect("owner profile");
+    provision_and_approve_second(app).await;
+    let owner = || app.direct_parts();
+    let stranger_token = generate_second_user_jwt();
+    let stranger = || {
+        parts_for(
+            &stranger_token,
+            "e2e-second-user",
+            Some("second@test.example.com"),
+        )
+    };
+
+    let private = app
+        .client
+        .contexts()
+        .create("anchor faces private", None)
+        .await
+        .expect("create the owner's private context");
+    app.client
+        .teams()
+        .create(&TeamCreateRequest {
+            slug: "anchor-faces-team".to_owned(),
+            name: None,
+            parent: None,
+            auto_join_role: None,
+        })
+        .await
+        .expect("create the owner's team");
+    let team_ctx = app
+        .client
+        .contexts()
+        .create(
+            "anchor faces team home",
+            Some(ContextOwnerRef::Team("anchor-faces-team".to_owned())),
+        )
+        .await
+        .expect("create the team's context");
+
+    const UNREADABLE: &str = "context not found: context not found or not readable";
+    let face = |label, context_ref: String, parts, expected: &str| AnchorFace {
+        label,
+        context_ref,
+        parts,
+        expected: expected.to_owned(),
+    };
+    vec![
+        face(
+            "malformed: a bare name",
+            "not a ref".to_owned(),
+            owner(),
+            "invalid context ref: not a context ref: bare names are not addressable — use a UUID \
+             or `@owner/slug` (got \"not a ref\")",
+        ),
+        face(
+            "malformed: owner without a slug",
+            "@me".to_owned(),
+            owner(),
+            "invalid context ref: context ref is missing the `/slug` after the owner (got \"@me\")",
+        ),
+        face(
+            "@me: the caller's own miss names the slug",
+            "@me/no-such-slug".to_owned(),
+            owner(),
+            "context not found: context no-such-slug not found or not readable",
+        ),
+        face(
+            "UUID: another principal's private context",
+            private.id.to_string(),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "UUID: an id naming nothing",
+            uuid::Uuid::now_v7().to_string(),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "@handle: another principal's real ref",
+            format!("{}/{}", private.owner_ref, private.slug),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "@handle: an absent slug",
+            format!("{}/no-such-context", private.owner_ref),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "@handle: an unknown handle",
+            "@no-such-handle/no-such-context".to_owned(),
+            stranger(),
+            UNREADABLE,
+        ),
+        face(
+            "+team: an absent team",
+            "+no-such-team/no-such-context".to_owned(),
+            stranger(),
+            "context not found: team no-such-team not found or not readable",
+        ),
+        face(
+            "+team: an existing team, caller not a member",
+            format!("+anchor-faces-team/{}", team_ctx.slug),
+            stranger(),
+            "context not found: Forbidden",
+        ),
+        face(
+            "+team: a member's miss names the slug",
+            "+anchor-faces-team/no-such-context".to_owned(),
+            owner(),
+            "context not found: context no-such-context not found or not readable",
+        ),
+    ]
+}

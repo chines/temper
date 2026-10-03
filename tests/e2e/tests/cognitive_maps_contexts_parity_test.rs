@@ -1156,6 +1156,38 @@ async fn an_unreadable_context_ref_refuses_at_the_resolve_gate(pool: PgPool) {
     assert!(err.message.contains("context not found"), "{err}");
 }
 
+/// Every `context_anchor` refusal face, byte-exact, through each of the four tools that
+/// address a context by ref — the three orientation reads and the trigger. The table is shared
+/// with reblock's `scope=context` suite (`common::context_anchor_faces`), so the two anchors
+/// answer one dialect. Pinned green against the in-process resolver first, then carried through
+/// the relay to `GET /api/contexts/resolve` unchanged (teardown).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn every_context_anchor_face_is_pinned_byte_exact(pool: PgPool) {
+    let (app, svc, _parts) = harness(pool).await;
+    for face in common::context_anchor_faces(&app).await {
+        for view in ["shape", "metrics", "analytics"] {
+            let err = run_context_read(
+                &svc,
+                &face.parts,
+                json!({ "view": view, "context": face.context_ref }),
+            )
+            .await
+            .expect_err(face.label);
+            assert_eq!(code_of(&err), -32602, "{} ({view}): {err}", face.label);
+            assert_eq!(err.message, face.expected, "{} ({view})", face.label);
+        }
+        let err = run_context_materialize(
+            &svc,
+            &face.parts,
+            json!({ "context": face.context_ref, "threshold": 1 }),
+        )
+        .await
+        .expect_err(face.label);
+        assert_eq!(code_of(&err), -32602, "{} (materialize): {err}", face.label);
+        assert_eq!(err.message, face.expected, "{} (materialize)", face.label);
+    }
+}
+
 /// `list` answers the caller's own visible contexts.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn context_read_list_answers_the_callers_contexts(pool: PgPool) {

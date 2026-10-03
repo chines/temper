@@ -505,6 +505,26 @@ async fn reblock_garbage_refs_refuse_at_the_parse_callsite(pool: PgPool) {
     );
 }
 
+/// Every `context_anchor` refusal face, byte-exact, through `scope=context` — the same table
+/// the context orientation suite pins (`common::context_anchor_faces`), so the two anchors
+/// answer one dialect. Pinned green against the in-process resolver first, then carried through
+/// the relay to `GET /api/contexts/resolve` unchanged (teardown).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn every_context_anchor_face_is_pinned_byte_exact(pool: PgPool) {
+    let (app, svc, _parts) = harness(pool).await;
+    for face in common::context_anchor_faces(&app).await {
+        let err = run_reblock(
+            &svc,
+            &face.parts,
+            json!({"scope": "context", "context": face.context_ref, "dry_run": true}),
+        )
+        .await
+        .expect_err(face.label);
+        assert_eq!(code_of(&err), -32602, "{}: {err}", face.label);
+        assert_eq!(err.message, face.expected, "{}", face.label);
+    }
+}
+
 /// scope=context over the harness's own default context, dry_run: the answer is a
 /// receipt (per-class counts present, cursor carried) — never an error.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
